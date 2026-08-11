@@ -8,7 +8,7 @@ Kanban: https://github.com/orgs/21072026/projects/2
 - [Next.js](https://nextjs.org/) (App Router) + TypeScript
 - [Tailwind CSS](https://tailwindcss.com/)
 - [PostgreSQL](https://www.postgresql.org/) + [Prisma ORM](https://www.prisma.io/)
-- Auth.js kullanımına uygun proje yapısı (henüz implement edilmedi)
+- [Auth.js](https://authjs.dev/) v5 (next-auth) — temel altyapı kurulu, kayıt/giriş akışları henüz implement edilmedi
 - Docker / Docker Compose (lokal PostgreSQL)
 - [Playwright](https://playwright.dev/) (E2E testler)
 - ESLint
@@ -64,3 +64,24 @@ npm run test:e2e   # Playwright E2E smoke testleri
 ## Health Check
 
 Uygulama ayaktayken `GET /api/health` endpoint'i `{ "status": "ok" }` döner.
+
+## Authentication
+
+Kimlik doğrulama altyapısı [Auth.js](https://authjs.dev/) v5 (`next-auth`) ile kurulmuştur (`src/lib/auth/`).
+
+- **Session stratejisi: JWT.** Credentials provider Auth.js'te yalnızca JWT session stratejisiyle
+  desteklenir (database-backed session ile çalışmaz); bu yüzden `session.strategy = "jwt"` seçildi.
+  Bu seçim ayrıca `Account`/`Session`/`VerificationToken` Prisma modellerine ve bir DB adapter
+  paketine ihtiyacı ortadan kaldırır.
+- Şifreler Node'un yerleşik `crypto` modülü (`scrypt`) ile hash'lenir (`src/lib/auth/password.ts`);
+  ek bir hashing paketi eklenmemiştir.
+- `getCurrentUser()` (`src/lib/auth/current-user.ts`) sunucu tarafında mevcut oturumu okur;
+  `requireUser()` (`src/lib/auth/guard.ts`) API route handler'larında kimlik doğrulamayı
+  zorunlu kılan tekrar kullanılabilir bir guard'dır.
+- `AUTH_SECRET` ortam değişkeni JWT'leri imzalamak için gereklidir. Lokal bir değer üretmek için:
+  ```bash
+  npx auth secret
+  ```
+- **Kapsam dışı:** Kayıt, giriş/çıkış ve şifre sıfırlama akışlarının kendisi henüz implement
+  edilmemiştir (Credentials provider'ın `authorize` fonksiyonu şimdilik her denemeyi reddeder).
+  Bu akışlar ayrı issue'larda eklenecektir.

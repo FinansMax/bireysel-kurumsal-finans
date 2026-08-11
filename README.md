@@ -8,7 +8,7 @@ Kanban: https://github.com/orgs/21072026/projects/2
 - [Next.js](https://nextjs.org/) (App Router) + TypeScript
 - [Tailwind CSS](https://tailwindcss.com/)
 - [PostgreSQL](https://www.postgresql.org/) + [Prisma ORM](https://www.prisma.io/)
-- [Auth.js](https://authjs.dev/) v5 (next-auth) — temel altyapı ve kayıt (sign-up) hazır, giriş/çıkış akışları henüz implement edilmedi
+- [Auth.js](https://authjs.dev/) v5 (next-auth) — kayıt, giriş/çıkış hazır; şifre sıfırlama ve RBAC henüz implement edilmedi
 - Docker / Docker Compose (lokal PostgreSQL)
 - [Playwright](https://playwright.dev/) (E2E testler)
 - ESLint
@@ -86,6 +86,18 @@ Kimlik doğrulama altyapısı [Auth.js](https://authjs.dev/) v5 (`next-auth`) il
   bir `User` oluşturur (`src/lib/auth/signup.ts`). Şifre `hashPassword` ile hash'lenir, e-posta
   normalize edilir (trim + lowercase) ve zaten kayıtlı bir e-postayla tekrar kayıt denemesi
   `409` ile reddedilir. Bu adım herhangi bir `Tenant`/`Membership` oluşturmaz.
-- **Kapsam dışı:** Giriş/çıkış ve şifre sıfırlama akışlarının kendisi henüz implement
-  edilmemiştir (Credentials provider'ın `authorize` fonksiyonu şimdilik her denemeyi reddeder).
-  Bu akışlar ayrı issue'larda eklenecektir.
+- **Giriş (sign-in) / Çıkış (sign-out):** Credentials provider'ın `authorize` fonksiyonu
+  (`src/lib/auth/authenticate.ts`) e-posta + şifreyi mevcut `verifyPassword`'a karşı doğrular.
+  Giriş, Auth.js'in kendi `/api/auth/callback/credentials` endpoint'i üzerinden yapılır; çıkış
+  için yine Auth.js'in kendi `/api/auth/signout` endpoint'i kullanılır (her ikisi de
+  `src/app/api/auth/[...nextauth]/route.ts`'teki mevcut catch-all handler'dan otomatik
+  sağlanır, ek route eklenmemiştir). Bilinmeyen e-posta ile yanlış şifre AYNI genel hatayı
+  verir ve aynı hesaplama maliyetine sahiptir (user enumeration / timing side-channel'a karşı).
+  **Session süresi: 8 saat.** Finansal bir SaaS için Auth.js'in varsayılan 30 günlük JWT
+  ömrü fazla geniş olduğundan `session.maxAge` 8 saate düşürüldü (`src/lib/auth/config.ts`).
+  **Mimari not:** Stateless JWT session kullanıldığı için sign-out sadece istemcinin cookie'sini
+  temizler; sign-out'tan önce yakalanmış bir JWT, kendi `exp`'ine (artık en fazla 8 saat) kadar
+  teorik olarak hâlâ geçerlidir — sunucu tarafında bir revocation listesi yoktur ve bu bilinçli
+  olarak ayrı bir issue'ya bırakılmıştır (bkz. `security/signin-signout-security.spec.ts`).
+- **Kapsam dışı:** Şifre sıfırlama akışı henüz implement edilmemiştir. Route/endpoint bazlı
+  yetkilendirme (RBAC) ve tenant seçimi de ayrı issue'ların kapsamındadır.

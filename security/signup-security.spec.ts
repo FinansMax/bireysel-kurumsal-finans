@@ -1,0 +1,114 @@
+import { randomUUID } from "node:crypto";
+
+import { expect, test } from "@playwright/test";
+
+import { prisma } from "../src/lib/prisma";
+
+test.afterAll(async () => {
+  await prisma.$disconnect();
+});
+
+test.describe("Signup security — password handling", () => {
+  test("başarılı kayıt response'unda plaintext şifre veya passwordHash hiç geçmiyor", async ({
+    request,
+  }) => {
+    const email = `sec-signup-${randomUUID()}@example.com`;
+    const password = "S3curePassw0rd!";
+
+    const response = await request.post("/api/auth/signup", {
+      data: { email, password },
+    });
+
+    try {
+      expect(response.status()).toBe(201);
+
+      const rawText = await response.text();
+      expect(rawText).not.toContain(password);
+      expect(rawText).not.toContain("passwordHash");
+
+      const body = JSON.parse(rawText);
+      expect(body.user).not.toHaveProperty("passwordHash");
+      expect(body.user).not.toHaveProperty("password");
+    } finally {
+      await prisma.user.deleteMany({ where: { email } });
+    }
+  });
+
+  test("şifre DB'de hash'lenmiş olarak saklanıyor, plaintext değil", async ({ request }) => {
+    const email = `sec-hash-${randomUUID()}@example.com`;
+    const password = "AnotherS3cure!Pass";
+
+    const response = await request.post("/api/auth/signup", { data: { email, password } });
+
+    try {
+      expect(response.status()).toBe(201);
+
+      const stored = await prisma.user.findUniqueOrThrow({ where: { email } });
+      expect(stored.passwordHash).not.toBeNull();
+      expect(stored.passwordHash).not.toBe(password);
+      // hashPassword formatı: `${saltHex}:${derivedKeyHex}` — plaintext asla bu formatta olamaz.
+      expect(stored.passwordHash).toMatch(/^[0-9a-f]+:[0-9a-f]+$/);
+    } finally {
+      await prisma.user.deleteMany({ where: { email } });
+    }
+  });
+});
+
+test.describe("Signup security — duplicate email / input validation", () => {
+  test("duplicate e-posta 409 ile reddedilir ve DB'de tek kayıt kalır", async ({ request }) => {
+    const email = `sec-dup-${randomUUID()}@example.com`;
+
+    const first = await request.post("/api/auth/signup", {
+      data: { email, password: "S3curePassw0rd!" },
+    });
+    expect(first.status()).toBe(201);
+
+    try {
+      const second = await request.post("/api/auth/signup", {
+        data: { email, password: "DifferentPassw0rd!" },
+      });
+      expect(second.status()).toBe(409);
+
+      const count = await prisma.user.count({ where: { email } });
+      expect(count).toBe(1);
+    } finally {
+      await prisma.user.deleteMany({ where: { email } });
+    }
+  });
+
+  test("geçersiz input (bozuk e-posta) hiçbir kullanıcı oluşturmuyor", async ({ request }) => {
+    const email = "invalid-email-format";
+
+    const response = await request.post("/api/auth/signup", {
+      data: { email, password: "S3curePassw0rd!" },
+    });
+
+    expect(response.status()).toBe(400);
+    const count = await prisma.user.count({ where: { email } });
+    expect(count).toBe(0);
+  });
+
+  test("zayıf şifre hiçbir kullanıcı oluşturmuyor", async ({ request }) => {
+    const email = `sec-weak-${randomUUID()}@example.com`;
+
+    const response = await request.post("/api/auth/signup", {
+      data: { email, password: "1234567" },
+    });
+
+    expect(response.status()).toBe(400);
+    const count = await prisma.user.count({ where: { email } });
+    expect(count).toBe(0);
+  });
+
+  test("hata response'ları DB/stack trace detayı sızdırmıyor", async ({ request }) => {
+    const response = await request.post("/api/auth/signup", {
+      data: { email: "not-an-email", password: "S3curePassw0rd!" },
+    });
+
+    expect(response.status()).toBe(400);
+    const rawText = await response.text();
+    expect(rawText.toLowerCase()).not.toContain("prisma");
+    expect(rawText.toLowerCase()).not.toContain("stack");
+    expect(rawText.toLowerCase()).not.toContain("at ");
+  });
+});

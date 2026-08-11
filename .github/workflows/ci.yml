@@ -13,6 +13,9 @@ concurrency:
 
 env:
   DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/bireysel_kurumsal_finans_test?schema=public"
+  # CI'a özgü, disposable bir değer (production secret değildir) — Auth.js'in JWT
+  # session token'larını imzalayabilmesi için gereklidir.
+  AUTH_SECRET: "zUdI/d5lYRHI0X4VeuR1QdMfwwlAuKllpSVqERSON/c="
 
 jobs:
   ci:

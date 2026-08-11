@@ -52,6 +52,9 @@ jobs:
       - name: Apply Prisma migrations
         run: npm run prisma:migrate:deploy
 
+      - name: Run integration tests
+        run: npm run test:integration
+
       - name: Lint
         run: npm run lint
 

@@ -8,7 +8,7 @@ Kanban: https://github.com/orgs/21072026/projects/2
 - [Next.js](https://nextjs.org/) (App Router) + TypeScript
 - [Tailwind CSS](https://tailwindcss.com/)
 - [PostgreSQL](https://www.postgresql.org/) + [Prisma ORM](https://www.prisma.io/)
-- [Auth.js](https://authjs.dev/) v5 (next-auth) — temel altyapı kurulu, kayıt/giriş akışları henüz implement edilmedi
+- [Auth.js](https://authjs.dev/) v5 (next-auth) — temel altyapı ve kayıt (sign-up) hazır, giriş/çıkış akışları henüz implement edilmedi
 - Docker / Docker Compose (lokal PostgreSQL)
 - [Playwright](https://playwright.dev/) (E2E testler)
 - ESLint
@@ -82,6 +82,10 @@ Kimlik doğrulama altyapısı [Auth.js](https://authjs.dev/) v5 (`next-auth`) il
   ```bash
   npx auth secret
   ```
-- **Kapsam dışı:** Kayıt, giriş/çıkış ve şifre sıfırlama akışlarının kendisi henüz implement
+- **Kayıt (sign-up):** `POST /api/auth/signup` (`{ email, password }`) e-posta + şifre ile yeni
+  bir `User` oluşturur (`src/lib/auth/signup.ts`). Şifre `hashPassword` ile hash'lenir, e-posta
+  normalize edilir (trim + lowercase) ve zaten kayıtlı bir e-postayla tekrar kayıt denemesi
+  `409` ile reddedilir. Bu adım herhangi bir `Tenant`/`Membership` oluşturmaz.
+- **Kapsam dışı:** Giriş/çıkış ve şifre sıfırlama akışlarının kendisi henüz implement
   edilmemiştir (Credentials provider'ın `authorize` fonksiyonu şimdilik her denemeyi reddeder).
   Bu akışlar ayrı issue'larda eklenecektir.

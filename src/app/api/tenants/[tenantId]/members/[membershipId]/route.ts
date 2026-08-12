@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { requireUser } from "@/lib/auth/guard";
+import { requirePermission } from "@/lib/authz/authorize";
+import { PERMISSIONS } from "@/lib/authz/permissions";
 import { removeMember, updateMemberRole } from "@/lib/tenants/membership";
 import { isValidId } from "@/lib/tenants/validation";
 
@@ -15,14 +16,17 @@ async function resolveParams(params: RouteParams["params"]) {
 }
 
 export async function PATCH(request: Request, { params }: RouteParams) {
-  const { user, response } = await requireUser();
-  if (!user) {
-    return response;
-  }
-
   const ids = await resolveParams(params);
   if (!ids) {
     return NextResponse.json({ error: "Invalid tenant or membership id" }, { status: 400 });
+  }
+
+  const { context, response } = await requirePermission(
+    PERMISSIONS.UPDATE_MEMBER_ROLE,
+    ids.tenantId,
+  );
+  if (!context) {
+    return response;
   }
 
   let body: unknown;
@@ -37,7 +41,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
   const { role } = body as Record<string, unknown>;
 
-  const result = await updateMemberRole(ids.tenantId, ids.membershipId, user.id, role);
+  const result = await updateMemberRole(ids.tenantId, ids.membershipId, context.role, role);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }
@@ -46,17 +50,17 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 }
 
 export async function DELETE(_request: Request, { params }: RouteParams) {
-  const { user, response } = await requireUser();
-  if (!user) {
-    return response;
-  }
-
   const ids = await resolveParams(params);
   if (!ids) {
     return NextResponse.json({ error: "Invalid tenant or membership id" }, { status: 400 });
   }
 
-  const result = await removeMember(ids.tenantId, ids.membershipId, user.id);
+  const { context, response } = await requirePermission(PERMISSIONS.REMOVE_MEMBER, ids.tenantId);
+  if (!context) {
+    return response;
+  }
+
+  const result = await removeMember(ids.tenantId, ids.membershipId, context.role);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }

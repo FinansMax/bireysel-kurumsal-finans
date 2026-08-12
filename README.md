@@ -8,7 +8,7 @@ Kanban: https://github.com/orgs/21072026/projects/2
 - [Next.js](https://nextjs.org/) (App Router) + TypeScript
 - [Tailwind CSS](https://tailwindcss.com/)
 - [PostgreSQL](https://www.postgresql.org/) + [Prisma ORM](https://www.prisma.io/)
-- [Auth.js](https://authjs.dev/) v5 (next-auth) — kayıt, giriş/çıkış hazır; şifre sıfırlama ve RBAC henüz implement edilmedi
+- [Auth.js](https://authjs.dev/) v5 (next-auth) — kayıt, giriş/çıkış, şifre sıfırlama hazır; RBAC henüz implement edilmedi
 - Docker / Docker Compose (lokal PostgreSQL)
 - [Playwright](https://playwright.dev/) (E2E testler)
 - ESLint
@@ -99,5 +99,16 @@ Kimlik doğrulama altyapısı [Auth.js](https://authjs.dev/) v5 (`next-auth`) il
   temizler; sign-out'tan önce yakalanmış bir JWT, kendi `exp`'ine (artık en fazla 8 saat) kadar
   teorik olarak hâlâ geçerlidir — sunucu tarafında bir revocation listesi yoktur ve bu bilinçli
   olarak ayrı bir issue'ya bırakılmıştır (bkz. `security/signin-signout-security.spec.ts`).
-- **Kapsam dışı:** Şifre sıfırlama akışı henüz implement edilmemiştir. Route/endpoint bazlı
-  yetkilendirme (RBAC) ve tenant seçimi de ayrı issue'ların kapsamındadır.
+- **Şifre sıfırlama:** `POST /api/auth/forgot-password` (`{ email }`) ve `POST /api/auth/reset-password`
+  (`{ token, password }`) (`src/lib/auth/password-reset.ts`). Reset token'ı `crypto.randomBytes(32)`
+  (256 bit) ile üretilir; DB'de (`PasswordResetToken.tokenHash`) SADECE SHA-256 hash'i saklanır,
+  raw token hiçbir zaman saklanmaz. Token 30 dakika sonra geçersiz olur ve tek kullanımlıktır —
+  tüketim, race condition'a kapalı tek bir atomik `updateMany` (`WHERE tokenHash = ? AND usedAt
+  IS NULL AND expiresAt > now()`) ile yapılır. `forgot-password`, kayıtlı/kayıtsız e-posta için
+  her zaman aynı genel mesajı döner (user enumeration engeli). Gerçek e-posta gönderimi kapsam
+  dışıdır; `EmailSender` interface'i (`src/lib/auth/email.ts`) arkasında, production'da gerçek
+  bir sağlayıcıyla değiştirilebilecek minimal bir konsol/dosya tabanlı implementasyon kullanılır.
+  **Bilinen sınırlama:** Reset sonrası, reset'ten önce üretilmiş JWT session'ları stateless JWT
+  mimarisi nedeniyle otomatik iptal edilmez (bkz. final rapor — ayrı bir security issue önerilir).
+- **Kapsam dışı:** Route/endpoint bazlı yetkilendirme (RBAC) ve tenant seçimi ayrı issue'ların
+  kapsamındadır.

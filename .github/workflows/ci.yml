@@ -75,8 +75,9 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     env:
-      # CI'a özgü, disposable test veritabanı bağlantısı (production DB/secret değildir).
+      # CI'a özgü, disposable değerler (production DB/secret değildir).
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/bireysel_kurumsal_finans_test?schema=public"
+      AUTH_SECRET: "zUdI/d5lYRHI0X4VeuR1QdMfwwlAuKllpSVqERSON/c="
 
     services:
       postgres:

@@ -1,5 +1,7 @@
 import { encode } from "next-auth/jwt";
 
+import { ACTIVE_TENANT_COOKIE_NAME, encodeActiveTenantCookie } from "../../src/lib/tenants/active-tenant";
+
 const SESSION_COOKIE_NAME = "authjs.session-token";
 
 export type FakeSessionPayload = {
@@ -30,4 +32,15 @@ export async function createSessionCookieHeader(payload: FakeSessionPayload): Pr
   });
 
   return `${SESSION_COOKIE_NAME}=${value}`;
+}
+
+/** Gerçek `encodeActiveTenantCookie`'yi (uygulamanın kendi kodu) kullanarak imzalı bir aktif-tenant cookie'si üretir. */
+export async function createActiveTenantCookieHeader(tenantId: string): Promise<string> {
+  const value = await encodeActiveTenantCookie(tenantId);
+  return `${ACTIVE_TENANT_COOKIE_NAME}=${value}`;
+}
+
+/** Birden fazla `name=value` cookie header'ını tek bir `Cookie` header değerinde birleştirir. */
+export function combineCookieHeaders(...headers: string[]): string {
+  return headers.join("; ");
 }

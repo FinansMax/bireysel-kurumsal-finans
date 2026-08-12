@@ -2,6 +2,17 @@ import { NextResponse } from "next/server";
 
 import { requireUser } from "@/lib/auth/guard";
 import { createTenant } from "@/lib/tenants/create-tenant";
+import { listTenantsForUser } from "@/lib/tenants/user-tenants";
+
+export async function GET() {
+  const { user, response } = await requireUser();
+  if (!user) {
+    return response;
+  }
+
+  const tenants = await listTenantsForUser(user.id);
+  return NextResponse.json({ tenants });
+}
 
 export async function POST(request: Request) {
   const { user, response } = await requireUser();

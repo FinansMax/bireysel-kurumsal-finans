@@ -247,3 +247,79 @@ test.describe("Tenant membership authorization security — son OWNER koruması 
     }
   });
 });
+
+test.describe("Tenant scoping / IDOR koruması (Issue #13)", () => {
+  test("başka tenant'a ait membershipId, aktif tenant altında DELETE ile silinemez", async ({ request }) => {
+    const tenant = await prisma.tenant.create({
+      data: { name: "Tenant A (delete)", slug: `tenant-a-del-${randomUUID()}` },
+    });
+    const foreignTenant = await prisma.tenant.create({
+      data: { name: "Tenant B (delete)", slug: `tenant-b-del-${randomUUID()}` },
+    });
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    const foreignUser = await prisma.user.create({
+      data: { email: `sec-foreign-del-${randomUUID()}@example.com` },
+    });
+    const foreignMembership = await prisma.membership.create({
+      data: { userId: foreignUser.id, tenantId: foreignTenant.id, role: MembershipRole.MEMBER },
+    });
+
+    try {
+      const response = await request.delete(
+        `/api/tenants/${tenant.id}/members/${foreignMembership.id}`,
+        { headers: { cookie: owner.cookie } },
+      );
+      expect(response.status()).toBe(404);
+
+      const stillThere = await prisma.membership.findUnique({ where: { id: foreignMembership.id } });
+      expect(stillThere).not.toBeNull();
+      expect(stillThere?.tenantId).toBe(foreignTenant.id);
+    } finally {
+      await prisma.tenant.deleteMany({ where: { id: { in: [tenant.id, foreignTenant.id] } } });
+      await prisma.user.deleteMany({ where: { id: { in: [owner.userId, foreignUser.id] } } });
+    }
+  });
+
+  test("cross-tenant geçerli ID ile tamamen var olmayan ID, response üzerinden ayırt edilemiyor", async ({
+    request,
+  }) => {
+    const tenant = await prisma.tenant.create({
+      data: { name: "Tenant A (leak-check)", slug: `tenant-a-leak-${randomUUID()}` },
+    });
+    const foreignTenant = await prisma.tenant.create({
+      data: { name: "Tenant B (leak-check)", slug: `tenant-b-leak-${randomUUID()}` },
+    });
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    const foreignUser = await prisma.user.create({
+      data: { email: `sec-leak-${randomUUID()}@example.com` },
+    });
+    const foreignMembership = await prisma.membership.create({
+      data: { userId: foreignUser.id, tenantId: foreignTenant.id, role: MembershipRole.MEMBER },
+    });
+
+    try {
+      // Tenant B'de GERÇEKTEN var olan bir membershipId, Tenant A context'inde.
+      const crossTenantResponse = await request.patch(
+        `/api/tenants/${tenant.id}/members/${foreignMembership.id}`,
+        { headers: { cookie: owner.cookie }, data: { role: "ADMIN" } },
+      );
+      // Hiçbir tenant'ta var OLMAYAN bir membershipId, aynı Tenant A context'inde.
+      const nonExistentResponse = await request.patch(
+        `/api/tenants/${tenant.id}/members/does-not-exist-${randomUUID()}`,
+        { headers: { cookie: owner.cookie }, data: { role: "ADMIN" } },
+      );
+
+      // İki durum da aynı generic 404 ile sonuçlanmalı — response, Tenant B'deki kaydın
+      // gerçekten var olduğunu açığa çıkarmamalı.
+      expect(crossTenantResponse.status()).toBe(404);
+      expect(nonExistentResponse.status()).toBe(404);
+      expect(await crossTenantResponse.json()).toEqual(await nonExistentResponse.json());
+
+      const unchanged = await prisma.membership.findUniqueOrThrow({ where: { id: foreignMembership.id } });
+      expect(unchanged.role).toBe("MEMBER");
+    } finally {
+      await prisma.tenant.deleteMany({ where: { id: { in: [tenant.id, foreignTenant.id] } } });
+      await prisma.user.deleteMany({ where: { id: { in: [owner.userId, foreignUser.id] } } });
+    }
+  });
+});

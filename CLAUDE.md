@@ -16,6 +16,23 @@ Bu dosya, bu repository üzerinde çalışan Claude görevleri için temel kural
 - Membership rollerine (`OWNER`, `ADMIN`, `MEMBER`) göre yetki kontrolü sunucu tarafında yapılmalı.
 - Secret veya API key'leri repository'ye ekleme; `.env` dosyası Git'e girmemeli.
 
+### Tenant Veri İzolasyonu (Query-Level Scoping — Issue #13)
+
+- Tenant-owned bir modele (örn. `Membership`, gelecekte `Account`/`Transaction`/`Category`/
+  `Budget`/`Invoice`) ait sorgular her zaman trusted `tenantId` ile scope'lanmalı:
+  `src/lib/tenancy/scope.ts`'teki `tenantScoped(tenantId, where)` helper'ını kullan.
+- `findUnique({ where: { id } })` / `update({ where: { id } })` / `delete({ where: { id } })`
+  gibi yalnız-ID sorguları tenant-scoped modeller için KULLANILMAZ — id + tenantId birlikte
+  unique bir alan olmadığından, tenant-scoped update/delete `updateMany`/`deleteMany` +
+  `tenantScoped()` + `result.count === 1` kontrolü ile yapılır (örnek: `src/lib/tenants/membership.ts`).
+- Query scope için trusted `tenantId`, authorization guard'ından (`requirePermission()`,
+  Issue #12) gelen `context.tenant.id`'dir — body/query/header'daki `tenantId` veya
+  membership üzerindeki iddia edilen tenant bilgisi ASLA kaynak değildir.
+- Authorization ("bu kullanıcı ne yapabilir?") ve tenant isolation ("bu veri hangi
+  tenant'a ait?") ayrı kontrollerdir; birini yapmak diğerini gereksiz kılmaz.
+- Yeni tenant-scoped modeller eklendiğinde bu pattern (concrete lookup/list/update/delete
+  fonksiyonları + `tenantScoped()`) takip edilmeli.
+
 ## Finansal Veri
 
 - Finansal tutarlarda (para birimi vb.) floating point (`number`/`float`) kullanma; `Decimal` tipi kullan.

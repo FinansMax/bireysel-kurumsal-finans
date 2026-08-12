@@ -49,3 +49,7 @@ next-env.d.ts
 
 # prisma
 prisma/*.db
+
+# local/test e-posta çıktısı (bkz. src/lib/auth/email.ts) — gerçek e-posta sağlayıcısı
+# entegre edilene kadar kullanılan, disposable test verisi içeren dizin.
+/.test-outbox/

@@ -19,6 +19,10 @@ export async function GET(
     return response;
   }
 
-  const members = await listMembers(tenantId);
+  // tenantId'nin trusted kaynağı burada `context.tenant.id`dir (requirePermission'ın DB'den
+  // canlı doğruladığı active tenant) — URL parametresinin kendisi DEĞİL (Issue #13). Bu iki
+  // değer requirePermission içindeki expectedTenantId eşleşme kontrolü sayesinde eşittir,
+  // ama sorgu scope'u için kaynak olarak açıkça context kullanılır.
+  const members = await listMembers(context.tenant.id);
   return NextResponse.json({ members });
 }

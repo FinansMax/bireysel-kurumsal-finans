@@ -41,7 +41,9 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
   const { role } = body as Record<string, unknown>;
 
-  const result = await updateMemberRole(ids.tenantId, ids.membershipId, context.role, role);
+  // tenantId'nin trusted kaynağı `context.tenant.id`dir (Issue #13) — bkz.
+  // src/app/api/tenants/[tenantId]/members/route.ts'teki aynı not.
+  const result = await updateMemberRole(context.tenant.id, ids.membershipId, context.role, role);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }
@@ -60,7 +62,7 @@ export async function DELETE(_request: Request, { params }: RouteParams) {
     return response;
   }
 
-  const result = await removeMember(ids.tenantId, ids.membershipId, context.role);
+  const result = await removeMember(context.tenant.id, ids.membershipId, context.role);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }

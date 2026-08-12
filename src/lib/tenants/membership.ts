@@ -1,6 +1,7 @@
 import { MembershipRole, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { tenantScoped } from "@/lib/tenancy/scope";
 
 import { isValidRole } from "./validation";
 
@@ -19,16 +20,18 @@ const memberSelect = {
 export type MemberView = Prisma.MembershipGetPayload<{ select: typeof memberSelect }>;
 
 /**
- * Sadece `tenantId`'ye ait membership'leri döndürür — sorgu her zaman tenantId ile scope'lanır.
+ * Sadece `tenantId`'ye ait membership'leri döndürür — sorgu her zaman tenantId ile scope'lanır
+ * (`tenantScoped()`, Issue #13 — bkz. `src/lib/tenancy/scope.ts`).
  *
  * NOT: Bu fonksiyon artık authorization kararı VERMEZ (Issue #9'daki geçici `requireOwnerOfTenant()`
  * kaldırıldı). Kimin bu fonksiyonu çağırabileceği, çağrıdan ÖNCE route seviyesinde merkezi
  * `requirePermission(PERMISSIONS.VIEW_MEMBERS, tenantId)` (Issue #12, `src/lib/authz/`) ile
- * belirlenir.
+ * belirlenir. `tenantId` parametresi çağıran route'ta o guard'dan gelen trusted active tenant
+ * context'i (`context.tenant.id`) olmalıdır — client input'u DEĞİL.
  */
 export async function listMembers(tenantId: string): Promise<MemberView[]> {
   return prisma.membership.findMany({
-    where: { tenantId },
+    where: tenantScoped(tenantId, {}),
     select: memberSelect,
     orderBy: { createdAt: "asc" },
   });
@@ -69,10 +72,10 @@ export async function updateMemberRole(
   try {
     const member = await prisma.$transaction(
       async (tx) => {
-        // Hem id hem tenantId birlikte filtrelenir: başka tenant'a ait bir membershipId
-        // burada asla eşleşmez (tenant isolation).
+        // Hem id hem tenantId birlikte filtrelenir (tenantScoped()): başka tenant'a ait
+        // bir membershipId burada asla eşleşmez (tenant isolation, Issue #13).
         const target = await tx.membership.findFirst({
-          where: { id: membershipId, tenantId },
+          where: tenantScoped(tenantId, { id: membershipId }),
           select: { role: true },
         });
         if (!target) {
@@ -92,9 +95,21 @@ export async function updateMemberRole(
           }
         }
 
-        return tx.membership.update({
-          where: { id: membershipId },
+        // `update({ where: { id } })` KULLANILMAZ: id tek başına unique olduğundan Prisma
+        // bunu kabul eder, ama bu güvenli-görünen-ama-yalnız-id sorgusu (bkz.
+        // `src/lib/tenancy/scope.ts`) tenant scope'unu mutasyonun kendisinde taşımaz.
+        // Bunun yerine `updateMany` + `tenantScoped()` ile id VE tenantId birlikte
+        // filtrelenir; `count` beklenmedik şekilde 0 ise (örn. concurrent silme) NotFound.
+        const { count } = await tx.membership.updateMany({
+          where: tenantScoped(tenantId, { id: membershipId }),
           data: { role: newRole },
+        });
+        if (count !== 1) {
+          throw new NotFoundError();
+        }
+
+        return tx.membership.findFirstOrThrow({
+          where: tenantScoped(tenantId, { id: membershipId }),
           select: memberSelect,
         });
       },
@@ -133,7 +148,7 @@ export async function removeMember(
     await prisma.$transaction(
       async (tx) => {
         const target = await tx.membership.findFirst({
-          where: { id: membershipId, tenantId },
+          where: tenantScoped(tenantId, { id: membershipId }),
           select: { role: true },
         });
         if (!target) {
@@ -153,7 +168,14 @@ export async function removeMember(
           }
         }
 
-        await tx.membership.delete({ where: { id: membershipId } });
+        // `delete({ where: { id } })` yerine `deleteMany` + `tenantScoped()`: silme
+        // sorgusunun kendisi de id + tenantId ile scope'lanır (bkz. updateMemberRole).
+        const { count } = await tx.membership.deleteMany({
+          where: tenantScoped(tenantId, { id: membershipId }),
+        });
+        if (count !== 1) {
+          throw new NotFoundError();
+        }
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );

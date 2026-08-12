@@ -6,6 +6,7 @@ import { isValidRole } from "./validation";
 
 class NotFoundError extends Error {}
 class LastOwnerError extends Error {}
+class ForbiddenOwnershipError extends Error {}
 
 const memberSelect = {
   id: true,
@@ -17,68 +18,53 @@ const memberSelect = {
 
 export type MemberView = Prisma.MembershipGetPayload<{ select: typeof memberSelect }>;
 
-type ForbiddenResult = { ok: false; status: 403; error: string };
-
 /**
- * Bu issue kapsamında kullanılan minimum/geçici yetkilendirme: aktörün, hedef tenant'ta
- * OWNER rolünde bir membership'i olmalı. Formal RBAC altyapısı kapsam dışıdır (bkz. Issue #9).
+ * Sadece `tenantId`'ye ait membership'leri döndürür — sorgu her zaman tenantId ile scope'lanır.
+ *
+ * NOT: Bu fonksiyon artık authorization kararı VERMEZ (Issue #9'daki geçici `requireOwnerOfTenant()`
+ * kaldırıldı). Kimin bu fonksiyonu çağırabileceği, çağrıdan ÖNCE route seviyesinde merkezi
+ * `requirePermission(PERMISSIONS.VIEW_MEMBERS, tenantId)` (Issue #12, `src/lib/authz/`) ile
+ * belirlenir.
  */
-async function requireOwnerOfTenant(
-  tenantId: string,
-  actorUserId: string,
-): Promise<{ ok: true } | ForbiddenResult> {
-  const membership = await prisma.membership.findUnique({
-    where: { userId_tenantId: { userId: actorUserId, tenantId } },
-    select: { role: true },
-  });
-
-  if (!membership || membership.role !== MembershipRole.OWNER) {
-    return { ok: false, status: 403, error: "Forbidden" };
-  }
-
-  return { ok: true };
-}
-
-export type ListMembersResult =
-  | { ok: true; members: MemberView[] }
-  | ForbiddenResult;
-
-/** Sadece `tenantId`'ye ait membership'leri döndürür — sorgu her zaman tenantId ile scope'lanır. */
-export async function listMembers(tenantId: string, actorUserId: string): Promise<ListMembersResult> {
-  const authCheck = await requireOwnerOfTenant(tenantId, actorUserId);
-  if (!authCheck.ok) return authCheck;
-
-  const members = await prisma.membership.findMany({
+export async function listMembers(tenantId: string): Promise<MemberView[]> {
+  return prisma.membership.findMany({
     where: { tenantId },
     select: memberSelect,
     orderBy: { createdAt: "asc" },
   });
-
-  return { ok: true, members };
 }
 
 export type UpdateRoleResult =
   | { ok: true; member: MemberView }
-  | ForbiddenResult
-  | { ok: false; status: 400 | 404 | 409; error: string };
+  | { ok: false; status: 400 | 403 | 404 | 409; error: string };
 
 /**
- * Rolü günceller. Hedef membership + son-OWNER kontrolü + update, tek bir Serializable
- * transaction içinde yapılır: iki eşzamanlı istek aynı anda "son OWNER" durumunu okuyup
- * ikisi de downgrade edemez (Prisma/Postgres serialization hatası, kaybeden isteği reddeder).
+ * Rolü günceller. Permission kontrolü (kimin bu işlemi çağırabileceği) route seviyesinde
+ * `requirePermission(PERMISSIONS.UPDATE_MEMBER_ROLE, tenantId)` ile yapılır; `actorRole` o
+ * kontrolden gelen, DB'den canlı doğrulanmış roldür (client input DEĞİLDİR).
+ *
+ * Hedef membership + ownership/son-OWNER kontrolü + update, tek bir Serializable transaction
+ * içinde yapılır: iki eşzamanlı istek aynı anda "son OWNER" durumunu okuyup ikisi de downgrade
+ * edemez (Prisma/Postgres serialization hatası, kaybeden isteği reddeder).
+ *
+ * Ownership/privilege-escalation koruması (Issue #12):
+ * - ADMIN hiç kimseyi (kendisi dahil) OWNER yapamaz.
+ * - ADMIN mevcut bir OWNER'ın rolünü değiştiremez.
+ * (OWNER için bu kısıtlamalar geçerli değildir; OWNER yalnızca son-OWNER invariant'ına tabidir.)
  */
 export async function updateMemberRole(
   tenantId: string,
   membershipId: string,
-  actorUserId: string,
+  actorRole: MembershipRole,
   newRole: unknown,
 ): Promise<UpdateRoleResult> {
   if (!isValidRole(newRole)) {
     return { ok: false, status: 400, error: "Invalid role" };
   }
 
-  const authCheck = await requireOwnerOfTenant(tenantId, actorUserId);
-  if (!authCheck.ok) return authCheck;
+  if (actorRole !== MembershipRole.OWNER && newRole === MembershipRole.OWNER) {
+    return { ok: false, status: 403, error: "Forbidden" };
+  }
 
   try {
     const member = await prisma.$transaction(
@@ -91,6 +77,10 @@ export async function updateMemberRole(
         });
         if (!target) {
           throw new NotFoundError();
+        }
+
+        if (actorRole !== MembershipRole.OWNER && target.role === MembershipRole.OWNER) {
+          throw new ForbiddenOwnershipError();
         }
 
         if (target.role === MembershipRole.OWNER && newRole !== MembershipRole.OWNER) {
@@ -116,6 +106,9 @@ export async function updateMemberRole(
     if (error instanceof NotFoundError) {
       return { ok: false, status: 404, error: "Membership not found" };
     }
+    if (error instanceof ForbiddenOwnershipError) {
+      return { ok: false, status: 403, error: "Forbidden" };
+    }
     if (error instanceof LastOwnerError) {
       return { ok: false, status: 409, error: "Cannot change role of the last remaining OWNER" };
     }
@@ -123,20 +116,19 @@ export async function updateMemberRole(
   }
 }
 
-export type RemoveMemberResult =
-  | { ok: true }
-  | ForbiddenResult
-  | { ok: false; status: 404 | 409; error: string };
+export type RemoveMemberResult = { ok: true } | { ok: false; status: 403 | 404 | 409; error: string };
 
-/** Üyeyi tenant'tan çıkarır; aynı Serializable transaction + son-OWNER koruması deseni. */
+/**
+ * Üyeyi tenant'tan çıkarır; aynı Serializable transaction + ownership/son-OWNER koruması
+ * deseni. Permission kontrolü route seviyesinde yapılır (bkz. `updateMemberRole` dokümantasyonu).
+ *
+ * ADMIN mevcut bir OWNER'ı çıkaramaz (ownership koruması, Issue #12).
+ */
 export async function removeMember(
   tenantId: string,
   membershipId: string,
-  actorUserId: string,
+  actorRole: MembershipRole,
 ): Promise<RemoveMemberResult> {
-  const authCheck = await requireOwnerOfTenant(tenantId, actorUserId);
-  if (!authCheck.ok) return authCheck;
-
   try {
     await prisma.$transaction(
       async (tx) => {
@@ -146,6 +138,10 @@ export async function removeMember(
         });
         if (!target) {
           throw new NotFoundError();
+        }
+
+        if (actorRole !== MembershipRole.OWNER && target.role === MembershipRole.OWNER) {
+          throw new ForbiddenOwnershipError();
         }
 
         if (target.role === MembershipRole.OWNER) {
@@ -166,6 +162,9 @@ export async function removeMember(
   } catch (error) {
     if (error instanceof NotFoundError) {
       return { ok: false, status: 404, error: "Membership not found" };
+    }
+    if (error instanceof ForbiddenOwnershipError) {
+      return { ok: false, status: 403, error: "Forbidden" };
     }
     if (error instanceof LastOwnerError) {
       return { ok: false, status: 409, error: "Cannot remove the last remaining OWNER" };

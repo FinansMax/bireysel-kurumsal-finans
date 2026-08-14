@@ -1,5 +1,7 @@
 import { MembershipRole, Prisma } from "@prisma/client";
 
+import { AUDIT_ACTIONS, AUDIT_TARGET_TYPES } from "@/lib/audit/actions";
+import { writeAuditLog } from "@/lib/audit/write-audit-log";
 import { prisma } from "@/lib/prisma";
 import { tenantScoped } from "@/lib/tenancy/scope";
 
@@ -54,10 +56,16 @@ export type UpdateRoleResult =
  * - ADMIN hiç kimseyi (kendisi dahil) OWNER yapamaz.
  * - ADMIN mevcut bir OWNER'ın rolünü değiştiremez.
  * (OWNER için bu kısıtlamalar geçerli değildir; OWNER yalnızca son-OWNER invariant'ına tabidir.)
+ *
+ * Başarılı bir rol değişikliği, transaction commit olduktan SONRA (Issue #15) `MEMBERSHIP_ROLE_CHANGED`
+ * audit event'i olarak yazılır — `actorUserId` de tıpkı `actorRole` gibi çağıran route'taki
+ * trusted authorization context'ten (`requirePermission()`) gelir, client input DEĞİLDİR. Audit
+ * yazımı best-effort'tur (bkz. `writeAuditLog()`); başarısız olsa bile rol değişikliği kalıcı kalır.
  */
 export async function updateMemberRole(
   tenantId: string,
   membershipId: string,
+  actorUserId: string,
   actorRole: MembershipRole,
   newRole: unknown,
 ): Promise<UpdateRoleResult> {
@@ -70,6 +78,8 @@ export async function updateMemberRole(
   }
 
   try {
+    let previousRole: MembershipRole | undefined;
+
     const member = await prisma.$transaction(
       async (tx) => {
         // Hem id hem tenantId birlikte filtrelenir (tenantScoped()): başka tenant'a ait
@@ -95,6 +105,8 @@ export async function updateMemberRole(
           }
         }
 
+        previousRole = target.role;
+
         // `update({ where: { id } })` KULLANILMAZ: id tek başına unique olduğundan Prisma
         // bunu kabul eder, ama bu güvenli-görünen-ama-yalnız-id sorgusu (bkz.
         // `src/lib/tenancy/scope.ts`) tenant scope'unu mutasyonun kendisinde taşımaz.
@@ -115,6 +127,17 @@ export async function updateMemberRole(
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+
+    // Audit yazımı BİLEREK transaction'ın DIŞINDA ve sadece commit olduktan SONRA yapılır
+    // (Issue #15) — best-effort'tur, rol değişikliğinin kendisini rollback ETMEMELİDİR.
+    await writeAuditLog({
+      actorUserId,
+      tenantId,
+      action: AUDIT_ACTIONS.MEMBERSHIP_ROLE_CHANGED,
+      targetType: AUDIT_TARGET_TYPES.MEMBERSHIP,
+      targetId: member.id,
+      metadata: { previousRole, newRole: member.role },
+    });
 
     return { ok: true, member };
   } catch (error) {

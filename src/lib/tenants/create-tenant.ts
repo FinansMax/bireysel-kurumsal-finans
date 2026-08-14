@@ -1,5 +1,7 @@
 import { MembershipRole, Prisma } from "@prisma/client";
 
+import { AUDIT_ACTIONS, AUDIT_TARGET_TYPES } from "@/lib/audit/actions";
+import { writeAuditLog } from "@/lib/audit/write-audit-log";
 import { prisma } from "@/lib/prisma";
 
 import { isValidName, isValidSlug, slugify } from "./validation";
@@ -58,6 +60,17 @@ export async function createTenant(
       });
 
       return created;
+    });
+
+    // Audit yazımı BİLEREK transaction'ın DIŞINDA ve sadece tenant+membership commit
+    // olduktan SONRA yapılır (Issue #15): audit best-effort'tur, insert'i başarısız olsa
+    // bile tenant creation'ı rollback ETMEMELİDİR — bkz. `writeAuditLog()` dokümantasyonu.
+    await writeAuditLog({
+      actorUserId: userId,
+      tenantId: tenant.id,
+      action: AUDIT_ACTIONS.TENANT_CREATED,
+      targetType: AUDIT_TARGET_TYPES.TENANT,
+      targetId: tenant.id,
     });
 
     return { ok: true, tenant };

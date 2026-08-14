@@ -25,6 +25,7 @@ model User {
   memberships         Membership[]
   passwordResetTokens PasswordResetToken[]
   sentInvitations     TenantInvitation[]    @relation("InvitationInviter")
+  auditLogs           AuditLog[]
 }
 
 model Tenant {
@@ -36,6 +37,7 @@ model Tenant {
 
   memberships Membership[]
   invitations TenantInvitation[]
+  auditLogs   AuditLog[]
 }
 
 model Membership {
@@ -92,4 +94,43 @@ model TenantInvitation {
 
   @@index([tenantId])
   @@index([tenantId, email])
+}
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  // Aktörü (kim) temsil eder; başarısız login gibi olaylarda kullanıcı bilinmediği için
+  // nullable. User silinirse denetim kaydı KORUNUR (onDelete: SetNull) — audit trail bir
+  // kullanıcı hesabının silinmesiyle kaybolmamalı (bkz. TenantInvitation.invitedByUserId'deki
+  // aynı gerekçe, src/lib/tenants/invitation.ts).
+  actorUserId String?
+  actorUser   User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  // Tenant-bağımsız olaylar (ör. başarısız login) için nullable. Tenant silinirse denetim
+  // kaydı KORUNUR (onDelete: SetNull) — aynı gerekçe.
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  // Sabit, stabil event ismi (bkz. src/lib/audit/actions.ts) — merkezi typed constants
+  // üzerinden yazılır, serbest metin DEĞİLDİR. Prisma enum yerine String: yeni bir action
+  // eklemek migration gerektirmesin diye bilinçli tercih; tip güvenliği uygulama katmanında
+  // (`AuditAction` union'ı) sağlanır.
+  action String
+
+  // Etkilenen kaynağın türü/ID'si (ör. "USER"/"TENANT"/"MEMBERSHIP"); targetType de action gibi
+  // merkezi typed constants'tan gelir.
+  targetType String?
+  targetId   String?
+
+  // Serbest biçimli ek bağlam. Hassas alanlar (password/token/secret/cookie/...) merkezi
+  // `writeAuditLog()` helper'ı tarafından defense-in-depth olarak redakte edilir (bkz.
+  // src/lib/audit/sanitize.ts) — çağıran kod da metadata'ya hassas veri KOYMAMALIDIR.
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([actorUserId])
+  @@index([action])
+  @@index([createdAt])
 }

@@ -112,3 +112,38 @@ Kimlik doğrulama altyapısı [Auth.js](https://authjs.dev/) v5 (`next-auth`) il
   mimarisi nedeniyle otomatik iptal edilmez (bkz. final rapor — ayrı bir security issue önerilir).
 - **Kapsam dışı:** Route/endpoint bazlı yetkilendirme (RBAC) ve tenant seçimi ayrı issue'ların
   kapsamındadır.
+
+## Tenant Davetleri (Invitations)
+
+Bir tenant'a yeni kullanıcı davet etme akışı (`src/lib/tenants/invitation.ts`).
+
+- **Davet oluşturma:** `POST /api/tenants/[tenantId]/invitations` (`{ email, role }`). Sadece
+  `OWNER`/`ADMIN` davet oluşturabilir (`PERMISSIONS.SEND_INVITE`, Issue #12); `MEMBER` `403` alır.
+  `tenantId` her zaman `requirePermission()`'ın DB'den doğruladığı trusted active tenant
+  context'inden gelir (Issue #13) — URL/body'deki değerler kaynak değildir. E-posta normalize
+  edilir (trim + lowercase). **Least privilege:** `updateMemberRole`'daki ("ADMIN kimseyi OWNER
+  yapamaz") ile AYNI kural — sadece `OWNER`, `OWNER` rolüyle davet gönderebilir; `ADMIN`'in
+  denemesi `403` ile reddedilir.
+- **Duplicate pending invitation politikası:** aynı tenant + aynı email için zaten aktif
+  (kullanılmamış, iptal edilmemiş) bir davet varsa, yeni davet oluşturulmadan önce eskisi
+  `cancelledAt` ile geçersiz kılınır — böylece her zaman en fazla bir aktif davet bulunur ve eski
+  token'ın kabul edilmesi mümkün olmaz. Bu "eskisini iptal et + yenisini oluştur" adımı, aynı
+  tenant+email için eşzamanlı iki isteğe karşı Serializable bir transaction içinde yapılır (bkz.
+  `src/lib/tenants/membership.ts`'teki last-OWNER korumasıyla aynı teknik); bir yazma çakışması
+  oluşursa otomatik olarak yeniden denenir.
+- **Token güvenliği:** `PasswordResetToken` (Issue #7) ile AYNI yaklaşım — `crypto.randomBytes(32)`
+  (256 bit) ile üretilir, DB'de (`TenantInvitation.tokenHash`) SADECE SHA-256 hash'i saklanır, raw
+  token hiçbir zaman saklanmaz veya production loglarına yazılmaz. Token 7 gün sonra geçersiz olur
+  ve tek kullanımlıktır.
+- **Davet kabul etme:** `POST /api/invitations/accept` (`{ token }`). Authentication zorunludur
+  (`requireUser()`); signup/login bu issue'nun kapsamında yeniden implement edilmez. Kontroller:
+  token bulunuyor mu, süresi dolmuş mu, kullanılmış mı, iptal edilmiş mi (hepsi için AYNI genel
+  `400` hatası — enumeration'a karşı), authenticated kullanıcının e-postası davetteki email ile
+  eşleşiyor mu (`403`, e-posta kontrolü token TÜKETİLMEDEN önce yapılır ki yanlış hesap daveti
+  kalıcı olarak yakmasın), kullanıcı zaten tenant member mı (`409`, duplicate membership/privilege
+  escalation OLUŞTURULMAZ). Başarılı kabul, membership oluşturma + invitation'ı `usedAt` ile
+  tüketme işlemini TEK bir atomic transaction içinde yapar; eşzamanlı iki kabul isteğinden yalnızca
+  biri kazanır.
+- Gerçek e-posta gönderimi kapsam dışıdır; `InvitationSender` interface'i
+  (`src/lib/tenants/invitation-email.ts`) arkasında, `EmailSender` (şifre sıfırlama) ile AYNI
+  desende minimal bir konsol/dosya tabanlı implementasyon kullanılır.

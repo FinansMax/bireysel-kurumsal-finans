@@ -24,6 +24,7 @@ model User {
 
   memberships         Membership[]
   passwordResetTokens PasswordResetToken[]
+  sentInvitations     TenantInvitation[]    @relation("InvitationInviter")
 }
 
 model Tenant {
@@ -34,6 +35,7 @@ model Tenant {
   updatedAt DateTime @updatedAt
 
   memberships Membership[]
+  invitations TenantInvitation[]
 }
 
 model Membership {
@@ -64,4 +66,30 @@ model PasswordResetToken {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+}
+
+model TenantInvitation {
+  id    String         @id @default(cuid())
+  email String
+  role  MembershipRole @default(MEMBER)
+
+  // Raw token asla saklanmaz; sadece SHA-256 hash'i saklanır (bkz. src/lib/tenants/invitation.ts).
+  tokenHash String    @unique
+  expiresAt DateTime
+  // null = henüz kullanılmadı. Dolu = tek kullanımlık token tüketildi.
+  usedAt    DateTime?
+  // null = hâlâ pending. Dolu = aynı tenant+email için yeni bir davet oluşturulduğunda
+  // (veya ileride açık bir iptal işlemiyle) geçersiz kılındı.
+  cancelledAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Daveti gönderen kullanıcı silinirse davet kaydı SetNull ile korunur (audit amaçlı).
+  invitedByUserId String?
+  invitedByUser   User?   @relation("InvitationInviter", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, email])
 }

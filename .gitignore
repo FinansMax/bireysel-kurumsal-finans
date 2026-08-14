@@ -53,3 +53,6 @@ prisma/*.db
 # local/test e-posta çıktısı (bkz. src/lib/auth/email.ts) — gerçek e-posta sağlayıcısı
 # entegre edilene kadar kullanılan, disposable test verisi içeren dizin.
 /.test-outbox/
+
+# local/test davet e-postası çıktısı (bkz. src/lib/tenants/invitation-email.ts) — aynı gerekçe.
+/.test-outbox-invitations/

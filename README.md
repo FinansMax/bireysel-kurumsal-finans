@@ -108,10 +108,39 @@ Kimlik doğrulama altyapısı [Auth.js](https://authjs.dev/) v5 (`next-auth`) il
   her zaman aynı genel mesajı döner (user enumeration engeli). Gerçek e-posta gönderimi kapsam
   dışıdır; `EmailSender` interface'i (`src/lib/auth/email.ts`) arkasında, production'da gerçek
   bir sağlayıcıyla değiştirilebilecek minimal bir konsol/dosya tabanlı implementasyon kullanılır.
-  **Bilinen sınırlama:** Reset sonrası, reset'ten önce üretilmiş JWT session'ları stateless JWT
-  mimarisi nedeniyle otomatik iptal edilmez (bkz. final rapor — ayrı bir security issue önerilir).
+  Reset sonrası, reset'ten önce üretilmiş JWT session'ları artık otomatik iptal edilir — bkz.
+  aşağıdaki "Session Revocation".
 - **Kapsam dışı:** Route/endpoint bazlı yetkilendirme (RBAC) ve tenant seçimi ayrı issue'ların
   kapsamındadır.
+
+### Session Revocation (Issue #26)
+
+Kritik bir credential (şifre) değişikliğinden ÖNCE üretilmiş JWT session'ları, sonraki istekte
+otomatik olarak geçersiz sayılır. Database session / refresh token / blacklist YOKTUR —
+stateless Auth.js JWT mimarisi korunur.
+
+- **Nasıl çalışır:** `User.credentialsChangedAt` (nullable `DateTime`) her şifre değişikliğinde
+  güncellenir (`src/lib/auth/credentials.ts`'teki `updateUserPassword()` — passwordHash ile AYNI
+  UPDATE ifadesinde, atomik olarak). Auth.js'in `session` callback'i (`src/lib/auth/config.ts`)
+  her `auth()`/`getCurrentUser()` çağrısında, `token.sub` ile TEK bir DB sorgusu yapıp
+  `credentialsChangedAt`'i okur ve `token.iat` (JWT üretim zamanı) ile karşılaştırır
+  (`isSessionRevoked()`, `src/lib/auth/session-revocation.ts`).
+- **Precision:** JWT `iat` Unix SANİYE hassasiyetinde, `credentialsChangedAt` ise milisaniye
+  hassasiyetindedir. Yanlışlıkla yeni (geçerli) bir session'ı revoke etmemek için, bir token'ın
+  `iat` saniyesinin TAMAMI hâlâ geçerli kabul edilir — sadece `credentialsChangedAt`, o saniye
+  tamamen bittikten SONRA ise revoke edilir (en fazla ~1 saniyelik bilinçli bir "grace window").
+- **Revoke edilen bir session için** `getCurrentUser()` yine `null`, `GET /api/auth/me` yine
+  `401` döner — public contract değişmez, `500`/exception üretilmez.
+- **Migration güvenliği:** `credentialsChangedAt` nullable'dır; `null` = hiç credential
+  değiştirilmedi, hiçbir session revoke edilmez (mevcut kullanıcılar migration sonrası
+  etkilenmez).
+- **Rol/membership değişiklikleri bu mekanizmayı TETİKLEMEZ** — sadece credential (şifre)
+  değişiklikleri.
+- **Bağımlılık notu:** Authenticated (login sonrası, mevcut şifreyi bilerek) password change
+  endpoint'i bu repo'da HENÜZ mevcut değil (Epic 3 kapsamında beklemektedir). Password reset
+  (#7) akışı bu issue kapsamında tam entegre edilmiştir; `updateUserPassword()` reusable bir
+  primitive olarak tasarlanmıştır ve authenticated password change eklendiğinde AYNI fonksiyon
+  kullanılmalıdır.
 
 ## Tenant Davetleri (Invitations)
 

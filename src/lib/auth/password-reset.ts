@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 
 import { prisma } from "@/lib/prisma";
 
+import { updateUserPassword } from "./credentials";
 import { consoleEmailSender, type EmailSender } from "./email";
 import { hashPassword } from "./password";
 import { isValidPassword, normalizeEmail } from "./validation";
@@ -99,6 +100,11 @@ const INVALID_OR_EXPIRED_TOKEN_ERROR = "Invalid or expired token";
  * gönderilse bile veritabanı seviyesinde sadece biri `count === 1` görür; diğeri
  * "zaten kullanılmış" olarak reddedilir. "Önce oku, sonra yaz" deseninin (TOCTOU) aksine bu
  * yaklaşım, iki isteğin aynı token'ı aynı anda başarıyla tüketebilmesini yapısal olarak engeller.
+ *
+ * SESSION REVOCATION (Issue #26): Şifre hash'i `updateUserPassword()` ile güncellenir — bu
+ * fonksiyon `credentialsChangedAt`'i AYNI UPDATE ifadesinde atomik olarak bumplar. Sonuç: reset
+ * öncesi üretilmiş TÜM JWT session'ları bir sonraki istekte otomatik olarak geçersiz sayılır
+ * (bkz. `src/lib/auth/session-revocation.ts` + `config.ts`'teki `session` callback'i).
  */
 export async function resetPassword(
   token: unknown,
@@ -137,10 +143,7 @@ export async function resetPassword(
   }
 
   const passwordHash = await hashPassword(newPassword);
-  await prisma.user.update({
-    where: { id: tokenRecord.userId },
-    data: { passwordHash },
-  });
+  await updateUserPassword(prisma, tokenRecord.userId, passwordHash);
 
   return { ok: true };
 }

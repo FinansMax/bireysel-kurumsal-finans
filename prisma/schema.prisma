@@ -14,17 +14,23 @@ enum MembershipRole {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  name          String?
-  passwordHash  String?
-  emailVerified DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                   String    @id @default(cuid())
+  email                String    @unique
+  name                 String?
+  passwordHash         String?
+  emailVerified        DateTime?
+  // null = credential'lar (şifre) hiç değiştirilmedi — bu kullanıcının mevcut hiçbir JWT
+  // session'ı geçersiz kılınmaz (bkz. src/lib/auth/session-revocation.ts, Issue #26). Dolu =
+  // bu zamandan ÖNCE (`token.iat`) üretilmiş JWT'ler artık kabul edilmez. Password reset (#7)
+  // ve gelecekteki authenticated password change (Epic 3) tarafından ORTAK güncellenir
+  // (bkz. src/lib/auth/credentials.ts).
+  credentialsChangedAt DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   memberships         Membership[]
   passwordResetTokens PasswordResetToken[]
-  sentInvitations     TenantInvitation[]    @relation("InvitationInviter")
+  sentInvitations     TenantInvitation[]   @relation("InvitationInviter")
   auditLogs           AuditLog[]
 }
 
@@ -76,10 +82,10 @@ model TenantInvitation {
   role  MembershipRole @default(MEMBER)
 
   // Raw token asla saklanmaz; sadece SHA-256 hash'i saklanır (bkz. src/lib/tenants/invitation.ts).
-  tokenHash String    @unique
-  expiresAt DateTime
+  tokenHash   String    @unique
+  expiresAt   DateTime
   // null = henüz kullanılmadı. Dolu = tek kullanımlık token tüketildi.
-  usedAt    DateTime?
+  usedAt      DateTime?
   // null = hâlâ pending. Dolu = aynı tenant+email için yeni bir davet oluşturulduğunda
   // (veya ileride açık bir iptal işlemiyle) geçersiz kılındı.
   cancelledAt DateTime?

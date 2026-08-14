@@ -42,8 +42,15 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   const { role } = body as Record<string, unknown>;
 
   // tenantId'nin trusted kaynağı `context.tenant.id`dir (Issue #13) — bkz.
-  // src/app/api/tenants/[tenantId]/members/route.ts'teki aynı not.
-  const result = await updateMemberRole(context.tenant.id, ids.membershipId, context.role, role);
+  // src/app/api/tenants/[tenantId]/members/route.ts'teki aynı not. actorUserId de aynı
+  // şekilde requirePermission'ın DB'den doğruladığı context'ten gelir (Issue #15 audit).
+  const result = await updateMemberRole(
+    context.tenant.id,
+    ids.membershipId,
+    context.user.id,
+    context.role,
+    role,
+  );
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }

@@ -1,3 +1,5 @@
+import { AUDIT_ACTIONS, AUDIT_TARGET_TYPES } from "@/lib/audit/actions";
+import { writeAuditLog } from "@/lib/audit/write-audit-log";
 import { prisma } from "@/lib/prisma";
 
 import { verifyPassword } from "./password";
@@ -41,8 +43,20 @@ export async function authenticateUser(input: AuthenticateInput): Promise<Authen
   const isValid = await verifyPassword(input.password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
 
   if (!user || !user.passwordHash || !isValid) {
+    // GÜVENLİK: actorUserId bilerek null bırakılır ve girilen email metadata'ya KONMAZ —
+    // bilinmeyen e-posta / yanlış şifre / şifresiz hesap durumları burada AYNI genel audit
+    // olayına düşer, böylece audit kaydı da (response'un kendisi gibi) user enumeration'a
+    // yol açacak bir sinyal taşımaz (bkz. yukarıdaki DUMMY_PASSWORD_HASH dokümantasyonu).
+    await writeAuditLog({ action: AUDIT_ACTIONS.AUTH_LOGIN_FAILURE });
     return null;
   }
+
+  await writeAuditLog({
+    actorUserId: user.id,
+    action: AUDIT_ACTIONS.AUTH_LOGIN_SUCCESS,
+    targetType: AUDIT_TARGET_TYPES.USER,
+    targetId: user.id,
+  });
 
   return { id: user.id, email: user.email, name: user.name };
 }

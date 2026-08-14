@@ -74,7 +74,7 @@ test.describe("updateMemberRole() — temel davranış", () => {
     const membership = await addMember(memberId, tenant.id, MembershipRole.MEMBER);
 
     try {
-      const result = await updateMemberRole(tenant.id, membership.id, MembershipRole.OWNER, "ADMIN");
+      const result = await updateMemberRole(tenant.id, membership.id, ownerId, MembershipRole.OWNER, "ADMIN");
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.member.role).toBe("ADMIN");
@@ -89,7 +89,7 @@ test.describe("updateMemberRole() — temel davranış", () => {
     const membership = await addMember(memberId, tenant.id, MembershipRole.MEMBER);
 
     try {
-      const result = await updateMemberRole(tenant.id, membership.id, MembershipRole.OWNER, "SUPERADMIN");
+      const result = await updateMemberRole(tenant.id, membership.id, ownerId, MembershipRole.OWNER, "SUPERADMIN");
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.status).toBe(400);
@@ -102,7 +102,7 @@ test.describe("updateMemberRole() — temel davranış", () => {
     const { ownerId, tenant, ownerMembership } = await setupTenantWithOwner();
 
     try {
-      const result = await updateMemberRole(tenant.id, ownerMembership.id, MembershipRole.OWNER, "MEMBER");
+      const result = await updateMemberRole(tenant.id, ownerMembership.id, ownerId, MembershipRole.OWNER, "MEMBER");
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.status).toBe(409);
@@ -120,7 +120,7 @@ test.describe("updateMemberRole() — temel davranış", () => {
     await addMember(secondOwnerId, tenant.id, MembershipRole.OWNER);
 
     try {
-      const result = await updateMemberRole(tenant.id, ownerMembership.id, MembershipRole.OWNER, "MEMBER");
+      const result = await updateMemberRole(tenant.id, ownerMembership.id, ownerId, MembershipRole.OWNER, "MEMBER");
       expect(result.ok).toBe(true);
     } finally {
       await cleanup([ownerId, secondOwnerId], [tenant.id]);
@@ -134,7 +134,7 @@ test.describe("updateMemberRole() — temel davranış", () => {
     const otherOwnerMembership = await addMember(otherOwnerId, otherTenant.id, MembershipRole.OWNER);
 
     try {
-      const result = await updateMemberRole(tenant.id, otherOwnerMembership.id, MembershipRole.OWNER, "MEMBER");
+      const result = await updateMemberRole(tenant.id, otherOwnerMembership.id, ownerId, MembershipRole.OWNER, "MEMBER");
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.status).toBe(404);
@@ -156,7 +156,7 @@ test.describe("updateMemberRole() — ADMIN yetkileri ve ownership koruması (Is
     const membership = await addMember(memberId, tenant.id, MembershipRole.MEMBER);
 
     try {
-      const result = await updateMemberRole(tenant.id, membership.id, MembershipRole.ADMIN, "ADMIN");
+      const result = await updateMemberRole(tenant.id, membership.id, adminId, MembershipRole.ADMIN, "ADMIN");
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.member.role).toBe("ADMIN");
@@ -172,7 +172,7 @@ test.describe("updateMemberRole() — ADMIN yetkileri ve ownership koruması (Is
 
     try {
       // ADMIN kendisini OWNER yapmaya çalışıyor.
-      const selfPromote = await updateMemberRole(tenant.id, adminMembership.id, MembershipRole.ADMIN, "OWNER");
+      const selfPromote = await updateMemberRole(tenant.id, adminMembership.id, adminId, MembershipRole.ADMIN, "OWNER");
       expect(selfPromote.ok).toBe(false);
       if (selfPromote.ok) return;
       expect(selfPromote.status).toBe(403);
@@ -192,7 +192,7 @@ test.describe("updateMemberRole() — ADMIN yetkileri ve ownership koruması (Is
     const membership = await addMember(memberId, tenant.id, MembershipRole.MEMBER);
 
     try {
-      const result = await updateMemberRole(tenant.id, membership.id, MembershipRole.ADMIN, "OWNER");
+      const result = await updateMemberRole(tenant.id, membership.id, adminId, MembershipRole.ADMIN, "OWNER");
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.status).toBe(403);
@@ -213,7 +213,7 @@ test.describe("updateMemberRole() — ADMIN yetkileri ve ownership koruması (Is
     await addMember(secondOwnerId, tenant.id, MembershipRole.OWNER);
 
     try {
-      const result = await updateMemberRole(tenant.id, ownerMembership.id, MembershipRole.ADMIN, "MEMBER");
+      const result = await updateMemberRole(tenant.id, ownerMembership.id, adminId, MembershipRole.ADMIN, "MEMBER");
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.status).toBe(403);

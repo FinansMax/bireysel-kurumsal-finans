@@ -126,6 +126,13 @@ test.describe("resetPassword()", () => {
       expect(updatedUser.passwordHash).not.toContain(OLD_PASSWORD);
       expect(updatedUser.passwordHash).not.toContain("BrandNewPassw0rd!");
 
+      // Issue #26 — session revocation: başarılı reset, credentialsChangedAt'i set eder ki
+      // reset öncesi üretilmiş JWT session'ları (bkz. src/lib/auth/session-revocation.ts)
+      // bir sonraki istekte geçersiz sayılsın.
+      expect(updatedUser.credentialsChangedAt).not.toBeNull();
+      expect(updatedUser.credentialsChangedAt!.getTime()).toBeGreaterThan(Date.now() - 5000);
+      expect(updatedUser.credentialsChangedAt!.getTime()).toBeLessThanOrEqual(Date.now());
+
       const oldAuth = await authenticateUser({ email, password: OLD_PASSWORD });
       expect(oldAuth).toBeNull();
 
@@ -143,6 +150,22 @@ test.describe("resetPassword()", () => {
     if (result.ok) return;
     expect(result.status).toBe(400);
     expect(result.error).toBe("Invalid or expired token");
+  });
+
+  test("geçersiz (rastgele) token: gerçek bir kullanıcı için credentialsChangedAt DEĞİŞMEZ (Issue #26)", async () => {
+    const { userId } = await createTestUser();
+    try {
+      const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+      expect(before.credentialsChangedAt).toBeNull();
+
+      const result = await resetPassword(generateRawToken(), "SomePassw0rd!");
+      expect(result.ok).toBe(false);
+
+      const after = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+      expect(after.credentialsChangedAt).toBeNull();
+    } finally {
+      await prisma.user.delete({ where: { id: userId } });
+    }
   });
 
   test("süresi dolmuş token reddediliyor", async () => {
@@ -167,6 +190,10 @@ test.describe("resetPassword()", () => {
       // reddedilme sebebi expiry'dir, tüketim değil.
       const stored = await prisma.passwordResetToken.findFirstOrThrow({ where: { userId } });
       expect(stored.usedAt).toBeNull();
+
+      // Issue #26: reddedilen (expired) bir reset, credentialsChangedAt'i DEĞİŞTİRMEZ.
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+      expect(user.credentialsChangedAt).toBeNull();
     } finally {
       await prisma.user.delete({ where: { id: userId } });
     }
@@ -181,6 +208,9 @@ test.describe("resetPassword()", () => {
       const first = await resetPassword(rawToken, "FirstNewPassw0rd!");
       expect(first.ok).toBe(true);
 
+      const afterFirst = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+      expect(afterFirst.credentialsChangedAt).not.toBeNull();
+
       const second = await resetPassword(rawToken, "SecondNewPassw0rd!");
       expect(second.ok).toBe(false);
       if (second.ok) return;
@@ -189,6 +219,11 @@ test.describe("resetPassword()", () => {
       // Şifre ilk (kazanan) denemedeki değerde kalmalı.
       const newAuth = await authenticateUser({ email, password: "FirstNewPassw0rd!" });
       expect(newAuth).not.toBeNull();
+
+      // Issue #26: reddedilen ikinci (used-token) deneme, credentialsChangedAt'i TEKRAR
+      // güncellemez — ilk başarılı reset'teki değerde sabit kalır.
+      const afterSecond = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+      expect(afterSecond.credentialsChangedAt?.getTime()).toBe(afterFirst.credentialsChangedAt?.getTime());
     } finally {
       await prisma.user.delete({ where: { id: userId } });
     }

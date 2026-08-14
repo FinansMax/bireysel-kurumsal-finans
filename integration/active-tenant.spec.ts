@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 
+import { NextResponse } from "next/server";
 import { expect, test } from "@playwright/test";
 
 import { registerUser } from "../src/lib/auth/signup";
 import {
   encodeActiveTenantCookie,
   resolveActiveTenant,
+  setActiveTenantCookie,
 } from "../src/lib/tenants/active-tenant";
 import { listTenantsForUser } from "../src/lib/tenants/user-tenants";
 import { prisma } from "../src/lib/prisma";
@@ -160,5 +162,47 @@ test.describe("resolveActiveTenant()", () => {
     } finally {
       await cleanup([userId], [tenantA.id, tenantB.id]);
     }
+  });
+});
+
+test.describe("setActiveTenantCookie() — Secure flag (Issue #16)", () => {
+  // NOT: Auth.js'in kendi session cookie'sinin (`authjs.session-token`) Secure flag'i
+  // kütüphane içinde `useSecureCookies = url.protocol === "https:"` ile OTOMATİK belirlenir
+  // (bkz. @auth/core/lib/utils/cookie.js + init.js) — bizim kodumuzun kontrolünde DEĞİLDİR ve
+  // bu iç implementasyon detayına bağımlı, kırılgan bir test yazmak yerine (issue #16'nın
+  // kendi uyarısı) burada SADECE bizim sahip olduğumuz `setActiveTenantCookie()`'nin (bkz.
+  // src/lib/tenants/active-tenant.ts) production invariant'ı doğrulanır: gerçek bir HTTPS
+  // sunucusu ayağa kaldırmadan (yeni dependency/altyapı eklemeden), `NODE_ENV` kontrollü
+  // şekilde geçici olarak "production" yapılıp Secure flag'in set edildiği kanıtlanır.
+  // Next.js'in global tip tanımı `NODE_ENV`'i `readonly` yapar (bkz. next/types/global.d.ts);
+  // burada BİLEREK sadece bu testin süresince, mutable bir view üzerinden geçici olarak
+  // override edilir ve `afterEach`'te orijinaline geri döndürülür.
+  const mutableEnv = process.env as Record<string, string | undefined>;
+  const originalNodeEnv = mutableEnv.NODE_ENV;
+
+  test.afterEach(() => {
+    mutableEnv.NODE_ENV = originalNodeEnv;
+  });
+
+  test("test ortamında (production değil) Secure flag set EDİLMİYOR", async () => {
+    expect(process.env.NODE_ENV).not.toBe("production");
+
+    const response = NextResponse.json({});
+    await setActiveTenantCookie(response, `tenant-${randomUUID()}`);
+
+    const setCookieHeader = response.headers.get("set-cookie") ?? "";
+    expect(setCookieHeader.toLowerCase()).not.toContain("secure");
+  });
+
+  test("NODE_ENV=production altında Secure flag set EDİLİYOR", async () => {
+    mutableEnv.NODE_ENV = "production";
+
+    const response = NextResponse.json({});
+    await setActiveTenantCookie(response, `tenant-${randomUUID()}`);
+
+    const setCookieHeader = response.headers.get("set-cookie") ?? "";
+    expect(setCookieHeader.toLowerCase()).toContain("secure");
+    expect(setCookieHeader.toLowerCase()).toContain("httponly");
+    expect(setCookieHeader.toLowerCase()).toContain("samesite=lax");
   });
 });

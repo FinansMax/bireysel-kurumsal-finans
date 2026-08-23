@@ -3,12 +3,29 @@ Kurumsal ve bireysel kullanıma yönelik; çok kiracılı (multi-tenant), fatura
 
 Kanban: https://github.com/orgs/21072026/projects/2
 
+## Geliştirme Rehberi
+
+Bu README, ürün dokümantasyonunun yanı sıra bir **karar kaydıdır**: aşağıdaki bölümlerde her
+güvenlik kararının gerekçesi ve kabul edilen kalan riski yazılıdır. Kod yazmadan önce ilgili
+bölümü okuyun.
+
+Katkı kuralları ayrı dosyalarda tutulur:
+
+| Dosya | İçerik |
+| --- | --- |
+| [`docs/security-invariants.md`](docs/security-invariants.md) | Pazarlığa kapalı güvenlik kuralları ve nasıl zorlandıkları |
+| [`docs/architecture.md`](docs/architecture.md) | Katmanlar, dizin haritası, route/servis anatomisi, yeni model ekleme |
+| [`docs/conventions.md`](docs/conventions.md) | TypeScript, isimlendirme, yorum, Prisma ve hata yönetimi konvansiyonları |
+| [`docs/testing.md`](docs/testing.md) | Üç test suite'i, ne nereye yazılır, bilinen tuzaklar |
+| [`docs/workflow.md`](docs/workflow.md) | Branch, commit, PR ve Definition of Done |
+| [`CLAUDE.md`](CLAUDE.md) / [`AGENTS.md`](AGENTS.md) | Kodlama ajanları için aynı kuralların özeti |
+
 ## Teknoloji Stack'i
 
 - [Next.js](https://nextjs.org/) (App Router) + TypeScript
 - [Tailwind CSS](https://tailwindcss.com/)
 - [PostgreSQL](https://www.postgresql.org/) + [Prisma ORM](https://www.prisma.io/)
-- [Auth.js](https://authjs.dev/) v5 (next-auth) — kayıt, giriş/çıkış, şifre sıfırlama hazır; RBAC henüz implement edilmedi
+- [Auth.js](https://authjs.dev/) v5 (next-auth) — kayıt, giriş/çıkış, şifre sıfırlama, session revocation; RBAC ve tenant izolasyonu backend'de zorlanır (bkz. `docs/security-invariants.md`)
 - Docker / Docker Compose (lokal PostgreSQL)
 - [Playwright](https://playwright.dev/) (E2E testler)
 - ESLint
@@ -55,11 +72,16 @@ npm run prisma:studio    # Prisma Studio'yu açar
 ## Test Komutları
 
 ```bash
-npm run lint       # ESLint
-npm run typecheck  # TypeScript tip kontrolü
-npm run build      # production build
-npm run test:e2e   # Playwright E2E smoke testleri
+npm run lint              # ESLint
+npm run typecheck         # TypeScript tip kontrolü
+npm run build             # production build
+npm run test:integration  # src/lib fonksiyonları, DB'ye karşı (tarayıcısız)
+npm run test:security     # yetki / tenant izolasyonu / enumeration testleri
+npm run test:e2e          # Playwright E2E (gerçek Chromium)
 ```
+
+Üç test suite'inin ne zaman hangisinin kullanılacağı ve bilinen tuzaklar için
+[`docs/testing.md`](docs/testing.md).
 
 ## Health Check
 

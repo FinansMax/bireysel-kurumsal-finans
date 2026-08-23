@@ -13,6 +13,12 @@
  *   (typo/farklı e-posta) izin verir.
  * - FORGOT_PASSWORD 5/15dk: E-posta gönderimi içerdiği için (gerçek sağlayıcıda maliyetli
  *   olabilir) ve zaten nadir kullanılan bir akış olduğu için en sıkı pencereye sahiptir.
+ * - RESET_PASSWORD 10/15dk: Token'ın kendisi 256 bit olduğu için brute-force birincil tehdit
+ *   DEĞİLDİR; buradaki amaç, kimlik doğrulaması gerektirmeyen ve her istekte DB'ye yazan
+ *   (`passwordResetToken.updateMany`) bu credential-değiştirme endpoint'inin sınırsız
+ *   çağrılabilmesini engellemektir. FORGOT_PASSWORD'dan (5) daha geniş tutulmasının nedeni,
+ *   meşru bir kullanıcının yeni şifresi şifre politikasına takıldığında (400) aynı pencerede
+ *   birkaç kez tekrar denemesinin normal olmasıdır.
  * - TENANT_CREATE 10/10dk: Authenticated bir kullanıcı meşru şekilde birden fazla tenant
  *   oluşturabilir (ör. hem kişisel hem kurumsal); 10/10dk otomatik toplu tenant oluşturmayı
  *   sınırlarken gerçek kullanımı kısıtlamaz.
@@ -31,6 +37,7 @@ export const RATE_LIMIT_POLICIES = {
   SIGNIN: { limit: 10, windowMs: 5 * MINUTES },
   SIGNUP: { limit: 5, windowMs: 10 * MINUTES },
   FORGOT_PASSWORD: { limit: 5, windowMs: 15 * MINUTES },
+  RESET_PASSWORD: { limit: 10, windowMs: 15 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
 } as const satisfies Record<string, RateLimitPolicy>;
 
@@ -43,5 +50,6 @@ export const RATE_LIMIT_BUCKETS = {
   SIGNIN: "auth:sign-in",
   SIGNUP: "auth:sign-up",
   FORGOT_PASSWORD: "auth:forgot-password",
+  RESET_PASSWORD: "auth:reset-password",
   TENANT_CREATE: "tenant:create",
 } as const;

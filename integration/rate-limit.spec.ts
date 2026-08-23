@@ -117,6 +117,53 @@ test.describe("InMemoryRateLimiter — temel davranış", () => {
     expect(allowedCount).toBe(5);
   });
 
+  test("reddedilen istek bucket expiry'sini erkene çekmiyor — sweep sonrası kota SIFIRLANMIYOR", async () => {
+    let currentTime = 0;
+    // maxTrackedBuckets=1 → her consume() bir sweep tetikler (production'da map 10.000
+    // bucket'a ulaştığında olan durum: yani tam da dağıtık bir saldırı sırasında).
+    const limiter = new InMemoryRateLimiter({ now: () => currentTime, maxTrackedBuckets: 1 });
+    const policy = { limit: 10, windowMs: 300_000 }; // gerçek SIGNIN policy'si
+
+    await limiter.consume({ key: "core:sweep-reset", ...policy }); // t=0
+    currentTime = 290_000;
+    for (let i = 0; i < 9; i++) {
+      await limiter.consume({ key: "core:sweep-reset", ...policy }); // kota doldu (10/10)
+    }
+
+    currentTime = 291_000;
+    const rejected = await limiter.consume({ key: "core:sweep-reset", ...policy });
+    expect(rejected.allowed).toBe(false);
+
+    // t=300.001'de yalnızca EN ESKİ deneme (t=0) pencereden çıkmıştır; t=290.000'dekiler
+    // hâlâ aktiftir. Doğru sliding-window cevabı: tam olarak 1 yeni istek kabul edilir.
+    //
+    // REGRESYON: reddetme yolu `expiresAt`'i en eski timestamp'ten hesapladığında bucket
+    // erkenden süpürülüyor ve buradaki sayı 1 yerine 10 oluyordu (limiti aşan istemciye
+    // tam kota iadesi).
+    currentTime = 300_001;
+    let allowedAfterSweep = 0;
+    for (let i = 0; i < 12; i++) {
+      const result = await limiter.consume({ key: "core:sweep-reset", ...policy });
+      if (result.allowed) allowedAfterSweep++;
+    }
+    expect(allowedAfterSweep).toBe(1);
+  });
+
+  test("limit=0 (endpoint tamamen kapalı) her isteği reddeder ve geçerli bir retryAfterMs üretir", async () => {
+    const limiter = new InMemoryRateLimiter();
+
+    const result = await limiter.consume({ key: "core:closed", limit: 0, windowMs: 1000 });
+
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      // REGRESYON: `active` boş olduğu için eskiden `active[0]` undefined'dı ve retryAfterMs
+      // NaN oluyordu — bu da guard'da geçersiz bir `Retry-After: NaN` header'ı üretiyordu.
+      expect(Number.isFinite(result.retryAfterMs)).toBe(true);
+      expect(result.retryAfterMs).toBe(1000);
+      expect(Number.isNaN(Math.ceil(result.retryAfterMs / 1000))).toBe(false);
+    }
+  });
+
   test("stale bucket cleanup çalışıyor: maxTrackedBuckets eşiği aşılınca tamamen expire olmuş bucket'lar temizlenir", async () => {
     let currentTime = 0;
     const limiter = new InMemoryRateLimiter({ now: () => currentTime, maxTrackedBuckets: 2 });

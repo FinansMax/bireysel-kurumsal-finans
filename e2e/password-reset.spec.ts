@@ -86,6 +86,7 @@ test.describe("Reset password", () => {
       const token = extractTokenFromResetUrl(entry!.resetUrl);
 
       const resetResponse = await request.post("/api/auth/reset-password", {
+        headers: { "x-forwarded-for": uniqueTestClientIp() },
         data: { token, password: "BrandNewPassw0rd!" },
       });
       expect(resetResponse.status()).toBe(200);
@@ -112,11 +113,13 @@ test.describe("Reset password", () => {
       const token = extractTokenFromResetUrl(entry!.resetUrl);
 
       const first = await request.post("/api/auth/reset-password", {
+        headers: { "x-forwarded-for": uniqueTestClientIp() },
         data: { token, password: "FirstNewPassw0rd!" },
       });
       expect(first.status()).toBe(200);
 
       const second = await request.post("/api/auth/reset-password", {
+        headers: { "x-forwarded-for": uniqueTestClientIp() },
         data: { token, password: "SecondNewPassw0rd!" },
       });
       expect(second.status()).toBe(400);
@@ -128,6 +131,7 @@ test.describe("Reset password", () => {
 
   test("geçersiz (rastgele) token reddediliyor", async ({ request }) => {
     const response = await request.post("/api/auth/reset-password", {
+      headers: { "x-forwarded-for": uniqueTestClientIp() },
       data: { token: "a".repeat(64), password: "SomePassw0rd!" },
     });
     expect(response.status()).toBe(400);
@@ -149,6 +153,7 @@ test.describe("Reset password", () => {
       });
 
       const response = await request.post("/api/auth/reset-password", {
+        headers: { "x-forwarded-for": uniqueTestClientIp() },
         data: { token, password: "SomePassw0rd!" },
       });
       expect(response.status()).toBe(400);

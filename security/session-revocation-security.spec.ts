@@ -71,6 +71,7 @@ async function resetPasswordViaHttp(
   const rawToken = extractTokenFromResetUrl(entry.resetUrl);
 
   const resetResponse = await request.post("/api/auth/reset-password", {
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
     data: { token: rawToken, password: newPassword },
   });
   expect(resetResponse.status()).toBe(200);
@@ -196,6 +197,80 @@ test.describe("Session revocation — migration güvenliği (mevcut kullanıcıl
       const cookie = await getSessionCookie(request, email, password);
       const response = await request.get("/api/auth/me", { headers: { cookie } });
       expect(response.status()).toBe(200);
+    } finally {
+      await prisma.user.deleteMany({ where: { email } });
+    }
+  });
+});
+
+/**
+ * REGRESYON — revocation `GET /api/auth/session` ile atlatılamaz.
+ *
+ * Auth.js'in session action'ı (`node_modules/@auth/core/lib/actions/session.js`) bu endpoint'te
+ * token'ı normalde HER ZAMAN yeniden imzalar ve yeni `iat`/`exp` ile cookie'yi tazeler. Kontrol
+ * `session` callback'inde yapılsaydı, çalınmış bir reset-öncesi cookie tek bir istekle
+ * "tazelenip" tekrar geçerli hale gelirdi (revocation tamamen bypass). Bu yüzden kontrol `jwt`
+ * callback'indedir ve revoke durumunda `null` döner; Auth.js o zaman token'ı yeniden imzalamak
+ * yerine cookie'yi temizler (bkz. `src/lib/auth/config.ts`).
+ */
+test.describe("Session revocation — GET /api/auth/session üzerinden bypass edilemez", () => {
+  test("revoke edilmiş cookie ile /api/auth/session ne tazelenmiş cookie ne de kullanıcı verisi döndürür", async ({
+    request,
+  }) => {
+    const email = `sec-revoke-refresh-${randomUUID()}@example.com`;
+    const oldPassword = "OldPassw0rd!";
+    const newPassword = "BrandNewPassw0rd!";
+
+    await signUp(request, email, oldPassword);
+
+    try {
+      const stolenCookie = await getSessionCookie(request, email, oldPassword);
+      expect((await request.get("/api/auth/me", { headers: { cookie: stolenCookie } })).status()).toBe(200);
+
+      await waitForNextIatSecond();
+      await resetPasswordViaHttp(request, email, newPassword);
+
+      // Revocation'ın kendisi çalışıyor.
+      expect((await request.get("/api/auth/me", { headers: { cookie: stolenCookie } })).status()).toBe(401);
+
+      const sessionResponse = await request.get("/api/auth/session", {
+        headers: { cookie: stolenCookie },
+      });
+      const rawBody = await sessionResponse.text();
+
+      // Revoke edilmiş bir cookie, bu endpoint üzerinden kullanıcı verisi (e-posta) OKUYAMAZ.
+      expect(rawBody).not.toContain(email);
+
+      // Ve en kritiği: sunucu KULLANILABİLİR (dolu) bir session cookie'si TAZELEMEZ.
+      const refreshed = getSetCookieValues(sessionResponse)
+        .find((cookie) => cookie.startsWith("authjs.session-token="))
+        ?.split(";")[0];
+      const refreshedValue = refreshed?.slice("authjs.session-token=".length) ?? "";
+      expect(refreshedValue).toBe("");
+
+      // Eski cookie hâlâ reddediliyor (tazeleme denemesi onu "iyileştirmedi").
+      expect((await request.get("/api/auth/me", { headers: { cookie: stolenCookie } })).status()).toBe(401);
+    } finally {
+      await prisma.user.deleteMany({ where: { email } });
+    }
+  });
+
+  test("revoke EDİLMEMİŞ bir session /api/auth/session üzerinden normal çalışmaya devam eder", async ({
+    request,
+  }) => {
+    const email = `sec-revoke-healthy-${randomUUID()}@example.com`;
+    const password = "S3curePassw0rd!";
+    await signUp(request, email, password);
+
+    try {
+      const cookie = await getSessionCookie(request, email, password);
+
+      const sessionResponse = await request.get("/api/auth/session", { headers: { cookie } });
+      expect(sessionResponse.status()).toBe(200);
+      // Sağlıklı session için endpoint normal davranışını korur (regresyon yok).
+      expect(await sessionResponse.text()).toContain(email);
+
+      expect((await request.get("/api/auth/me", { headers: { cookie } })).status()).toBe(200);
     } finally {
       await prisma.user.deleteMany({ where: { email } });
     }

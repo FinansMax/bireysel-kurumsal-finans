@@ -142,6 +142,61 @@ stateless Auth.js JWT mimarisi korunur.
   primitive olarak tasarlanmıştır ve authenticated password change eklendiğinde AYNI fonksiyon
   kullanılmalıdır.
 
+## Rate Limiting (Issue #27)
+
+Auth ve tenant-creation endpoint'leri, brute-force / otomatik spam trafiğine karşı IP + endpoint
+bazlı bir sliding-window rate limiter ile korunur (`src/lib/rate-limit/`).
+
+- **Korunan endpoint'ler ve limitler** (`src/lib/rate-limit/policies.ts` — tek kaynak, magic
+  number route'lara dağıtılmaz):
+
+  | Endpoint | Limit | Bucket prefix |
+  | --- | --- | --- |
+  | `POST /api/auth/callback/credentials` (sign-in) | 10 / 5 dk | `auth:sign-in` |
+  | `POST /api/auth/signup` | 5 / 10 dk | `auth:sign-up` |
+  | `POST /api/auth/forgot-password` | 5 / 15 dk | `auth:forgot-password` |
+  | `POST /api/tenants` (tenant oluşturma) | 10 / 10 dk | `tenant:create` |
+
+- **Kullanım:** `checkRateLimit(request, bucket, policy)` (`src/lib/rate-limit/guard.ts`) mevcut
+  `requireUser()` / `requirePermission()` guard'larıyla AYNI deseni izler: limit aşılmışsa hazır
+  bir `NextResponse` (429), aşılmamışsa `null` döner. Kontrol her zaman business logic'ten
+  (body parse, DB erişimi, `requireUser()` dahil) ÖNCE yapılır — 429 durumunda hiçbir side-effect
+  tetiklenmez.
+- **429 response'u:** Sabit, bilgi sızdırmayan bir gövde (`{ "error": "Too many requests. Please
+  try again later." }`) ve saniye cinsinden bir `Retry-After` header'ı döner. IP, bucket key,
+  kullanıcı kimliği veya deneme sayısı response'a ASLA yazılmaz.
+- **Sliding window (fixed window DEĞİL):** Her `consume()` çağrısında "şu andan `windowMs`
+  öncesine kadar" olan pencere yeniden değerlendirilir; pencere sınırında ani bir reset yoktur.
+  Reddedilen denemeler bucket'a kaydedilmez — yani başarısız istekler kotayı tüketmez ve pencereyi
+  uzatmaz.
+- **Concurrency:** `InMemoryRateLimiter.consume()` içinde hiç `await` yoktur; okuma + hesaplama +
+  yazma tek senkron blokta yapıldığı için tek process içinde atomiktir (aynı key'e eşzamanlı
+  `Promise.all` istekleri limiti bypass edemez).
+- **Bellek:** Bucket başına timestamp sayısı kendi `limit`'i ile sınırlıdır; boşalan bucket'lar
+  Map'ten silinir ve `maxTrackedBuckets` (varsayılan 10.000) eşiği aşılınca gerçek bir `consume()`
+  çağrısına "binen" lazy bir sweep tamamen expire olmuş bucket'ları temizler. Background
+  worker/timer kurulmaz.
+- **Sign-in neden route seviyesinde?** Auth.js Credentials provider'ının `authorize()` callback'i
+  yalnızca `User | null` döndürebilir; özel bir 429 status'u veya `Retry-After` header'ı
+  üretemez. Bu yüzden sign-in limiti, NextAuth yapılandırmasına hiç dokunmadan, credentials
+  callback POST'u `handlers.POST`'a devredilmeden ÖNCE
+  (`src/app/api/auth/[...nextauth]/route.ts`) uygulanır — pahalı scrypt doğrulaması hiç
+  çalışmaz. Diğer auth action'ları (signout, csrf, vb.) etkilenmez.
+- **User enumeration:** `forgot-password` limiti yalnızca IP + endpoint'e bakar, e-postaya hiç
+  bakmaz; kayıtlı/kayıtsız e-posta arasında davranış farkı yaratmaz (Issue #7 koruması korunur).
+- **⚠️ Proxy trust varsayımı:** İstemci IP'si `x-forwarded-for` header'ının İLK segmentinden
+  okunur (`src/lib/rate-limit/request-key.ts`). Bu, uygulamanın önünde bu header'ı kendisi set
+  eden güvenilir bir reverse-proxy / load balancer (ör. Vercel, nginx) olduğunu varsayar — tıpkı
+  `authConfig.trustHost: true`'nun zaten varsaydığı gibi. **Güvenilir bir proxy olmadan doğrudan
+  internete açılırsa**, istemci bu header'ı sahteleyerek kendi bucket'ını değiştirebilir ve rate
+  limit'i etkisiz kılabilir. Header eksik veya malformed ise tüm bu istekler ortak bir `unknown`
+  bucket'ını paylaşır — IP bulunamaması limiter'ı bypass ETMEZ.
+- **Kapsam dışı:** Limiter process-local'dir; çok instance'lı bir deployment'ta her instance kendi
+  sayacını tutar. Distributed rate limiting (Redis vb.) bu issue'nun kapsamı dışındadır —
+  `RateLimiter` interface'i (`src/lib/rate-limit/types.ts`) tam da bu yüzden vardır: route
+  kodu hiç değişmeden `src/lib/rate-limit/limiter.ts`'teki tek satır shared-store bir
+  implementasyonla değiştirilebilir.
+
 ## Tenant Davetleri (Invitations)
 
 Bir tenant'a yeni kullanıcı davet etme akışı (`src/lib/tenants/invitation.ts`).

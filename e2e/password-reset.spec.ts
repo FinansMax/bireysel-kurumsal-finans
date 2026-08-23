@@ -7,18 +7,26 @@ import { prisma } from "../src/lib/prisma";
 
 import { signInWithCredentials } from "./support/auth";
 import { clearOutboxEntry, extractTokenFromResetUrl, readOutboxEntry } from "./support/outbox";
+import { uniqueTestClientIp } from "./support/rate-limit";
 
 test.afterAll(async () => {
   await prisma.$disconnect();
 });
 
 async function signUp(request: APIRequestContext, email: string, password: string) {
-  const response = await request.post("/api/auth/signup", { data: { email, password } });
+  const response = await request.post("/api/auth/signup", {
+    data: { email, password },
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
+  });
   expect(response.status()).toBe(201);
 }
 
+/** Her çağrı kendi sahte istemci IP'sini kullanır (bkz. `./support/rate-limit.ts`, Issue #27). */
 async function forgotPassword(request: APIRequestContext, email: string) {
-  return request.post("/api/auth/forgot-password", { data: { email } });
+  return request.post("/api/auth/forgot-password", {
+    data: { email },
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
+  });
 }
 
 test.describe("Forgot password", () => {

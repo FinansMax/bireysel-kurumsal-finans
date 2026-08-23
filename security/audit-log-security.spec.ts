@@ -4,6 +4,7 @@ import { MembershipRole } from "@prisma/client";
 import { expect, test } from "@playwright/test";
 
 import { signInWithCredentials } from "../e2e/support/auth";
+import { uniqueTestClientIp } from "../e2e/support/rate-limit";
 import { prisma } from "../src/lib/prisma";
 
 import {
@@ -15,6 +16,14 @@ import {
 test.afterAll(async () => {
   await prisma.$disconnect();
 });
+
+/** Her çağrı kendi sahte istemci IP'sini kullanır (bkz. `e2e/support/rate-limit.ts`, Issue #27). */
+function signUp(request: import("@playwright/test").APIRequestContext, email: string, password: string) {
+  return request.post("/api/auth/signup", {
+    data: { email, password },
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
+  });
+}
 
 async function createUserWithMembership(role: MembershipRole, tenantId: string, email?: string) {
   const userEmail = email ?? `sec-audit-${randomUUID()}@example.com`;
@@ -32,7 +41,7 @@ test.describe("Audit log security — login (HTTP)", () => {
   test("gerçek HTTP sign-in başarılı olduğunda AUTH_LOGIN_SUCCESS satırı oluşuyor", async ({ request }) => {
     const email = `sec-audit-login-ok-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
-    const signupResponse = await request.post("/api/auth/signup", { data: { email, password } });
+    const signupResponse = await signUp(request, email, password);
     expect(signupResponse.status()).toBe(201);
     const { user } = await signupResponse.json();
 
@@ -56,7 +65,7 @@ test.describe("Audit log security — login (HTTP)", () => {
   }) => {
     const email = `sec-audit-login-fail-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
-    await request.post("/api/auth/signup", { data: { email, password } });
+    await signUp(request, email, password);
 
     try {
       const before = await prisma.auditLog.count({ where: { action: "AUTH_LOGIN_FAILURE" } });
@@ -84,7 +93,7 @@ test.describe("Audit log security — login (HTTP)", () => {
   }) => {
     const email = `sec-audit-noleak-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!Unique";
-    const signupResponse = await request.post("/api/auth/signup", { data: { email, password } });
+    const signupResponse = await signUp(request, email, password);
     const { user } = await signupResponse.json();
 
     try {
@@ -113,13 +122,13 @@ test.describe("Audit log security — tenant creation (HTTP)", () => {
   }) => {
     const email = `sec-audit-tenant-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
-    const signupResponse = await request.post("/api/auth/signup", { data: { email, password } });
+    const signupResponse = await signUp(request, email, password);
     const { user } = await signupResponse.json();
     const sessionCookie = await createSessionCookieHeader({ sub: user.id, email });
 
     try {
       const response = await request.post("/api/tenants", {
-        headers: { cookie: sessionCookie },
+        headers: { cookie: sessionCookie, "x-forwarded-for": uniqueTestClientIp() },
         data: { name: "Audit Sec Co" },
       });
       expect(response.status()).toBe(201);

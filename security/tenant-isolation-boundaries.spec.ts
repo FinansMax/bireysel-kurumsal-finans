@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { MembershipRole } from "@prisma/client";
 import { expect, test } from "@playwright/test";
 
+import { uniqueTestClientIp } from "../e2e/support/rate-limit";
 import { prisma } from "../src/lib/prisma";
 
 import {
@@ -103,6 +104,7 @@ test.describe("Tenant isolation boundaries — unauthenticated mutation (gerçek
 
     const response = await request.post("/api/tenants", {
       data: { name: "Should Not Exist", slug: uniqueSlug },
+      headers: { "x-forwarded-for": uniqueTestClientIp() },
     });
     expect(response.status()).toBe(401);
 

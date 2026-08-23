@@ -1,5 +1,7 @@
 import type { APIRequestContext, APIResponse } from "@playwright/test";
 
+import { uniqueTestClientIp } from "./rate-limit";
+
 /**
  * Auth.js'in gerçek credentials sign-in HTTP akışı: önce CSRF token alınır,
  * sonra `csrfToken` ile birlikte credentials callback'ine POST edilir. Bu bir
@@ -11,16 +13,26 @@ async function getCsrfToken(request: APIRequestContext): Promise<string> {
   return body.csrfToken;
 }
 
+/**
+ * `ip` verilmezse her çağrı kendi benzersiz sahte istemci IP'sini üretir (bkz.
+ * `./rate-limit.ts`) — Issue #27'nin sign-in rate limitine (bkz.
+ * `src/app/api/auth/[...nextauth]/route.ts`) çok sayıda ardışık çağrı yapan mevcut testlerin
+ * birbirini (yanlışlıkla) rate-limit'lememesi için. Rate limiter'ın KENDİSİNİ test eden yerler
+ * (bkz. `security/rate-limit-security.spec.ts`) aynı bucket'ı kasıtlı tüketmek için `ip`'yi
+ * açıkça sabit geçer.
+ */
 export async function signInWithCredentials(
   request: APIRequestContext,
   email: string,
   password: string,
+  ip: string = uniqueTestClientIp(),
 ) {
   const csrfToken = await getCsrfToken(request);
 
   return request.post("/api/auth/callback/credentials", {
     form: { email, password, csrfToken, json: "true" },
     maxRedirects: 0,
+    headers: { "x-forwarded-for": ip },
   });
 }
 

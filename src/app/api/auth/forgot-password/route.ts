@@ -1,11 +1,25 @@
 import { NextResponse } from "next/server";
 
 import { requestPasswordReset } from "@/lib/auth/password-reset";
+import { checkRateLimit } from "@/lib/rate-limit/guard";
+import { RATE_LIMIT_BUCKETS, RATE_LIMIT_POLICIES } from "@/lib/rate-limit/policies";
 
 // Kayıtlı/kayıtsız e-posta için AYNI genel mesaj — user enumeration engeli (Issue #7 AC).
 const GENERIC_MESSAGE = "If an account exists, a password reset link has been sent.";
 
 export async function POST(request: Request) {
+  // Rate-limit kontrolü SADECE IP + endpoint'e bakar, email'e hiç bakmaz (Issue #27) — bu
+  // yüzden kayıtlı/kayıtsız email arasında davranış farkı yaratmaz, mevcut user-enumeration
+  // korumasını (Issue #7) bozmaz.
+  const rateLimitResponse = await checkRateLimit(
+    request,
+    RATE_LIMIT_BUCKETS.FORGOT_PASSWORD,
+    RATE_LIMIT_POLICIES.FORGOT_PASSWORD,
+  );
+  if (rateLimitResponse) {
+    return rateLimitResponse;
+  }
+
   let body: unknown;
 
   try {

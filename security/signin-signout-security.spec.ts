@@ -3,9 +3,18 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 
 import { getSetCookieValues, signInWithCredentials, signOut } from "../e2e/support/auth";
+import { uniqueTestClientIp } from "../e2e/support/rate-limit";
 import { prisma } from "../src/lib/prisma";
 
 import { createSessionCookieHeader } from "./support/session";
+
+/** Her çağrı kendi sahte istemci IP'sini kullanır (bkz. `e2e/support/rate-limit.ts`, Issue #27). */
+function signUp(request: import("@playwright/test").APIRequestContext, email: string, password: string) {
+  return request.post("/api/auth/signup", {
+    data: { email, password },
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
+  });
+}
 
 test.afterAll(async () => {
   await prisma.$disconnect();
@@ -16,7 +25,7 @@ test.describe("Sign-in security — invalid credentials", () => {
     request,
   }) => {
     const email = `sec-signin-${randomUUID()}@example.com`;
-    await request.post("/api/auth/signup", { data: { email, password: "S3curePassw0rd!" } });
+    await signUp(request, email, "S3curePassw0rd!");
 
     try {
       const wrongPasswordResponse = await signInWithCredentials(request, email, "WrongPassword!");
@@ -44,7 +53,7 @@ test.describe("Sign-in security — invalid credentials", () => {
     // Amaç: "bilinmeyen e-posta" isteğinin scrypt maliyetini tamamen atlayıp çok daha
     // hızlı dönmediğini (bkz. src/lib/auth/authenticate.ts DUMMY_PASSWORD_HASH) doğrulamak.
     const email = `sec-timing-${randomUUID()}@example.com`;
-    await request.post("/api/auth/signup", { data: { email, password: "S3curePassw0rd!" } });
+    await signUp(request, email, "S3curePassw0rd!");
 
     try {
       const ITERATIONS = 6;
@@ -85,7 +94,7 @@ test.describe("Sign-in security — password / passwordHash exposure", () => {
   }) => {
     const email = `sec-expose-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
-    await request.post("/api/auth/signup", { data: { email, password } });
+    await signUp(request, email, password);
 
     try {
       await signInWithCredentials(request, email, password);
@@ -110,7 +119,7 @@ test.describe("Sign-in security — session / JWT güvenliği", () => {
   test("session cookie httpOnly ve sameSite=lax olarak set ediliyor", async ({ request }) => {
     const email = `sec-cookie-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
-    await request.post("/api/auth/signup", { data: { email, password } });
+    await signUp(request, email, password);
 
     try {
       const signInResponse = await signInWithCredentials(request, email, password);
@@ -131,7 +140,7 @@ test.describe("Sign-in security — session / JWT güvenliği", () => {
   }) => {
     const email = `sec-maxage-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
-    await request.post("/api/auth/signup", { data: { email, password } });
+    await signUp(request, email, password);
 
     try {
       const beforeSignIn = Date.now();
@@ -195,7 +204,7 @@ test.describe("Sign-in security — sign-out ve JWT mimari sınırlaması", () =
   test("sign-out sonrası /api/auth/me GÜNCEL cookie jar ile 401 dönüyor", async ({ request }) => {
     const email = `sec-signout-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
-    await request.post("/api/auth/signup", { data: { email, password } });
+    await signUp(request, email, password);
 
     try {
       await signInWithCredentials(request, email, password);
@@ -222,7 +231,7 @@ test.describe("Sign-in security — sign-out ve JWT mimari sınırlaması", () =
     // Bu test bir "hata" değil, mevcut mimarinin gerçek/gözlemlenen davranışını belgeler.
     const email = `sec-replay-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
-    await request.post("/api/auth/signup", { data: { email, password } });
+    await signUp(request, email, password);
 
     try {
       const signInResponse = await signInWithCredentials(request, email, password);

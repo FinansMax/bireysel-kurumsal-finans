@@ -6,6 +6,7 @@ import { prisma } from "../src/lib/prisma";
 
 import { getSetCookieValues, signInWithCredentials } from "../e2e/support/auth";
 import { clearOutboxEntry, extractTokenFromResetUrl, readOutboxEntry } from "../e2e/support/outbox";
+import { uniqueTestClientIp } from "../e2e/support/rate-limit";
 
 /**
  * Issue #26 — session revocation, uçtan uca HTTP akışı.
@@ -20,6 +21,14 @@ import { clearOutboxEntry, extractTokenFromResetUrl, readOutboxEntry } from "../
 test.afterAll(async () => {
   await prisma.$disconnect();
 });
+
+/** Her çağrı kendi sahte istemci IP'sini kullanır (bkz. `e2e/support/rate-limit.ts`, Issue #27). */
+function signUp(request: import("@playwright/test").APIRequestContext, email: string, password: string) {
+  return request.post("/api/auth/signup", {
+    data: { email, password },
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
+  });
+}
 
 async function getSessionCookie(request: import("@playwright/test").APIRequestContext, email: string, password: string) {
   const signInResponse = await signInWithCredentials(request, email, password);
@@ -51,7 +60,10 @@ async function resetPasswordViaHttp(
   email: string,
   newPassword: string,
 ) {
-  const forgotResponse = await request.post("/api/auth/forgot-password", { data: { email } });
+  const forgotResponse = await request.post("/api/auth/forgot-password", {
+    data: { email },
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
+  });
   expect(forgotResponse.status()).toBe(200);
 
   const entry = readOutboxEntry(email);
@@ -72,9 +84,7 @@ test.describe("Session revocation — password reset sonrası eski session geçe
     const oldPassword = "OldPassw0rd!";
     const newPassword = "BrandNewPassw0rd!";
 
-    const signupResponse = await request.post("/api/auth/signup", {
-      data: { email, password: oldPassword },
-    });
+    const signupResponse = await signUp(request, email, oldPassword);
     expect(signupResponse.status()).toBe(201);
 
     try {
@@ -119,7 +129,7 @@ test.describe("Session revocation — password reset sonrası eski session geçe
     const oldPassword = "OldPassw0rd!";
     const newPassword = "BrandNewPassw0rd!";
 
-    await request.post("/api/auth/signup", { data: { email, password: oldPassword } });
+    await signUp(request, email, oldPassword);
 
     try {
       await resetPasswordViaHttp(request, email, newPassword);
@@ -142,8 +152,8 @@ test.describe("Session revocation — kullanıcılar arası izolasyon", () => {
     const passwordA = "PasswordA1!";
     const passwordB = "PasswordB1!";
 
-    await request.post("/api/auth/signup", { data: { email: emailA, password: passwordA } });
-    await request.post("/api/auth/signup", { data: { email: emailB, password: passwordB } });
+    await signUp(request, emailA, passwordA);
+    await signUp(request, emailB, passwordB);
 
     try {
       const cookieA = await getSessionCookie(request, emailA, passwordA);
@@ -177,7 +187,7 @@ test.describe("Session revocation — migration güvenliği (mevcut kullanıcıl
   }) => {
     const email = `sec-revoke-untouched-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
-    await request.post("/api/auth/signup", { data: { email, password } });
+    await signUp(request, email, password);
 
     try {
       const stored = await prisma.user.findUniqueOrThrow({ where: { email } });

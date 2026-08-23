@@ -6,18 +6,32 @@ import { generateRawToken, hashToken } from "../src/lib/auth/password-reset";
 import { prisma } from "../src/lib/prisma";
 
 import { clearOutboxEntry, extractTokenFromResetUrl, readOutboxEntry } from "../e2e/support/outbox";
+import { uniqueTestClientIp } from "../e2e/support/rate-limit";
 
 test.afterAll(async () => {
   await prisma.$disconnect();
 });
 
 async function signUp(request: APIRequestContext, email: string, password: string) {
-  const response = await request.post("/api/auth/signup", { data: { email, password } });
+  const response = await request.post("/api/auth/signup", {
+    data: { email, password },
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
+  });
   expect(response.status()).toBe(201);
 }
 
+/**
+ * Her çağrı kendi sahte istemci IP'sini kullanır (bkz. `e2e/support/rate-limit.ts`) — bu dosya
+ * (özellikle timing testi) tek bir test içinde bile onlarca forgot-password çağrısı yapıyor;
+ * Issue #27'nin forgot-password rate limitine (5/15dk) tüm bu çağrılar TEK bir bucket'tan
+ * çarpmasın diye her çağrı bağımsız bir sahte IP kullanır (gerçek dünyada da farklı
+ * istemcilerin farklı IP'lerden geleceği varsayımıyla tutarlı).
+ */
 async function forgotPassword(request: APIRequestContext, email: string) {
-  return request.post("/api/auth/forgot-password", { data: { email } });
+  return request.post("/api/auth/forgot-password", {
+    data: { email },
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
+  });
 }
 
 async function getTokenViaOutbox(request: APIRequestContext, email: string): Promise<string> {

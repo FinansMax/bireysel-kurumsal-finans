@@ -6,6 +6,7 @@ import { registerUser } from "../src/lib/auth/signup";
 import { prisma } from "../src/lib/prisma";
 
 import { createSessionCookieHeader } from "../security/support/session";
+import { uniqueTestClientIp } from "./support/rate-limit";
 
 test.afterAll(async () => {
   await prisma.$disconnect();
@@ -13,7 +14,10 @@ test.afterAll(async () => {
 
 test.describe("POST /api/tenants", () => {
   test("unauthenticated istek 401 alır", async ({ request }) => {
-    const response = await request.post("/api/tenants", { data: { name: "Nope" } });
+    const response = await request.post("/api/tenants", {
+      data: { name: "Nope" },
+      headers: { "x-forwarded-for": uniqueTestClientIp() },
+    });
     expect(response.status()).toBe(401);
   });
 
@@ -29,7 +33,7 @@ test.describe("POST /api/tenants", () => {
 
     try {
       const response = await request.post("/api/tenants", {
-        headers: { cookie },
+        headers: { cookie, "x-forwarded-for": uniqueTestClientIp() },
         data: { name: "E2E Acme", slug },
       });
       expect(response.status()).toBe(201);

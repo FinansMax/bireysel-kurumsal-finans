@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { requireUser } from "@/lib/auth/guard";
+import { checkRateLimit } from "@/lib/rate-limit/guard";
+import { RATE_LIMIT_BUCKETS, RATE_LIMIT_POLICIES } from "@/lib/rate-limit/policies";
 import { createTenant } from "@/lib/tenants/create-tenant";
 import { listTenantsForUser } from "@/lib/tenants/user-tenants";
 
@@ -15,6 +17,17 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  // Rate-limit kontrolü authentication'dan ÖNCE uygulanır (Issue #27) — IP-bazlı olduğu için
+  // authenticated/unauthenticated ayrımı yapmadan, spam trafiğini en erken noktada sınırlar.
+  const rateLimitResponse = await checkRateLimit(
+    request,
+    RATE_LIMIT_BUCKETS.TENANT_CREATE,
+    RATE_LIMIT_POLICIES.TENANT_CREATE,
+  );
+  if (rateLimitResponse) {
+    return rateLimitResponse;
+  }
+
   const { user, response } = await requireUser();
   if (!user) {
     return response;

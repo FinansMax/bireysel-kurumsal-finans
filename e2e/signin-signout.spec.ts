@@ -5,10 +5,19 @@ import { expect, test } from "@playwright/test";
 import { prisma } from "../src/lib/prisma";
 
 import { getSetCookieValues, signInWithCredentials, signOut } from "./support/auth";
+import { uniqueTestClientIp } from "./support/rate-limit";
 
 test.afterAll(async () => {
   await prisma.$disconnect();
 });
+
+/** Her çağrı kendi sahte istemci IP'sini kullanır (bkz. `./support/rate-limit.ts`, Issue #27). */
+function signUp(request: import("@playwright/test").APIRequestContext, email: string, password: string) {
+  return request.post("/api/auth/signup", {
+    data: { email, password },
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
+  });
+}
 
 test.describe("Sign-in / sign-out akışı", () => {
   test("doğru kimlik bilgileriyle giriş yapılabiliyor, session gerçekten oluşuyor ve /api/auth/me authenticated erişim veriyor", async ({
@@ -17,7 +26,7 @@ test.describe("Sign-in / sign-out akışı", () => {
     const email = `e2e-signin-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
 
-    const signupResponse = await request.post("/api/auth/signup", { data: { email, password } });
+    const signupResponse = await signUp(request, email, password);
     expect(signupResponse.status()).toBe(201);
 
     try {
@@ -43,7 +52,7 @@ test.describe("Sign-in / sign-out akışı", () => {
     const email = `e2e-wrongpass-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
 
-    await request.post("/api/auth/signup", { data: { email, password } });
+    await signUp(request, email, password);
 
     try {
       const signInResponse = await signInWithCredentials(request, email, "WrongPassword!");
@@ -73,7 +82,7 @@ test.describe("Sign-in / sign-out akışı", () => {
     const email = `e2e-signout-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
 
-    await request.post("/api/auth/signup", { data: { email, password } });
+    await signUp(request, email, password);
 
     try {
       await signInWithCredentials(request, email, password);

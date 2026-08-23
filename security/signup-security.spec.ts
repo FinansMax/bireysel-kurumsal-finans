@@ -4,9 +4,23 @@ import { expect, test } from "@playwright/test";
 
 import { prisma } from "../src/lib/prisma";
 
+import { uniqueTestClientIp } from "../e2e/support/rate-limit";
+
 test.afterAll(async () => {
   await prisma.$disconnect();
 });
+
+/**
+ * Her çağrı kendi sahte istemci IP'sini kullanır (bkz. `e2e/support/rate-limit.ts`) — Issue #27
+ * ile signup endpoint'ine eklenen IP-bazlı rate limit'in, bu dosyadaki birden fazla signup
+ * çağrısını birbirine karıştırıp yanlışlıkla 429 döndürmesini engeller.
+ */
+function signUp(request: import("@playwright/test").APIRequestContext, email: string, password: string) {
+  return request.post("/api/auth/signup", {
+    data: { email, password },
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
+  });
+}
 
 test.describe("Signup security — password handling", () => {
   test("başarılı kayıt response'unda plaintext şifre veya passwordHash hiç geçmiyor", async ({
@@ -15,9 +29,7 @@ test.describe("Signup security — password handling", () => {
     const email = `sec-signup-${randomUUID()}@example.com`;
     const password = "S3curePassw0rd!";
 
-    const response = await request.post("/api/auth/signup", {
-      data: { email, password },
-    });
+    const response = await signUp(request, email, password);
 
     try {
       expect(response.status()).toBe(201);
@@ -38,7 +50,7 @@ test.describe("Signup security — password handling", () => {
     const email = `sec-hash-${randomUUID()}@example.com`;
     const password = "AnotherS3cure!Pass";
 
-    const response = await request.post("/api/auth/signup", { data: { email, password } });
+    const response = await signUp(request, email, password);
 
     try {
       expect(response.status()).toBe(201);
@@ -58,15 +70,11 @@ test.describe("Signup security — duplicate email / input validation", () => {
   test("duplicate e-posta 409 ile reddedilir ve DB'de tek kayıt kalır", async ({ request }) => {
     const email = `sec-dup-${randomUUID()}@example.com`;
 
-    const first = await request.post("/api/auth/signup", {
-      data: { email, password: "S3curePassw0rd!" },
-    });
+    const first = await signUp(request, email, "S3curePassw0rd!");
     expect(first.status()).toBe(201);
 
     try {
-      const second = await request.post("/api/auth/signup", {
-        data: { email, password: "DifferentPassw0rd!" },
-      });
+      const second = await signUp(request, email, "DifferentPassw0rd!");
       expect(second.status()).toBe(409);
 
       const count = await prisma.user.count({ where: { email } });
@@ -79,9 +87,7 @@ test.describe("Signup security — duplicate email / input validation", () => {
   test("geçersiz input (bozuk e-posta) hiçbir kullanıcı oluşturmuyor", async ({ request }) => {
     const email = "invalid-email-format";
 
-    const response = await request.post("/api/auth/signup", {
-      data: { email, password: "S3curePassw0rd!" },
-    });
+    const response = await signUp(request, email, "S3curePassw0rd!");
 
     expect(response.status()).toBe(400);
     const count = await prisma.user.count({ where: { email } });
@@ -91,9 +97,7 @@ test.describe("Signup security — duplicate email / input validation", () => {
   test("zayıf şifre hiçbir kullanıcı oluşturmuyor", async ({ request }) => {
     const email = `sec-weak-${randomUUID()}@example.com`;
 
-    const response = await request.post("/api/auth/signup", {
-      data: { email, password: "1234567" },
-    });
+    const response = await signUp(request, email, "1234567");
 
     expect(response.status()).toBe(400);
     const count = await prisma.user.count({ where: { email } });
@@ -101,9 +105,7 @@ test.describe("Signup security — duplicate email / input validation", () => {
   });
 
   test("hata response'ları DB/stack trace detayı sızdırmıyor", async ({ request }) => {
-    const response = await request.post("/api/auth/signup", {
-      data: { email: "not-an-email", password: "S3curePassw0rd!" },
-    });
+    const response = await signUp(request, "not-an-email", "S3curePassw0rd!");
 
     expect(response.status()).toBe(400);
     const rawText = await response.text();

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
+import { getAppBaseUrl } from "@/lib/config/app-url";
 import { prisma } from "@/lib/prisma";
 
 import { updateUserPassword } from "./credentials";
@@ -14,8 +15,6 @@ const RESET_TOKEN_BYTES = 32;
 // token sızması/link'in e-posta istemcisi tarafından önceden getirilmesi gibi risklerin
 // etki penceresini dar tutan, Issue #7'nin önerdiği 15-60 dakikalık aralığın ortası.
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
-
-const DEFAULT_BASE_URL = process.env.APP_BASE_URL ?? "http://localhost:3000";
 
 export function hashToken(rawToken: string): string {
   // Reset token'ı (parola gibi düşük entropili bir sır değil) kriptografik olarak
@@ -48,7 +47,11 @@ export async function requestPasswordReset(
   options: RequestPasswordResetOptions = {},
 ): Promise<void> {
   const sender = options.emailSender ?? consoleEmailSender;
-  const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
+  // `getAppBaseUrl()` her DB erişiminden ÖNCE çağrılır: yanlış yapılandırılmış bir production
+  // ortamında hata, kullanıcının kayıtlı olup olmamasından BAĞIMSIZ olarak aynı noktada oluşur.
+  // Aksi halde "kayıtlı e-posta → 500, kayıtsız → 200" farkı, Issue #7'de kapatılan
+  // user-enumeration oracle'ını geri getirirdi (bkz. `src/lib/config/app-url.ts`).
+  const baseUrl = options.baseUrl ?? getAppBaseUrl();
 
   if (typeof email !== "string") {
     return;

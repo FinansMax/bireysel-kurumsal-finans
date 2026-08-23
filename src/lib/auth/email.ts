@@ -32,11 +32,16 @@ function outboxFilePath(email: string): string {
  */
 export const consoleEmailSender: EmailSender = {
   async sendPasswordResetEmail({ to, resetUrl }) {
-    console.log(`[email:password-reset] to=${to} resetUrl=${resetUrl}`);
-
+    // GÜVENLİK: `resetUrl` raw reset token'ını İÇERİR. Production loglarına asla yazılmaz —
+    // log erişimi olan biri, son 30 dakika içinde şifre sıfırlama talebinde bulunmuş herhangi
+    // bir hesabı devralabilirdi. (Bkz. `src/lib/tenants/invitation-email.ts`'teki aynı kural
+    // ve README "Şifre sıfırlama": raw token saklanmaz ve production loglarına yazılmaz.)
     if (process.env.NODE_ENV === "production") {
+      console.log(`[email:password-reset] to=${to}`);
       return;
     }
+
+    console.log(`[email:password-reset] to=${to} resetUrl=${resetUrl}`);
 
     try {
       mkdirSync(TEST_OUTBOX_DIR, { recursive: true });

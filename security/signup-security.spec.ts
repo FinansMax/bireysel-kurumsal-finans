@@ -67,6 +67,20 @@ test.describe("Signup security — password handling", () => {
 });
 
 test.describe("Signup security — duplicate email / input validation", () => {
+  /**
+   * DİKKAT — buradaki `409`, signup'ın bir e-postanın kayıtlı olup olmadığını AÇIKÇA
+   * sızdırdığı anlamına gelir (user enumeration). Bu, gözden kaçmış bir güvenlik açığı DEĞİL,
+   * gözden geçirilmiş ve BİLİNÇLİ olarak kabul edilmiş bir sözleşmedir (Issue #106) — gerekçesi
+   * README'nin "Kayıt (sign-up)" bölümünde yazılıdır. Özetle: sign-in ve forgot-password'de
+   * bilgiyi sızdırmak gereksiz olduğu için oralarda yanıtlar eşitlenmiştir; signup'ta ise
+   * "hesabın zaten var" bilgisi akışın işleyişi için gereklidir ve bunu gizlemenin doğru yolu
+   * (genel yanıt + e-posta ile bildirim) ÇALIŞAN bir e-posta sağlayıcısı gerektirir — bu repo'da
+   * henüz yoktur.
+   *
+   * Bu yüzden bu beklentiyi "enumeration'ı kapatalım" diye generic bir yanıta çevirmeden ÖNCE
+   * Issue #106'yı ve README'deki gerekçeyi okuyun; karar, e-posta sağlayıcısı entegre
+   * edildiğinde yeniden değerlendirilmelidir.
+   */
   test("duplicate e-posta 409 ile reddedilir ve DB'de tek kayıt kalır", async ({ request }) => {
     const email = `sec-dup-${randomUUID()}@example.com`;
 

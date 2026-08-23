@@ -229,6 +229,72 @@ bazlı bir sliding-window rate limiter ile korunur (`src/lib/rate-limit/`).
   kodu hiç değişmeden `src/lib/rate-limit/limiter.ts`'teki tek satır shared-store bir
   implementasyonla değiştirilebilir.
 
+## CSRF Duruşu (Issue #28)
+
+**Bu projede özel bir CSRF token sistemi YOKTUR ve bu bilinçli bir tercihtir.** Custom JSON API
+route'ları (tenant/membership/invitation endpoint'leri) iki bağımsız tarayıcı mekanizmasıyla
+korunur. Aşağıdaki iddiaların tamamı gerçek Chromium ile test edilerek kanıtlanmıştır
+(`e2e/csrf-samesite.spec.ts`), varsayım değildir.
+
+### Koruma nasıl çalışıyor
+
+Cross-site bir istek, türüne göre iki farklı katmanda durur:
+
+| İstek türü | Durduran mekanizma | Sunucuya ulaşır mı? |
+| --- | --- | --- |
+| Form POST (`urlencoded`/`text-plain`, custom header yok) | **`SameSite=Lax`** — tarayıcı session cookie'sini eklemez | Evet, ama kimliksiz → `401` |
+| JSON POST, `PATCH`, `DELETE`, custom header'lı istekler | **CORS preflight** — uygulama `Access-Control-Allow-Origin` döndürmez | Hayır, hiç gönderilmez |
+
+- Hem `authjs.session-token` hem `active-tenant` cookie'si `HttpOnly` + `SameSite=Lax` olarak
+  **açıkça** set edilir (`src/lib/tenants/active-tenant.ts`; Auth.js tarafı için
+  `security/signin-signout-security.spec.ts`). Öznitelik açıkça verildiği için, Chromium'un
+  yalnızca *SameSite özniteliği hiç olmayan* cookie'lere uyguladığı "Lax-allowing-unsafe"
+  (Lax+POST) geçici muafiyeti bu cookie'ler için geçerli değildir — test, cross-site POST'u
+  session kurulduktan hemen sonra, yani o muafiyetin geçerli olacağı zaman penceresi içinde
+  yapar ve cookie yine gönderilmez.
+- Sunucu tarafı zaten kimliksiz state-changing isteği reddeder ve **hiçbir yan etki
+  üretmez** — bkz. `security/tenant-isolation-boundaries.spec.ts` içindeki "unauthenticated
+  mutation" bloğu.
+- Auth.js'in kendi sign-in akışı ayrıca kendi CSRF token mekanizmasına sahiptir; ona
+  dokunulmamıştır.
+
+Test bir **kontrol grubu** içerir: aynı-site isteğin `200` dönmesi, cross-site `401`'in sebebinin
+"cookie zaten geçersizdi" değil "tarayıcı cookie'yi göndermedi" olduğunu kanıtlar. Ayrıca testin
+duyarlılığı doğrulanmıştır: aynı senaryo cookie `SameSite=None` yapıldığında cookie'nin cross-site
+gönderildiğini ve isteğin authentication'ı GEÇTİĞİNİ gösterir — yani koruma zayıflarsa test
+kırmızıya döner.
+
+### Kabul edilen residual risk
+
+Bu duruş mutlak değildir. Bilinçli olarak kabul edilen sınırlar:
+
+1. **`SameSite=Lax`, top-level cross-site GET isteklerini ENGELLEMEZ.** Dolayısıyla bu koruma,
+   *"state değiştiren hiçbir işlem GET ile yapılmaz"* invariant'ına dayanır. Uygulamanın kendi
+   GET endpoint'lerinin (`/api/health`, `/api/auth/me`, `/api/tenants`,
+   `/api/tenants/[tenantId]/members`) tamamı salt-okunurdur; bu kural `CLAUDE.md`'de zorunlu bir
+   proje kuralı olarak yazılıdır ve `integration/get-side-effect-free-pattern.spec.ts` ile
+   otomatik olarak zorlanır (bir GET handler'ına yazma çağrısı eklenirse test kırmızıya döner).
+   Tek istisna Auth.js'in kendi `GET /api/auth/session` endpoint'idir: bu endpoint session
+   cookie'sini tazeler, ancak uygulama verisini değiştirmez ve revoke edilmiş bir session'ı
+   diriltemez (bkz. "Session Revocation") — kurbanı bu adrese yönlendirmek saldırgana yalnızca
+   kurbanın kendi oturumunun uzatılmasını sağlar, sömürülebilir bir yan etki üretmez.
+   Bu invariant kırılırsa CSRF koruması da kırılır.
+2. **`SameSite` site (eTLD+1) bazlıdır, origin bazlı DEĞİLDİR.** Ele geçirilmiş veya kötü niyetli
+   bir alt alan adı (`evil.example.com` → `app.example.com`) *same-site* sayılır ve cookie'yi
+   gönderebilir. Alt alan adları güvenilmeyen içerik barındıracaksa bu duruş yeniden
+   değerlendirilmelidir.
+3. **İkinci katman (CORS), permissive bir CORS yapılandırması eklenmediği sürece geçerlidir.**
+   İleride `Access-Control-Allow-Origin` (özellikle `credentials` ile birlikte) eklenirse JSON/
+   `PATCH`/`DELETE` koruması ortadan kalkar ve geriye yalnızca `SameSite` kalır.
+4. **SameSite desteklemeyen çok eski tarayıcılar** korunmaz.
+
+### Ne zaman gerçek CSRF token'ı gerekir
+
+Yukarıdaki maddelerden biri değişirse — state değiştiren bir GET gerekirse, uygulama güvenilmeyen
+alt alan adlarıyla aynı site altında dağıtılırsa veya cross-origin credentialed istekler
+desteklenmek zorunda kalınırsa — `SameSite` tek başına yetmez ve ayrı bir issue ile gerçek bir
+CSRF token katmanı eklenmelidir.
+
 ## Tenant Davetleri (Invitations)
 
 Bir tenant'a yeni kullanıcı davet etme akışı (`src/lib/tenants/invitation.ts`).

@@ -16,6 +16,19 @@ Bu dosya, bu repository üzerinde çalışan Claude görevleri için temel kural
 - Membership rollerine (`OWNER`, `ADMIN`, `MEMBER`) göre yetki kontrolü sunucu tarafında yapılmalı.
 - Secret veya API key'leri repository'ye ekleme; `.env` dosyası Git'e girmemeli.
 
+### State Değiştiren İşlemler GET ile Yapılmaz (CSRF — Issue #28)
+
+- `GET`/`HEAD` handler'ları **yan etkisiz (side-effect free)** olmalıdır: veri yazmaz, silmez,
+  token tüketmez, e-posta göndermez. State değiştiren her işlem `POST`/`PATCH`/`DELETE` olmalıdır.
+- Bu bir stil tercihi DEĞİL, güvenlik gereğidir: projede özel bir CSRF token sistemi yoktur;
+  koruma `SameSite=Lax` cookie'lere dayanır ve `SameSite=Lax`, top-level cross-site **GET**
+  isteklerini engellemez. State değiştiren tek bir GET endpoint'i eklemek, CSRF korumasını o
+  endpoint için tamamen ortadan kaldırır (bkz. README "CSRF Duruşu", kanıt:
+  `e2e/csrf-samesite.spec.ts`).
+- Uygulamaya permissive bir CORS yapılandırması (`Access-Control-Allow-Origin`, özellikle
+  `credentials` ile) eklemeden önce README'deki CSRF bölümü okunmalıdır — bu, JSON/`PATCH`/
+  `DELETE` isteklerini koruyan ikinci katmanı kaldırır.
+
 ### Tenant Veri İzolasyonu (Query-Level Scoping — Issue #13)
 
 - Tenant-owned bir modele (örn. `Membership`, gelecekte `Account`/`Transaction`/`Category`/

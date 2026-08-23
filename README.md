@@ -365,6 +365,56 @@ bazlı bir sliding-window rate limiter ile korunur (`src/lib/rate-limit/`).
   kodu hiç değişmeden `src/lib/rate-limit/limiter.ts`'teki tek satır shared-store bir
   implementasyonla değiştirilebilir.
 
+## Auth Ekranları (Issue #36)
+
+İlk gerçek arayüz ekranları: `/login` ve `/signup` (`src/app/login`, `src/app/signup`;
+paylaşılan sunum bileşenleri `src/components/auth-form.tsx`). Mock veri yoktur — formlar
+mevcut API'lere gerçek HTTP istekleri atar.
+
+### ⚠️ Neden client component, neden Server Action DEĞİL
+
+Bu bir stil tercihi değil, **güvenlik gereğidir**:
+
+`next-auth`'un **sunucu tarafı** `signIn()`'i (`node_modules/next-auth/lib/actions.js`)
+bellekte bir `Request` nesnesi üretip `Auth()`'u **doğrudan** çağırır ve üstelik
+`skipCSRFCheck` geçer. Yani istek hiçbir zaman HTTP üzerinden gitmez ve
+`src/app/api/auth/[...nextauth]/route.ts` **çalışmaz** — oysa sign-in rate limitinin
+(Issue #27) uygulandığı tek yer orasıdır. Bir Server Action'a geçmek, brute-force korumasını
+ve Auth.js'in kendi CSRF kontrolünü **sessizce** devre dışı bırakırdı.
+
+**İstemci tarafı** `signIn()` ise önce CSRF token'ı alır, sonra
+`/api/auth/callback/credentials`'a gerçek bir HTTP POST atar — mevcut route'tan, dolayısıyla
+rate limitten geçer. Aynı gerekçe signup için de geçerlidir: sayfa `registerUser()`'ı doğrudan
+çağırmaz, `POST /api/auth/signup`'a istek atar.
+
+Bu invariant `integration/auth-ui-pattern.spec.ts` ile otomatik olarak korunur.
+
+### Diğer notlar
+
+- **Hata mesajları Türkçedir ve status koduna göre eşlenir**; backend'in İngilizce iç metinleri
+  (`"Password must be between 8 and 128 characters"`) kullanıcıya olduğu gibi gösterilmez.
+- **Giriş hatası tek ve geneldir** ("E-posta veya şifre hatalı") — kayıtlı/kayıtsız e-posta
+  ayrımı yapılmaz (user enumeration engeli). Signup'ta `409` ise açık bir mesaj gösterir; bu,
+  Issue #106'da kayda geçmiş bilinçli kararın arayüze yansımasıdır.
+- **429 ve ağ hatası aynı mesaja düşer.** İstemci `signIn()`, gövdesinde `url` alanı olmayan
+  yanıtlarda (bizim 429 gövdemiz gibi) `new URL(undefined)` çağırıp **TypeError fırlatır** —
+  hata döndürmez. Bu yüzden çağrı `try/catch` içindedir; blok kaldırılırsa rate limit'e takılan
+  kullanıcı boş ekranla kalır.
+- Başarılı kayıt sonrası otomatik giriş yapılmaz; kullanıcı `/login`'e yönlendirilir.
+- Giriş sonrası şimdilik `/`'a yönlendirilir — korumalı layout ve navigasyon Issue #39'un
+  kapsamındadır.
+
+### `allowedDevOrigins` neden gerekli
+
+`next dev`, dev-only varlıklara (`/_next/static/*`, HMR) yapılan cross-origin istekleri
+varsayılan olarak engeller ve sunucu `localhost` ile başlatıldığından `127.0.0.1` farklı bir
+origin sayılır. Playwright ise `baseURL` olarak `http://127.0.0.1:3000` kullanır — bu yüzden
+tarayıcı testlerinde JS chunk'ları `403` alıyor, sayfa **hydrate olmuyor** ve client
+component'lerdeki form handler'ları hiç çalışmıyordu (form native GET'e düşüp şifreyi URL'e
+yazıyordu). Bu mismatch baştan beri vardı; client-side JS'e ihtiyaç duyan ilk ekranlar
+eklenene kadar görünmedi. `next.config.ts`'teki `allowedDevOrigins` yalnızca development'ı
+etkiler, production build'de karşılığı yoktur.
+
 ## Güvenlik Header'ları
 
 Tüm yanıtlara (sayfalar ve `/api/*`, hata yanıtları dahil) `next.config.ts` üzerinden temel

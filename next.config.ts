@@ -62,6 +62,19 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  /**
+   * `next dev`, dev-only varlıklara (`/_next/static/*`, HMR) yapılan cross-origin istekleri
+   * varsayılan olarak ENGELLER ve sunucu `localhost` ile başlatıldığı için `127.0.0.1`
+   * farklı bir origin sayılır. Playwright ise `baseURL` olarak `http://127.0.0.1:3000`
+   * kullanır (bkz. `playwright.config.ts`) — bu yüzden tarayıcı testlerinde JS chunk'ları
+   * 403 alır, sayfa hydrate OLMAZ ve client component'lerdeki form handler'ları hiç çalışmaz
+   * (form native GET'e düşer). Bu mismatch, client-side JS'e ihtiyaç duyan ilk ekranlar
+   * (Issue #36) eklenene kadar görünmüyordu.
+   *
+   * YALNIZCA development'ı etkiler; production build'de bu ayarın hiçbir karşılığı yoktur.
+   */
+  allowedDevOrigins: ["127.0.0.1"],
+
   // `X-Powered-By: Next.js` header'ı kaldırılır — saldırgana framework/sürüm ipucu vermenin
   // hiçbir işlevsel karşılığı yoktur.
   poweredByHeader: false,

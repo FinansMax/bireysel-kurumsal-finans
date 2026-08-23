@@ -160,6 +160,7 @@ test.describe("Password reset security — token doğrulama", () => {
     request,
   }) => {
     const response = await request.post("/api/auth/reset-password", {
+      headers: { "x-forwarded-for": uniqueTestClientIp() },
       data: { token: "not-a-real-token", password: "SomePassw0rd!" },
     });
     expect(response.status()).toBe(400);
@@ -179,6 +180,7 @@ test.describe("Password reset security — token doğrulama", () => {
     const attempts = await Promise.all(
       Array.from({ length: 25 }, () =>
         request.post("/api/auth/reset-password", {
+          headers: { "x-forwarded-for": uniqueTestClientIp() },
           data: { token: generateRawToken(), password: "SomePassw0rd!" },
         }),
       ),
@@ -201,6 +203,7 @@ test.describe("Password reset security — token doğrulama", () => {
       });
 
       const response = await request.post("/api/auth/reset-password", {
+        headers: { "x-forwarded-for": uniqueTestClientIp() },
         data: { token, password: "SomePassw0rd!" },
       });
       expect(response.status()).toBe(400);
@@ -218,11 +221,13 @@ test.describe("Password reset security — token doğrulama", () => {
       const token = await getTokenViaOutbox(request, email);
 
       const first = await request.post("/api/auth/reset-password", {
+        headers: { "x-forwarded-for": uniqueTestClientIp() },
         data: { token, password: "FirstPassw0rd!" },
       });
       expect(first.status()).toBe(200);
 
       const second = await request.post("/api/auth/reset-password", {
+        headers: { "x-forwarded-for": uniqueTestClientIp() },
         data: { token, password: "SecondPassw0rd!" },
       });
       expect(second.status()).toBe(400);
@@ -239,6 +244,7 @@ test.describe("Password reset security — token doğrulama", () => {
     try {
       const token = await getTokenViaOutbox(request, email);
       const response = await request.post("/api/auth/reset-password", {
+        headers: { "x-forwarded-for": uniqueTestClientIp() },
         data: { token, password: "NewPassw0rd!" },
       });
       expect(response.status()).toBe(200);
@@ -264,8 +270,8 @@ test.describe("Password reset security — token doğrulama", () => {
       const token = await getTokenViaOutbox(request, email);
 
       const [responseA, responseB] = await Promise.all([
-        request.post("/api/auth/reset-password", { data: { token, password: "RaceWinnerA1!" } }),
-        request.post("/api/auth/reset-password", { data: { token, password: "RaceWinnerB1!" } }),
+        request.post("/api/auth/reset-password", { data: { token, password: "RaceWinnerA1!" }, headers: { "x-forwarded-for": uniqueTestClientIp() } }),
+        request.post("/api/auth/reset-password", { data: { token, password: "RaceWinnerB1!" }, headers: { "x-forwarded-for": uniqueTestClientIp() } }),
       ]);
 
       const statuses = [responseA.status(), responseB.status()].sort();

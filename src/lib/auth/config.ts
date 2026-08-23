@@ -38,46 +38,64 @@ export const authConfig: NextAuthConfig = {
   ],
   callbacks: {
     /**
-     * Auth.js, JWT stratejisinde `token.sub` alanını sign-in sırasında otomatik olarak
-     * `user.id`'ye eşitler; bunu session.user.id'ye taşımak dışında ek bir jwt callback'e
-     * gerek yoktur.
+     * SESSION REVOCATION (Issue #26): Kritik credential (şifre) değişikliğinden ÖNCE üretilmiş
+     * JWT'ler burada, tek bir DB sorgusuyla `credentialsChangedAt` okunup `token.iat` ile
+     * karşılaştırılarak reddedilir (bkz. `isSessionRevoked()` — hassasiyet/precision detayları
+     * orada belgelenmiştir).
      *
-     * SESSION REVOCATION (Issue #26): Bu callback her `auth()`/`getCurrentUser()` çağrısında
-     * çalışır — kritik credential (şifre) değişikliğinden ÖNCE üretilmiş JWT'lerin artık kabul
-     * edilmemesi için tam burada, tek bir DB sorgusuyla `credentialsChangedAt` okunup
-     * `token.iat` ile karşılaştırılır (bkz. `isSessionRevoked()` — hassasiyet/precision
-     * detayları orada belgelenmiştir).
+     * KRİTİK — kontrol neden `session` callback'inde DEĞİL, TAM BURADA yapılmalı: Auth.js'in
+     * session action'ı (`node_modules/@auth/core/lib/actions/session.js`) `GET /api/auth/session`
+     * isteğinde token'ı HER ZAMAN yeniden imzalar ("Refresh JWT expiry by re-signing it") ve
+     * yeni cookie'yi response'a ekler. `jwt.encode()` jose'nin `setIssuedAt()`'ini argümansız
+     * çağırdığı için yeni token TAZE bir `iat` alır. `session` callback'i yalnızca response
+     * GÖVDESİNİ şekillendirir; token'ın yeniden imzalanmasını engelleyemez. Dolayısıyla
+     * revocation'ı orada uygulamak, çalınmış bir cookie'nin tek bir `GET /api/auth/session`
+     * ile "tazelenip" tekrar geçerli hale gelmesini ENGELLEMEZ (revocation tamamen bypass
+     * edilirdi; ayrıca `exp` de ilerlediği için token süresiz yenilenebilirdi).
      *
-     * Revoke edilmiş bir session için BİLEREK `session.user.id` set EDİLMEZ — mevcut public
-     * contract'ı (`getCurrentUser() => null`, `GET /api/auth/me => 401`) hiçbir ek kod
-     * değişikliği gerekmeden korur: `getCurrentUser()` zaten `!session.user.id` durumunda
-     * `null` döner (bkz. `current-user.ts`). Hata fırlatılmaz.
+     * Aynı dosyadaki kontrol akışı, `callbacks.jwt` `null` DÖNDÜĞÜNDE token'ı yeniden imzalamak
+     * yerine session cookie'sini TEMİZLER (`sessionStore.clean()`) ve response gövdesini `null`
+     * bırakır. Bu yüzden revoke kararı burada verilir ve `null` döndürülür — bu, hem cookie
+     * tazelemesini engeller hem de revoke edilmiş bir cookie'nin `GET /api/auth/session`
+     * üzerinden kullanıcının e-postasını okumaya devam etmesini önler.
      *
-     * KAPSAM NOTU: Bu callback `token.sub`'a karşılık gelen bir `User` satırı bulamazsa (`user`
-     * `null`), bu #26'nın kapsamı DIŞINDADIR (silinmiş kullanıcı ele alımı, ayrı bir konu) — bu
-     * callback ÖNCEDEN hiçbir DB sorgusu yapmadığından mevcut davranış aynen korunur: yalnızca
-     * `credentialsChangedAt` bilgisi varsa (kullanıcı gerçekten mevcutsa) revocation kararına
-     * dahil edilir; `user` `null` ise `isSessionRevoked()` `credentialsChangedAt`'i `undefined`
-     * olarak alır ve revoke etmez (mevcut davranışla bire bir aynı).
+     * Sign-in anında (`user` dolu) kontrol ATLANIR: credential'lar o istekte zaten doğrulanmıştır
+     * ve token henüz encode edilmediği için `token.iat` yoktur — gereksiz bir DB sorgusundan da
+     * kaçınılır.
      *
-     * DB maliyeti: bu callback ÖNCEDEN hiçbir sorgu yapmıyordu; eklenen TEK sorgu (`select` ile
-     * sadece `credentialsChangedAt`) aynı request içinde tekrarlanmaz.
+     * KAPSAM NOTU: `token.sub`'a karşılık gelen `User` satırı yoksa (silinmiş kullanıcı) revoke
+     * EDİLMEZ — `isSessionRevoked()` `credentialsChangedAt`'i `undefined` alır. Silinmiş kullanıcı
+     * ele alımı #26'nın kapsamı dışındadır ve bu davranış önceki implementasyonla birebir aynıdır.
      */
-    async session({ session, token }) {
-      if (!session.user || !token.sub) {
-        return session;
+    async jwt({ token, user }) {
+      if (user || !token.sub) {
+        return token;
       }
 
-      const user = await prisma.user.findUnique({
+      const dbUser = await prisma.user.findUnique({
         where: { id: token.sub },
         select: { credentialsChangedAt: true },
       });
 
-      if (isSessionRevoked(token.iat, user?.credentialsChangedAt)) {
-        return session;
+      if (isSessionRevoked(token.iat, dbUser?.credentialsChangedAt)) {
+        return null;
       }
 
-      session.user.id = token.sub;
+      return token;
+    },
+
+    /**
+     * Auth.js, JWT stratejisinde `token.sub` alanını sign-in sırasında otomatik olarak
+     * `user.id`'ye eşitler; bunu `session.user.id`'ye taşımak dışında bir işe gerek yoktur.
+     *
+     * Bu callback'e ulaşıldığında token'ın revoke EDİLMEDİĞİ garantidir: yukarıdaki `jwt`
+     * callback'i revoke durumunda `null` döndüğü için Auth.js `session` callback'ini hiç
+     * çağırmaz (bkz. session action'daki `if (token !== null)` dalı).
+     */
+    async session({ session, token }) {
+      if (session.user && token.sub) {
+        session.user.id = token.sub;
+      }
       return session;
     },
   },

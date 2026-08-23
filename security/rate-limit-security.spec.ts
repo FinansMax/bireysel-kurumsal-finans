@@ -378,3 +378,64 @@ test.describe("Rate limiting — 429 response güvenliği", () => {
     }
   });
 });
+
+test.describe("Rate limiting — reset-password", () => {
+  /**
+   * `reset-password`, kimlik doğrulaması gerektirmeyen credential-değiştirme endpoint'leri
+   * arasında rate limit'i EN SON eklenen endpoint'ti. Token 256 bit olduğu için brute-force
+   * birincil tehdit değildir; korunan şey, her istekte DB'ye yazan bu endpoint'in sınırsız
+   * çağrılabilmesidir.
+   */
+  test("limit aşımı (10/15dk) → 429 ve hiçbir şifre değişmez", async ({ request }) => {
+    const ip = uniqueTestClientIp();
+    const email = `rl-reset-${randomUUID()}@example.com`;
+    const originalPassword = "S3curePassw0rd!";
+    await signUpWithIp(request, email, originalPassword, uniqueTestClientIp());
+
+    try {
+      // Geçersiz token'larla limiti doldur (her biri 400 döner ama kotayı tüketir).
+      for (let i = 0; i < RATE_LIMIT_POLICIES.RESET_PASSWORD.limit; i++) {
+        const response = await request.post("/api/auth/reset-password", {
+          headers: { "x-forwarded-for": ip },
+          data: { token: "a".repeat(64), password: "SomeOtherPassw0rd!" },
+        });
+        expect(response.status()).toBe(400);
+      }
+
+      const blocked = await request.post("/api/auth/reset-password", {
+        headers: { "x-forwarded-for": ip },
+        data: { token: "a".repeat(64), password: "SomeOtherPassw0rd!" },
+      });
+      expect(blocked.status()).toBe(429);
+      expect(await blocked.json()).toEqual({ error: "Too many requests. Please try again later." });
+
+      // Kullanıcının şifresi hâlâ orijinal şifresidir (hiçbir side-effect tetiklenmedi).
+      const signIn = await signInWithIp(request, email, originalPassword, uniqueTestClientIp());
+      expect(signIn.status()).toBe(302);
+    } finally {
+      await prisma.user.deleteMany({ where: { email } });
+    }
+  });
+
+  test("farklı IP'ler birbirinin reset-password kotasını tüketmez", async ({ request }) => {
+    const ipA = uniqueTestClientIp();
+
+    for (let i = 0; i < RATE_LIMIT_POLICIES.RESET_PASSWORD.limit; i++) {
+      await request.post("/api/auth/reset-password", {
+        headers: { "x-forwarded-for": ipA },
+        data: { token: "b".repeat(64), password: "SomeOtherPassw0rd!" },
+      });
+    }
+    const blockedA = await request.post("/api/auth/reset-password", {
+      headers: { "x-forwarded-for": ipA },
+      data: { token: "b".repeat(64), password: "SomeOtherPassw0rd!" },
+    });
+    expect(blockedA.status()).toBe(429);
+
+    const responseB = await request.post("/api/auth/reset-password", {
+      headers: { "x-forwarded-for": uniqueTestClientIp() },
+      data: { token: "b".repeat(64), password: "SomeOtherPassw0rd!" },
+    });
+    expect(responseB.status()).toBe(400); // rate limit DEĞİL, normal "geçersiz token"
+  });
+});

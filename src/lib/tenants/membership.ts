@@ -172,7 +172,7 @@ export async function removeMember(
       async (tx) => {
         const target = await tx.membership.findFirst({
           where: tenantScoped(tenantId, { id: membershipId }),
-          select: { role: true },
+          select: { role: true, userId: true },
         });
         if (!target) {
           throw new NotFoundError();
@@ -199,6 +199,25 @@ export async function removeMember(
         if (count !== 1) {
           throw new NotFoundError();
         }
+
+        // GÜVENLİK: Bir üyeyi tenant'tan çıkarmak, o üyenin AÇTIĞI erişimi de kapatmalıdır.
+        // Aksi halde çıkarılan bir ADMIN'in daha önce oluşturduğu bekleyen davet, TTL'i
+        // (7 gün) boyunca geçerli kalır ve kabul edildiğinde davetliye gerçek bir üyelik
+        // (ör. ADMIN) verir — yani içeriden birini çıkarmak, onun bıraktığı arka kapıyı
+        // kapatmaz. Bu yüzden bu üyenin BU tenant için oluşturduğu, henüz kullanılmamış ve
+        // iptal edilmemiş davetler, üyelik silinmesiyle AYNI transaction içinde iptal edilir
+        // (atomik: üyelik silinip davetler açıkta kalamaz).
+        //
+        // KAPSAM: Yalnızca üyeliğin SONA ERMESİ davetleri iptal eder. Rol düşürme
+        // (ör. ADMIN -> MEMBER) davetlere KASITLI olarak dokunmaz; o, ayrı bir politika
+        // kararıdır. İptal `cancelledAt` ile yapılır — `createInvitation`'ın aynı
+        // tenant+email sweep'iyle aynı mekanizma (bkz. `invitation.ts`), böylece
+        // `acceptInvitation` bu davetleri diğer geçersiz durumlarla AYNI genel 400'e düşürür
+        // ve yeni bir bilgi sızdırmaz.
+        await tx.tenantInvitation.updateMany({
+          where: { tenantId, invitedByUserId: target.userId, usedAt: null, cancelledAt: null },
+          data: { cancelledAt: new Date() },
+        });
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );

@@ -72,9 +72,27 @@ export class InMemoryRateLimiter implements RateLimiter {
       if (active.length === 0) {
         this.buckets.delete(key);
       } else {
-        this.buckets.set(key, { timestamps: active, expiresAt: active[0] + windowMs });
+        // `expiresAt` HER ZAMAN en YENİ timestamp'ten hesaplanır (bkz. `Bucket.expiresAt`
+        // dokümantasyonu ve aşağıdaki allow yolu). Burada en ESKİ timestamp kullanılırsa
+        // (`active[0]`) bucket'ın kayıtlı expiry'si gerçek expiry'sinden erken olur ve
+        // `maybeSweep()` (sadece `expiresAt <= now` bakar) HÂLÂ pencere içinde timestamp
+        // taşıyan bir bucket'ı silebilir. O durumda limiti aşmış bir istemci, en eski
+        // denemesi pencereden çıkar çıkmaz 1 değil TAM `limit` kadar yeni hak kazanır —
+        // yani sliding window, saldırının en yoğun olduğu anda (map dolu olduğu için sweep
+        // aktifken) erken-reset'li fixed window'a dejenere olur.
+        this.buckets.set(key, {
+          timestamps: active,
+          expiresAt: active[active.length - 1] + windowMs,
+        });
       }
-      const retryAfterMs = Math.max(0, active[0] + windowMs - nowMs);
+      // `active` boşken (yalnızca `limit <= 0` ile mümkün — bkz. yukarıdaki delete dalı)
+      // `active[0]` `undefined`'dır; bunu doğrudan aritmetiğe sokmak `retryAfterMs`'i NaN
+      // yapar ve guard'da geçersiz bir `Retry-After: NaN` header'ı üretirdi. Böyle bir
+      // policy "endpoint tamamen kapalı" demektir, dolayısıyla beklenecek süre tam pencere
+      // kadardır.
+      const oldestActive = active[0];
+      const retryAfterMs =
+        oldestActive === undefined ? windowMs : Math.max(0, oldestActive + windowMs - nowMs);
       return { allowed: false, remaining: 0, retryAfterMs };
     }
 

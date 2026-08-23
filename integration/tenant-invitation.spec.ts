@@ -5,6 +5,7 @@ import { expect, test } from "@playwright/test";
 
 import { registerUser } from "../src/lib/auth/signup";
 import { acceptInvitation, createInvitation, hashInvitationToken } from "../src/lib/tenants/invitation";
+import { removeMember } from "../src/lib/tenants/membership";
 import { prisma } from "../src/lib/prisma";
 
 test.afterAll(async () => {
@@ -555,6 +556,103 @@ test.describe("Tenant isolation (Issue #13 ile tutarlılık)", () => {
       expect(membershipInB).toBeNull();
     } finally {
       await cleanup([ownerA.id, invitee.id], [tenantA.id, tenantB.id]);
+    }
+  });
+});
+
+/**
+ * Bir üyeyi tenant'tan çıkarmak, o üyenin AÇTIĞI erişimi de kapatmalıdır: aksi halde
+ * çıkarılan bir ADMIN'in bekleyen daveti TTL'i boyunca geçerli kalır ve kabul edildiğinde
+ * davetliye gerçek bir ADMIN üyeliği verir (insider'ı çıkarmak arka kapıyı kapatmaz).
+ * Bkz. `removeMember()` içindeki iptal adımı.
+ */
+test.describe("removeMember() — çıkarılan üyenin bekleyen davetleri", () => {
+  test("çıkarılan ADMIN'in bekleyen daveti artık kabul edilemiyor (arka kapı kapanıyor)", async () => {
+    const owner = await createUser();
+    const admin = await createUser();
+    const invitee = await createUser();
+    const tenant = await createTenant();
+
+    try {
+      await addMember(owner.id, tenant.id, MembershipRole.OWNER);
+      const adminMembership = await addMember(admin.id, tenant.id, MembershipRole.ADMIN);
+
+      // ADMIN, davetliyi ADMIN olarak davet ediyor.
+      const { result, capturedUrl } = await createInvitationAndCaptureUrl(
+        tenant.id,
+        MembershipRole.ADMIN,
+        admin.id,
+        invitee.email,
+        MembershipRole.ADMIN,
+      );
+      expect(result.ok).toBe(true);
+      const token = extractToken(capturedUrl);
+
+      // OWNER, daveti oluşturan ADMIN'i tenant'tan çıkarıyor.
+      const removed = await removeMember(tenant.id, adminMembership.id, MembershipRole.OWNER);
+      expect(removed.ok).toBe(true);
+
+      // Davet iptal edilmiş olmalı ve diğer geçersiz durumlarla AYNI genel 400'e düşmeli
+      // (yeni bir bilgi sızdırmadan).
+      const accepted = await acceptInvitation(invitee.id, invitee.email, token);
+      expect(accepted.ok).toBe(false);
+      if (!accepted.ok) expect(accepted.status).toBe(400);
+
+      // En kritik kısım: davetliye HİÇBİR üyelik verilmemiş olmalı.
+      const membership = await prisma.membership.findUnique({
+        where: { userId_tenantId: { userId: invitee.id, tenantId: tenant.id } },
+      });
+      expect(membership).toBeNull();
+    } finally {
+      await cleanup([owner.id, admin.id, invitee.id], [tenant.id]);
+    }
+  });
+
+  test("çıkarma yalnızca ÇIKARILAN üyenin davetlerini iptal eder — başkalarınınki geçerli kalır", async () => {
+    const owner = await createUser();
+    const admin = await createUser();
+    const inviteeOfOwner = await createUser();
+    const inviteeOfAdmin = await createUser();
+    const tenant = await createTenant();
+
+    try {
+      await addMember(owner.id, tenant.id, MembershipRole.OWNER);
+      const adminMembership = await addMember(admin.id, tenant.id, MembershipRole.ADMIN);
+
+      const ownerInvite = await createInvitationAndCaptureUrl(
+        tenant.id,
+        MembershipRole.OWNER,
+        owner.id,
+        inviteeOfOwner.email,
+        MembershipRole.MEMBER,
+      );
+      const adminInvite = await createInvitationAndCaptureUrl(
+        tenant.id,
+        MembershipRole.ADMIN,
+        admin.id,
+        inviteeOfAdmin.email,
+        MembershipRole.MEMBER,
+      );
+
+      await removeMember(tenant.id, adminMembership.id, MembershipRole.OWNER);
+
+      // ADMIN'in daveti iptal edildi...
+      const adminResult = await acceptInvitation(
+        inviteeOfAdmin.id,
+        inviteeOfAdmin.email,
+        extractToken(adminInvite.capturedUrl),
+      );
+      expect(adminResult.ok).toBe(false);
+
+      // ...ama hâlâ üye olan OWNER'ın daveti etkilenmedi.
+      const ownerResult = await acceptInvitation(
+        inviteeOfOwner.id,
+        inviteeOfOwner.email,
+        extractToken(ownerInvite.capturedUrl),
+      );
+      expect(ownerResult.ok).toBe(true);
+    } finally {
+      await cleanup([owner.id, admin.id, inviteeOfOwner.id, inviteeOfAdmin.id], [tenant.id]);
     }
   });
 });

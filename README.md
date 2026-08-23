@@ -121,10 +121,21 @@ stateless Auth.js JWT mimarisi korunur.
 
 - **Nasıl çalışır:** `User.credentialsChangedAt` (nullable `DateTime`) her şifre değişikliğinde
   güncellenir (`src/lib/auth/credentials.ts`'teki `updateUserPassword()` — passwordHash ile AYNI
-  UPDATE ifadesinde, atomik olarak). Auth.js'in `session` callback'i (`src/lib/auth/config.ts`)
-  her `auth()`/`getCurrentUser()` çağrısında, `token.sub` ile TEK bir DB sorgusu yapıp
-  `credentialsChangedAt`'i okur ve `token.iat` (JWT üretim zamanı) ile karşılaştırır
-  (`isSessionRevoked()`, `src/lib/auth/session-revocation.ts`).
+  UPDATE ifadesinde, atomik olarak). Auth.js'in **`jwt` callback'i** (`src/lib/auth/config.ts`)
+  her istekte, `token.sub` ile TEK bir DB sorgusu yapıp `credentialsChangedAt`'i okur ve
+  `token.iat` (JWT üretim zamanı) ile karşılaştırır (`isSessionRevoked()`,
+  `src/lib/auth/session-revocation.ts`). Revoke edilmişse callback `null` döner.
+- **Kontrol neden `jwt` callback'inde (ve `session` callback'inde DEĞİL):** Auth.js'in session
+  action'ı `GET /api/auth/session` isteğinde token'ı **her zaman yeniden imzalar** ("Refresh JWT
+  expiry by re-signing it") ve tazelenmiş cookie'yi response'a ekler; yeni token TAZE bir `iat`
+  alır. `session` callback'i yalnızca response GÖVDESİNİ şekillendirdiği için bu yeniden
+  imzalamayı engelleyemez — kontrol orada yapılsaydı, çalınmış bir reset-öncesi cookie tek bir
+  `GET /api/auth/session` çağrısıyla tazelenip tekrar geçerli hale gelir ve revocation tamamen
+  bypass edilirdi (üstelik `exp` de ilerlediği için token süresiz yenilenebilirdi). `jwt`
+  callback'i `null` döndüğünde ise Auth.js token'ı yeniden imzalamak yerine session cookie'sini
+  TEMİZLER ve gövdeyi `null` bırakır — bu yüzden revoke kararı orada verilir. Regresyon testi:
+  `security/session-revocation-security.spec.ts` içindeki "GET /api/auth/session üzerinden
+  bypass edilemez" bloğu.
 - **Precision:** JWT `iat` Unix SANİYE hassasiyetinde, `credentialsChangedAt` ise milisaniye
   hassasiyetindedir. Yanlışlıkla yeni (geçerli) bir session'ı revoke etmemek için, bir token'ın
   `iat` saniyesinin TAMAMI hâlâ geçerli kabul edilir — sadece `credentialsChangedAt`, o saniye
@@ -155,6 +166,7 @@ bazlı bir sliding-window rate limiter ile korunur (`src/lib/rate-limit/`).
   | `POST /api/auth/callback/credentials` (sign-in) | 10 / 5 dk | `auth:sign-in` |
   | `POST /api/auth/signup` | 5 / 10 dk | `auth:sign-up` |
   | `POST /api/auth/forgot-password` | 5 / 15 dk | `auth:forgot-password` |
+  | `POST /api/auth/reset-password` | 10 / 15 dk | `auth:reset-password` |
   | `POST /api/tenants` (tenant oluşturma) | 10 / 10 dk | `tenant:create` |
 
 - **Kullanım:** `checkRateLimit(request, bucket, policy)` (`src/lib/rate-limit/guard.ts`) mevcut
@@ -215,6 +227,14 @@ Bir tenant'a yeni kullanıcı davet etme akışı (`src/lib/tenants/invitation.t
   tenant+email için eşzamanlı iki isteğe karşı Serializable bir transaction içinde yapılır (bkz.
   `src/lib/tenants/membership.ts`'teki last-OWNER korumasıyla aynı teknik); bir yazma çakışması
   oluşursa otomatik olarak yeniden denenir.
+- **Üyelik bitince davetler iptal olur:** Bir üye tenant'tan çıkarıldığında (`removeMember()`), o
+  üyenin O tenant için oluşturduğu bekleyen (kullanılmamış + iptal edilmemiş) davetler, üyeliğin
+  silinmesiyle AYNI transaction içinde `cancelledAt` ile geçersiz kılınır. Gerekçe: aksi halde
+  çıkarılan bir `ADMIN`'in daha önce gönderdiği davet 7 günlük TTL'i boyunca geçerli kalır ve
+  kabul edildiğinde davetliye gerçek bir `ADMIN` üyeliği verirdi — yani içeriden birini çıkarmak,
+  onun bıraktığı arka kapıyı kapatmazdı. **Rol düşürme (ör. `ADMIN` → `MEMBER`) davetlere
+  KASITLI olarak dokunmaz**; yalnızca üyeliğin sona ermesi iptali tetikler. İptal edilen davet,
+  kabul denemesinde diğer geçersiz durumlarla AYNI genel `400`'e düşer (yeni bilgi sızdırmaz).
 - **Token güvenliği:** `PasswordResetToken` (Issue #7) ile AYNI yaklaşım — `crypto.randomBytes(32)`
   (256 bit) ile üretilir, DB'de (`TenantInvitation.tokenHash`) SADECE SHA-256 hash'i saklanır, raw
   token hiçbir zaman saklanmaz veya production loglarına yazılmaz. Token 7 gün sonra geçersiz olur

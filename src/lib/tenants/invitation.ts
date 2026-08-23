@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { MembershipRole, Prisma } from "@prisma/client";
 
 import { normalizeEmail, isValidEmail } from "@/lib/auth/validation";
+import { getAppBaseUrl } from "@/lib/config/app-url";
 import { prisma } from "@/lib/prisma";
 
 import { consoleInvitationSender, type InvitationSender } from "./invitation-email";
@@ -21,8 +22,6 @@ const INVITATION_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // nadiren bir yazma çakışmasıyla (P2034) başarısız olabilir (bkz. createInvitation
 // dokümantasyonu) — bu durumda birkaç kez otomatik yeniden denenir.
 const MAX_CREATE_ATTEMPTS = 3;
-
-const DEFAULT_BASE_URL = process.env.APP_BASE_URL ?? "http://localhost:3000";
 
 const PRISMA_TRANSACTION_CONFLICT_ERROR_CODE = "P2034";
 
@@ -107,7 +106,9 @@ export async function createInvitation(
   }
 
   const sender = options.invitationSender ?? consoleInvitationSender;
-  const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
+  // Transaction BAŞLAMADAN önce çözülür: yanlış yapılandırma durumunda hata, davet satırı
+  // oluşturulmadan fırlar ve geride linki üretilememiş (kabul edilemez) bir davet kalmaz.
+  const baseUrl = options.baseUrl ?? getAppBaseUrl();
 
   const rawToken = generateInvitationToken();
   const tokenHash = hashInvitationToken(rawToken);

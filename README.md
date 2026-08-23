@@ -45,6 +45,27 @@ cp .env.example .env
 
 `.env` dosyası Git'e girmez; gerçek secret içermeden sadece lokal geliştirme değerlerini tutar.
 
+### Ortam Değişkenleri
+
+| Değişken | Zorunlu | Açıklama |
+| --- | --- | --- |
+| `DATABASE_URL` | Her ortamda | PostgreSQL bağlantı adresi (Prisma). |
+| `AUTH_SECRET` | Her ortamda | JWT session token'larını imzalar/şifreler. `npx auth secret` ile üretilir. |
+| `APP_BASE_URL` | **Production'da** | Uygulamanın dışarıya görünen kök adresi. |
+| `POSTGRES_*` | Lokal | Yalnızca `docker-compose.yml`'in lokal PostgreSQL container'ını kurmak için. |
+
+**`APP_BASE_URL` neden production'da zorunlu:** Şifre sıfırlama ve tenant daveti
+**e-postalarındaki mutlak linkler** bu değerden üretilir. Değişken eskiden yoksa sessizce
+`http://localhost:3000`'e düşüyordu — yani production'da gönderilen her reset/davet linki
+çalışmıyor, üstelik hiçbir hata üretilmediği için bu fark edilmiyordu. Artık production'da
+değişken yoksa (veya mutlak bir `http(s)` URL değilse) uygulama bilerek hata verir
+(`src/lib/config/app-url.ts`).
+
+Değer, e-posta gönderen akışlarda **herhangi bir DB erişiminden önce** çözülür. Bu bir detay
+değil, gerekliliktir: aksi halde yanlış yapılandırılmış bir production'da "kayıtlı e-posta →
+500, kayıtsız e-posta → 200" farkı oluşur ve Issue #7'de kapatılan user-enumeration oracle'ı
+geri gelirdi. Regresyon testi: `integration/app-url.spec.ts`.
+
 ## PostgreSQL'i Docker ile Çalıştırma
 
 ```bash
@@ -150,6 +171,10 @@ Kimlik doğrulama altyapısı [Auth.js](https://authjs.dev/) v5 (`next-auth`) il
   her zaman aynı genel mesajı döner (user enumeration engeli). Gerçek e-posta gönderimi kapsam
   dışıdır; `EmailSender` interface'i (`src/lib/auth/email.ts`) arkasında, production'da gerçek
   bir sağlayıcıyla değiştirilebilecek minimal bir konsol/dosya tabanlı implementasyon kullanılır.
+  **Raw token production loglarına yazılmaz:** `consoleEmailSender` production'da yalnızca
+  alıcıyı loglar, `resetUrl`'i (dolayısıyla raw token'ı) loglamaz — aksi halde log erişimi olan
+  biri, son 30 dakika içinde reset talebinde bulunmuş herhangi bir hesabı devralabilirdi
+  (regresyon testi: `integration/email-sender-logging.spec.ts`).
   Reset sonrası, reset'ten önce üretilmiş JWT session'ları artık otomatik iptal edilir — bkz.
   aşağıdaki "Session Revocation".
 - **Şifre değiştirme (authenticated):** `POST /api/auth/change-password`
@@ -339,6 +364,34 @@ bazlı bir sliding-window rate limiter ile korunur (`src/lib/rate-limit/`).
   `RateLimiter` interface'i (`src/lib/rate-limit/types.ts`) tam da bu yüzden vardır: route
   kodu hiç değişmeden `src/lib/rate-limit/limiter.ts`'teki tek satır shared-store bir
   implementasyonla değiştirilebilir.
+
+## Güvenlik Header'ları
+
+Tüm yanıtlara (sayfalar ve `/api/*`, hata yanıtları dahil) `next.config.ts` üzerinden temel
+güvenlik header'ları eklenir. Bunlar mevcut korumaların yerine geçmez — authorization
+backend'de, CSRF koruması `SameSite=Lax` + CORS'a dayanır — tarayıcı tarafındaki saldırı
+yüzeyini daraltır. Doğrulama: `security/http-headers-security.spec.ts`.
+
+| Header | Değer | Neden |
+| --- | --- | --- |
+| `X-Content-Type-Options` | `nosniff` | Tarayıcı, Content-Type'ı tahmin ederek bir yanıtı script gibi çalıştırmaz. |
+| `X-Frame-Options` | `DENY` | Clickjacking (eski tarayıcılar için). |
+| `Content-Security-Policy` | `frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'` | Clickjacking (modern), `<base>` enjeksiyonu, form action hijacking, eklenti yüzeyi. |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | URL'de taşınan reset/davet token'larının üçüncü taraflara sızmaması. |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=()` | Kullanılmayan güçlü tarayıcı API'leri kapatılır. |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | HTTPS zorunluluğu. HTTP üzerinden yok sayılır, lokal geliştirmeyi etkilemez. |
+| `X-Powered-By` | *(kaldırıldı)* | Framework/sürüm ipucu vermenin işlevsel karşılığı yok. |
+
+**Kapsam dışı (bilinçli):**
+
+- **Tam CSP (`script-src`/`style-src`) yoktur.** Next.js'te güvenli bir script politikası
+  nonce tabanlı olmalıdır ve nonce'lar statik config'ten değil istek başına üretilmelidir
+  (bkz. `node_modules/next/dist/docs/01-app/02-guides/content-security-policy.md`). Yanlış bir
+  `script-src` uygulamayı sessizce kırar; gerçek frontend (Epic 4) geldiğinde ayrı bir issue
+  olarak eklenmelidir. Yukarıdaki dört direktif frontend'den bağımsızdır ve bugün güvenle
+  uygulanabilir.
+- **HSTS `preload` yoktur.** Preload listesine girmek alan adı genelinde, geri alınması çok zor
+  bir taahhüttür; production deployment kararıyla (Issue #91) birlikte verilmelidir.
 
 ## CSRF Duruşu (Issue #28)
 

@@ -22,9 +22,41 @@ import { expect, test } from "@playwright/test";
 
 const APP_ROOT = path.join(__dirname, "..", "src", "app");
 
+/**
+ * Kimlik doğrulama akışlarını çalıştıran İSTEMCİ dosyaları.
+ *
+ * `reset-password/page.tsx` bilerek listede DEĞİLDİR: o bir sunucu bileşenidir ve yalnızca
+ * URL'deki token'ı çözüp client forma prop olarak geçer (hiçbir auth isteği atmaz). Asıl
+ * istek `reset-password-form.tsx`'ten gider, o yüzden kontrol edilen dosya odur.
+ */
 const AUTH_PAGES = [
   path.join(APP_ROOT, "login", "page.tsx"),
   path.join(APP_ROOT, "signup", "page.tsx"),
+  path.join(APP_ROOT, "forgot-password", "page.tsx"),
+  path.join(APP_ROOT, "reset-password", "reset-password-form.tsx"),
+];
+
+/**
+ * Her ekranın HANGİ HTTP endpoint'ini çağırması ve hangi servis fonksiyonunu doğrudan
+ * ÇAĞIRMAMASI gerektiği. Servisi doğrudan çağırmak (bir Server Action üzerinden) o
+ * endpoint'in rate limitini baypas eder — her satırın varlık sebebi budur.
+ */
+const ENDPOINT_EXPECTATIONS = [
+  {
+    file: path.join(APP_ROOT, "signup", "page.tsx"),
+    mustCall: "/api/auth/signup",
+    mustNotCall: "registerUser",
+  },
+  {
+    file: path.join(APP_ROOT, "forgot-password", "page.tsx"),
+    mustCall: "/api/auth/forgot-password",
+    mustNotCall: "requestPasswordReset",
+  },
+  {
+    file: path.join(APP_ROOT, "reset-password", "reset-password-form.tsx"),
+    mustCall: "/api/auth/reset-password",
+    mustNotCall: "resetPassword(",
+  },
 ];
 
 /**
@@ -93,11 +125,12 @@ test.describe("Auth ekranları — rate limit baypasına karşı koruma", () => 
     expect(code).toContain("signIn(");
   });
 
-  test("signup ekranı registerUser() yerine HTTP endpoint'ini çağırıyor", () => {
-    const code = readPageCode(path.join(APP_ROOT, "signup", "page.tsx"));
+  for (const { file, mustCall, mustNotCall } of ENDPOINT_EXPECTATIONS) {
+    test(`${path.basename(path.dirname(file))} ekranı servisi doğrudan değil HTTP üzerinden çağırıyor`, () => {
+      const code = readPageCode(file);
 
-    // `registerUser()`'ı doğrudan çağırmak signup rate limitini (route seviyesinde) atlar.
-    expect(code).not.toContain("registerUser");
-    expect(code).toContain("/api/auth/signup");
-  });
+      expect(code, `${file} servis fonksiyonunu doğrudan çağırmamalı`).not.toContain(mustNotCall);
+      expect(code, `${file} ${mustCall} endpoint'ini çağırmalı`).toContain(mustCall);
+    });
+  }
 });

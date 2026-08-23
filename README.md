@@ -404,6 +404,26 @@ Bu invariant `integration/auth-ui-pattern.spec.ts` ile otomatik olarak korunur.
 - Giriş sonrası şimdilik `/`'a yönlendirilir — korumalı layout ve navigasyon Issue #39'un
   kapsamındadır.
 
+### Şifre sıfırlama ekranları (Issue #37)
+
+`/forgot-password` ve `/reset-password?token=...`.
+
+- **Genel mesaj arayüzde de korunur:** `/forgot-password`, e-posta kayıtlı olsun ya da
+  olmasın **birebir aynı** mesajı gösterir. Backend zaten aynı 200'ü döner; arayüzün bunu
+  "e-posta bulunamadı" gibi bir varyasyona çevirmesi, backend'de kapatılmış sızıntıyı UI
+  katmanında yeniden açardı. Bu yüzden başarı durumunda status'a göre dallanma yapılmaz.
+- **Token hataları ayrıştırılmaz:** "bulunamadı / süresi dolmuş / zaten kullanılmış" hepsi
+  aynı mesaja düşer (backend duruşuyla aynı).
+- **`/reset-password` bir sunucu bileşenidir**, form ise ayrı bir client component. Token'ı
+  client'ta `useSearchParams()` ile okumak sayfayı bir `<Suspense>` sınırıyla sarmayı
+  gerektirirdi; `searchParams`'ı sunucuda çözmek bu tuzağı tamamen ortadan kaldırır.
+  (Next.js 16'da `searchParams` bir `Promise`'tir ve `await` edilir.)
+- **URL'de token yoksa** form hiç render edilmez; kullanıcı doğrudan yeni bağlantı istemeye
+  yönlendirilir — kesin başarısız olacak bir istek atılmaz.
+- Token'ın prop olarak client'a geçmesi ek sızıntı değildir (değer zaten adres çubuğundadır);
+  `Referrer-Policy: strict-origin-when-cross-origin` Referer üzerinden dışarı gitmesini
+  engeller.
+
 ### `allowedDevOrigins` neden gerekli
 
 `next dev`, dev-only varlıklara (`/_next/static/*`, HMR) yapılan cross-origin istekleri

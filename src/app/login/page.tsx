@@ -76,6 +76,8 @@ export default function LoginPage() {
       footer={
         <>
           Hesabınız yok mu? <AuthLink href="/signup">Kayıt olun</AuthLink>
+          <br />
+          <AuthLink href="/forgot-password">Şifremi unuttum</AuthLink>
         </>
       }
     >

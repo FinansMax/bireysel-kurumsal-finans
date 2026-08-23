@@ -86,6 +86,26 @@ Kimlik doğrulama altyapısı [Auth.js](https://authjs.dev/) v5 (`next-auth`) il
   bir `User` oluşturur (`src/lib/auth/signup.ts`). Şifre `hashPassword` ile hash'lenir, e-posta
   normalize edilir (trim + lowercase) ve zaten kayıtlı bir e-postayla tekrar kayıt denemesi
   `409` ile reddedilir. Bu adım herhangi bir `Tenant`/`Membership` oluşturmaz.
+
+  **User enumeration — bilinçli bir tercih (Issue #106):** Bu `409`, kimlik doğrulaması
+  gerektirmeden "bu e-postanın hesabı var mı?" sorusunu yanıtlar; yani signup, sign-in ve
+  forgot-password'ün AKSİNE enumeration'a karşı sertleştirilmemiştir. Bu bir gözden kaçma
+  değil, gözden geçirilmiş bir karardır:
+
+  - Sign-in ve forgot-password'de bilgiyi sızdırmak GEREKSİZDİR — kullanıcıya "e-posta yanlış"
+    demek hiçbir işlevsel değer katmaz, o yüzden oralarda yanıt (ve sign-in'de hesaplama
+    maliyeti) eşitlenmiştir.
+  - Signup'ta ise durum terstir: meşru bir kullanıcının çok sık karşılaştığı senaryo "hesabım
+    olduğunu unutmuşum"dur ve ona bunu doğrudan söylemek akışın işleyişi için gereklidir.
+  - Bilgiyi gizlemenin tek doğru yolu ("aynı genel yanıtı dön, gerçek durumu e-posta ile
+    bildir") ÇALIŞAN bir e-posta kanalı gerektirir. Bu repo'da gerçek bir sağlayıcı yoktur
+    (`EmailSender` arkasında konsol/dosya tabanlı bir implementasyon vardır), dolayısıyla o
+    yaklaşım production'da meşru kullanıcıyı "e-postanı kontrol et" deyip hiçbir şey
+    göndermeyen bir çıkmaza sokardı — sızıntıdan daha büyük bir zarar.
+
+  Sızıntı, signup rate limit'i (IP başına 5/10dk, bkz. "Rate Limiting") ile sınırlanır ama
+  ortadan KALKMAZ. Gerçek bir e-posta sağlayıcısı entegre edildiğinde bu karar yeniden
+  değerlendirilmelidir.
 - **Giriş (sign-in) / Çıkış (sign-out):** Credentials provider'ın `authorize` fonksiyonu
   (`src/lib/auth/authenticate.ts`) e-posta + şifreyi mevcut `verifyPassword`'a karşı doğrular.
   Giriş, Auth.js'in kendi `/api/auth/callback/credentials` endpoint'i üzerinden yapılır; çıkış

@@ -234,6 +234,49 @@ stateless Auth.js JWT mimarisi korunur.
   `prisma.user.update()` çağrısını YAZMAMALI, aynı fonksiyonu kullanmalıdır; aksi halde
   `credentialsChangedAt` bumplanmaz ve revocation o akış için sessizce devre dışı kalır.
 
+## Kullanıcı Profili (Issue #31)
+
+Authenticated kullanıcının kendi profilini görüntüleyip güncellemesi
+(`src/lib/users/`, `src/app/api/users/me/route.ts`).
+
+- **`GET /api/users/me`** → `{ user: { id, email, name, createdAt } }`.
+- **`PATCH /api/users/me`** `{ name }` → güncellenmiş profili aynı biçimde döner.
+
+Notlar:
+
+- **Hangi kullanıcı?** Sorunun tek cevabı trusted session'dır (`requireUser()` → `user.id`).
+  Endpoint başka bir kullanıcıyı hedefleyecek parametre KABUL ETMEZ; body'deki `userId`/`email`
+  okunmaz bile.
+- **Güncellenebilir tek alan `name`'dir** ve bu kısıtlama filtreleme ile değil YAPISAL olarak
+  sağlanır: servis, gelen `input` nesnesini Prisma'ya geçirmez; yalnızca doğruladığı `name`
+  değerini açıkça yazar. Body'ye `email`/`passwordHash`/`credentialsChangedAt` eklemek hiçbir
+  etki yaratmaz (regresyon testi: `security/user-profile-security.spec.ts` → "body'deki ekstra
+  alanlar YOK SAYILIR").
+- **E-posta bu endpoint'ten değiştirilemez:** hem giriş kimliği hem `@unique` olduğu için
+  değişimi yeni adrese onay maili gerektirir — ayrı bir issue'nun konusudur.
+- **Yanıt alan allowlist'i dardır** (`profileSelect`): `passwordHash`, `credentialsChangedAt`,
+  `emailVerified` yanıta ASLA girmez. Yeni bir alan eklenmeden önce "bu bilgi client'a gitmeli
+  mi?" sorusu yanıtlanmalıdır.
+- **Doğrulama:** `name` trim'lenir ve 2–100 karakter olmalıdır (`src/lib/users/validation.ts`).
+  Uzunluk kontrolü trim SONRASI yapılır — aksi halde yalnızca boşluktan oluşan bir girdi geçerdi.
+  Karakter kümesi bilinçli olarak kısıtlanmaz: isimler uluslararasıdır ve regex ile "geçerli
+  isim" tanımlamaya çalışmak meşru kullanıcıları dışlar.
+- **`/api/auth/me` ile farkı:** `/api/auth/me` oturumun (JWT'nin) içeriğini yansıtır;
+  `/api/users/me` veritabanının güncel halini döner. ⚠️ **Bilinen tutarsızlık:** JWT'deki `name`
+  sign-in anında sabitlendiği için, profil güncellendikten sonra `/api/auth/me` bir sonraki
+  girişe kadar ESKİ adı göstermeye devam eder. Bu, bu issue'nun kapsamı dışında bırakıldı;
+  çözümü, `jwt` callback'inin zaten her istekte yaptığı DB sorgusuna `name`'i eklemek olurdu
+  (bkz. `src/lib/auth/config.ts`) — session revocation yolunu etkilediği için ayrı bir issue
+  ile ele alınmalıdır.
+- **Rate limit yoktur (bilinçli):** Endpoint authenticated'dır, credential doğrulamaz veya
+  değiştirmez, e-posta göndermez ve pahalı bir hesaplama yapmaz — yani `change-password`'ün
+  aksine burada brute-force edilebilecek bir sır yoktur. Gelecekte kötüye kullanım görülürse
+  mevcut `checkRateLimit()` ile tek satırda eklenebilir.
+- **Audit log yazılmaz (bilinçli):** İsim değişikliği güvenlik açısından kritik bir olay
+  değildir; audit kataloğu (`src/lib/audit/actions.ts`) auth/tenant/membership olaylarına
+  odaklıdır. Profil alanları hassaslaşırsa (ör. e-posta değişimi eklenirse) bu yeniden
+  değerlendirilmelidir.
+
 ## Rate Limiting (Issue #27)
 
 Auth ve tenant-creation endpoint'leri, brute-force / otomatik spam trafiğine karşı IP + endpoint

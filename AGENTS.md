@@ -1,8 +1,12 @@
-# CLAUDE.md
+# AGENTS.md
 
-Bu dosya, bu repository üzerinde çalışan Claude Code oturumları için **bağlayıcı** kuralları
-tanımlar ve varsayılan davranışın üstündedir. Amaç: üretim kalitesinde, güvenli ve mevcut kodla
-tutarlı değişiklikler üretmek.
+Bu dosya, bu repository üzerinde çalışan kodlama ajanları (OpenAI Codex ve `AGENTS.md` okuyan
+diğer ajanlar) için **bağlayıcı** kuralları tanımlar ve varsayılan davranışın üstündedir. Amaç:
+üretim kalitesinde, güvenli ve mevcut kodla tutarlı değişiklikler üretmek.
+
+> Bu dosya, Claude Code için tutulan `CLAUDE.md` ile **aynı** proje kurallarını taşır; yalnızca
+> ajan-özgü çalışma biçimi bölümü farklıdır. Kurallardan biri değişirse **her iki dosya da aynı
+> commit içinde** güncellenmelidir. Kuralların yetkili kaynağı `docs/` altındaki dosyalardır.
 
 Derinlemesine referanslar (gerektiğinde oku, ezberden davranma):
 
@@ -57,7 +61,9 @@ npm run test:e2e              # gerçek Chromium
 ```
 
 Integration/security/e2e için çalışan bir PostgreSQL ve `.env` içinde `DATABASE_URL` +
-`AUTH_SECRET` gerekir.
+`AUTH_SECRET` gerekir. Ağ erişimi veya Docker olmayan bir sandbox'ta bu suite'ler
+çalıştırılamaz — o durumda `lint` + `typecheck` çalıştır ve **hangi doğrulamayı
+yapamadığını açıkça yaz**.
 
 ## 4. Mutlak kurallar
 
@@ -146,29 +152,37 @@ Branch: `feature/<issue-no>-<slug>` · `fix/<konu>` · `docs/<konu>` · `chore/<
 Commit: Conventional Commits; başlık ≤72 karakter ve **ASCII** (Türkçe karakter yok); gövde
 Türkçe ve kararın gerekçesini, reddedilen alternatifi, bilinen sınırları, `(Issue #N)`'i içerir.
 
-PR: `main`'e; şablonu doldur; altı CI job'ı yeşil olmalı; yeni bir güvenlik kararı varsa
-`README.md`'ye gerekçesiyle yaz.
+PR: `main`'e; `.github/pull_request_template.md` şablonunu doldur; altı CI job'ı (`lint`,
+`typecheck`, `build`, `integration`, `e2e`, `security`) yeşil olmalı; yeni bir güvenlik kararı
+varsa `README.md`'ye gerekçesiyle yaz.
 
 Definition of Done listesi: `docs/workflow.md`.
 
-## 8. Claude Code oturum kuralları
+## 8. Ajan çalışma kuralları
 
-- **Doğrulanmamış iş "bitti" değildir.** Bir değişikliği tamamlandı diye raporlamadan önce en az
-  `npm run lint` + `npm run typecheck` + ilgili test suite'ini çalıştır. Çalıştıramadıysan (ör.
-  DB yok) bunu **açıkça söyle**; "geçiyor" deme, çıktı uydurma.
-- **Test kırmızıysa bunu bildir.** Başarısız çıktıyı özetle; sessizce atlatma, `test.skip` ekleme,
-  assertion gevşetme, `--no-verify` kullanma.
-- **Kapsam disiplini.** Yol üstünde gördüğün ilgisiz sorunu düzeltme; PR açıklamasında not et.
-  Alakasız formatlama/refactor diff'i kirletir.
-- **Değiştirmeden önce oku.** Bir dosyayı düzenlemeden önce oku; üzerine yazmadan önce içeriğini
-  bil. Silme/üzerine yazma işlemlerinde hedefi doğrula.
+- **Plan yap, sonra uygula.** Birden fazla dosyaya dokunan işlerde önce kısa bir plan çıkar;
+  adımları sırayla tamamla ve durumunu güncel tut.
+- **Doğrulanmamış iş "bitti" değildir.** En az `npm run lint` + `npm run typecheck` ve mümkünse
+  ilgili test suite'ini çalıştır. Sandbox kısıtı nedeniyle çalıştıramadığını **açıkça yaz**;
+  çıktı uydurma, "geçiyor" deme.
+- **Test kırmızıysa bildir.** Başarısız çıktıyı özetle; `test.skip` ekleyerek, assertion
+  gevşeterek veya `--no-verify` ile atlatma.
+- **Kapsam disiplini.** Yol üstünde gördüğün ilgisiz sorunu düzeltme; çıktında not et. Alakasız
+  formatlama/refactor diff'i kirletir. Dosyaları yeniden formatlayan araçlar çalıştırma.
+- **Değiştirmeden önce oku.** Bir dosyayı düzenlemeden önce oku; hedef dosyanın mevcut içeriğini
+  bilmeden üzerine yazma. Yamalar minimal ve odaklı olsun.
 - **Git güvenliği.** `main`'e commit etme, force push yapma, `reset --hard`/`clean -fd`
-  çalıştırma, commit/push işlemini kullanıcı istemeden yapma. `.env`'i asla `git add` etme.
+  çalıştırma; commit/push işlemini kullanıcı istemeden yapma. `.env`'i asla `git add` etme.
+- **Etkileşimli komut çalıştırma.** Onay bekleyen veya editör açan komutlar (`git rebase -i`,
+  `prisma studio`, watch modundaki süreçler) sandbox'ta asılı kalır. Uzun süren komutlara
+  makul bir timeout ver.
+- **Ağ erişimi varsayma.** `npm install` gerektiren bir çözüm önermeden önce bunun mümkün olup
+  olmadığını kontrol et; zaten yeni bağımlılık açık onay gerektirir.
+- **Windows ortamı.** Geliştirme makinesi Windows'tur; yollar ters bölü içerebilir, satır sonu
+  CRLF'tir (`core.autocrlf=true`). Satır sonlarını topluca değiştiren düzenlemeler yapma.
 - **Belirsizlikte:** cevabı olmayan kararlar için önce bağımsız işleri bitir, sonra tek ve net bir
   soru sor. Bir invariant'ı gevşetmen gerektiğini düşünüyorsan **kod yazmadan önce sor** — bu tür
   kararlar kullanıcıya aittir.
-- **Bilmiyorsan uydurma.** API imzası, Next.js davranışı veya Prisma semantiği konusunda emin
-  değilsen `node_modules/next/dist/docs/` veya mevcut koddan doğrula.
 - **Türkçe yaz.** Kullanıcıya yanıtlar, yorumlar ve dokümantasyon Türkçe; tanımlayıcılar İngilizce.
 
 ## 9. Yapma listesi
@@ -186,12 +200,10 @@ Definition of Done listesi: `docs/workflow.md`.
 - Yeni bir CORS yapılandırmasını (özellikle `credentials` ile) README'deki CSRF bölümünü okumadan
   ekleme.
 
-<!-- BEGIN:nextjs-agent-rules -->
+## 10. Next.js sürüm uyarısı
 
-# This is NOT the Next.js you know
-
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
-
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
-
-<!-- END:nextjs-agent-rules -->
+Bu Next.js 16'dır ve eğitim verindeki Next.js'ten farklı olabilir: API'ler, konvansiyonlar ve
+dosya yapısı değişmiş olabilir. Kod yazmadan önce `node_modules/next/dist/docs/` altındaki ilgili
+rehberi oku (özellikle `01-app/01-getting-started/15-route-handlers.md`,
+`01-app/02-guides/authentication.md`, `01-app/02-guides/data-security.md`) ve deprecation
+uyarılarını dikkate al.

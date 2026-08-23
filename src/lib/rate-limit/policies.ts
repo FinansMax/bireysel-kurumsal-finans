@@ -19,6 +19,12 @@
  *   çağrılabilmesini engellemektir. FORGOT_PASSWORD'dan (5) daha geniş tutulmasının nedeni,
  *   meşru bir kullanıcının yeni şifresi şifre politikasına takıldığında (400) aynı pencerede
  *   birkaç kez tekrar denemesinin normal olmasıdır.
+ * - CHANGE_PASSWORD 10/15dk: Authenticated bir endpoint olmasına RAĞMEN limit gerekir —
+ *   endpoint mevcut şifreyi doğruladığı için, çalınmış bir session cookie'siyle mevcut şifreyi
+ *   online brute-force etme girişimi gerçek bir tehdittir (session hırsızlığını tam hesap
+ *   devralmaya çeviren adım tam olarak budur). RESET_PASSWORD ile aynı değerler seçildi: her
+ *   ikisi de credential değiştiren, meşru kullanımı nadir olan ve şifre politikası hatası
+ *   nedeniyle birkaç kez tekrar denenebilen akışlardır.
  * - TENANT_CREATE 10/10dk: Authenticated bir kullanıcı meşru şekilde birden fazla tenant
  *   oluşturabilir (ör. hem kişisel hem kurumsal); 10/10dk otomatik toplu tenant oluşturmayı
  *   sınırlarken gerçek kullanımı kısıtlamaz.
@@ -38,6 +44,7 @@ export const RATE_LIMIT_POLICIES = {
   SIGNUP: { limit: 5, windowMs: 10 * MINUTES },
   FORGOT_PASSWORD: { limit: 5, windowMs: 15 * MINUTES },
   RESET_PASSWORD: { limit: 10, windowMs: 15 * MINUTES },
+  CHANGE_PASSWORD: { limit: 10, windowMs: 15 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
 } as const satisfies Record<string, RateLimitPolicy>;
 
@@ -51,5 +58,6 @@ export const RATE_LIMIT_BUCKETS = {
   SIGNUP: "auth:sign-up",
   FORGOT_PASSWORD: "auth:forgot-password",
   RESET_PASSWORD: "auth:reset-password",
+  CHANGE_PASSWORD: "auth:change-password",
   TENANT_CREATE: "tenant:create",
 } as const;

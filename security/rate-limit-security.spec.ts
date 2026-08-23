@@ -439,3 +439,59 @@ test.describe("Rate limiting — reset-password", () => {
     expect(responseB.status()).toBe(400); // rate limit DEĞİL, normal "geçersiz token"
   });
 });
+
+test.describe("Rate limiting — change-password", () => {
+  /**
+   * `change-password` (Issue #33) authenticated bir endpoint'tir, ama limiti authentication'dan
+   * ÖNCE uygulanır. Bu test tam olarak bunu kanıtlar: hiç session göndermeden yapılan istekler
+   * (hepsi 401 döner) kotayı tüketir ve limit dolduğunda 401 yerine 429 gelmeye başlar. Yani
+   * çalınmış bir session cookie'siyle mevcut şifreyi brute-force etme girişimi, pahalı scrypt
+   * doğrulamasına hiç ulaşamadan durdurulur.
+   */
+  test("limit aşımı (10/15dk) → 429 ve limit authentication'dan önce uygulanıyor", async ({
+    request,
+  }) => {
+    const ip = uniqueTestClientIp();
+    const body = { currentPassword: "S3curePassw0rd!", newPassword: "N3wSecurePassw0rd!" };
+
+    for (let i = 0; i < RATE_LIMIT_POLICIES.CHANGE_PASSWORD.limit; i++) {
+      const response = await request.post("/api/auth/change-password", {
+        headers: { "x-forwarded-for": ip },
+        data: body,
+      });
+      // Session yok → 401. Buna rağmen kota tükeniyor.
+      expect(response.status()).toBe(401);
+    }
+
+    const blocked = await request.post("/api/auth/change-password", {
+      headers: { "x-forwarded-for": ip },
+      data: body,
+    });
+    expect(blocked.status()).toBe(429);
+    expect(await blocked.json()).toEqual({ error: "Too many requests. Please try again later." });
+    expect(blocked.headers()["retry-after"]).toBeTruthy();
+  });
+
+  test("farklı IP'ler birbirinin change-password kotasını tüketmez", async ({ request }) => {
+    const ipA = uniqueTestClientIp();
+    const body = { currentPassword: "S3curePassw0rd!", newPassword: "N3wSecurePassw0rd!" };
+
+    for (let i = 0; i < RATE_LIMIT_POLICIES.CHANGE_PASSWORD.limit; i++) {
+      await request.post("/api/auth/change-password", {
+        headers: { "x-forwarded-for": ipA },
+        data: body,
+      });
+    }
+    const blockedA = await request.post("/api/auth/change-password", {
+      headers: { "x-forwarded-for": ipA },
+      data: body,
+    });
+    expect(blockedA.status()).toBe(429);
+
+    const responseB = await request.post("/api/auth/change-password", {
+      headers: { "x-forwarded-for": uniqueTestClientIp() },
+      data: body,
+    });
+    expect(responseB.status()).toBe(401); // rate limit DEĞİL, normal "authentication yok"
+  });
+});

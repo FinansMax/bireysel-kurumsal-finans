@@ -152,6 +152,45 @@ Kimlik doğrulama altyapısı [Auth.js](https://authjs.dev/) v5 (`next-auth`) il
   bir sağlayıcıyla değiştirilebilecek minimal bir konsol/dosya tabanlı implementasyon kullanılır.
   Reset sonrası, reset'ten önce üretilmiş JWT session'ları artık otomatik iptal edilir — bkz.
   aşağıdaki "Session Revocation".
+- **Şifre değiştirme (authenticated):** `POST /api/auth/change-password`
+  (`{ currentPassword, newPassword }`) (`src/lib/auth/change-password.ts`, Issue #33). "Şifremi
+  unuttum" akışından (#7) farklıdır: buradaki kanıt bir e-posta token'ı değil, kullanıcının
+  MEVCUT şifresidir.
+
+  - **Neden mevcut şifre doğrulanır:** Session cookie'si çalınmış bir saldırgan, bu adım
+    olmadan şifreyi değiştirip hesabı kalıcı olarak devralabilirdi. Bu kontrol, session
+    hırsızlığı ile tam hesap devralma arasındaki adımı kapatır (regresyon testi:
+    `security/change-password-security.spec.ts` → "geçerli session + YANLIŞ mevcut şifre").
+  - **Kontrol sırası:** Önce mevcut şifre doğrulanır, SONRA yeni şifre politikası kontrol
+    edilir — mevcut şifresini kanıtlayamayan bir çağrıya hiçbir ek geri bildirim verilmez.
+    (Password reset'te sıra terstir: orada erken doğrulama, tek kullanımlık token'ın zayıf bir
+    şifre yüzünden boşa yanmasını engeller; burada yakılacak token yoktur.)
+  - **Bilgi sızdırmama:** Yanlış şifre / eksik-boş girdi / şifresiz hesap (`passwordHash` null,
+    ileride OAuth ile oluşturulmuş hesaplar) durumlarının HEPSİ aynı `401` ve aynı genel mesajı
+    döner. Şifresiz bir hesaba bu akışla şifre BELİRLENEMEZ — doğrulanacak mevcut şifre yoktur.
+  - **Yan etkisizlik:** Mevcut şifre yanlışsa veya yeni şifre politikaya takılıyorsa hiçbir
+    yazma yapılmaz; özellikle `credentialsChangedAt` bumplanmaz. Aksi halde geçersiz bir istek,
+    kullanıcının tüm oturumlarını düşürebilirdi.
+  - **Audit:** Başarılı değişiklik `AUTH_PASSWORD_CHANGED`, başarısız deneme
+    `AUTH_PASSWORD_CHANGE_FAILURE` olarak kaydedilir. Login failure'ın AKSİNE burada
+    `actorUserId` doldurulur (istek zaten authenticated'dır, enumeration sinyali taşımaz); bir
+    hesapta arka arkaya gelen failure kaydı, çalınmış session ile şifre tahmini girişiminin en
+    doğrudan göstergesidir.
+  - **Eşzamanlılık:** "Oku → scrypt ile doğrula → yaz" arasında teorik bir TOCTOU penceresi
+    vardır (scrypt doğrulaması SQL'e indirgenemez). Bilinçli olarak kabul edilmiştir: bu
+    pencereyi kullanabilecek tek senaryo eşzamanlı bir password reset veya ikinci bir
+    change-password isteğidir; her ikisi de zaten hesap sahibinin kendi yetkisiyle yaptığı
+    meşru credential değişiklikleridir, sonuç "son yazan kazanır" olur ve yetki yükselmesi
+    doğmaz. Pahalı scrypt çağrısını bir DB transaction'ı içinde tutmak bu nedenle gereksiz
+    maliyet olurdu.
+  - **⚠️ Kullanıcı kendi oturumundan da düşer:** Değişiklik `credentialsChangedAt`'i bumpladığı
+    için, isteği yapan kullanıcının KENDİ session'ı da geçersizleşir ve yeniden giriş yapması
+    gerekir. Stateless JWT mimarisinde "bu isteği yapan token"ı ayrıcalıklı kılmanın bir yolu
+    yoktur (sunucu tarafında token kaydı tutulmadığından, tek tek token'lar birbirinden ayırt
+    edilemez); "diğer tüm oturumları kapat ama bunu açık tut" davranışı ancak session store
+    eklenirse mümkün olur. Yanıt mesajı bu yüzden açıkça "Please sign in again." der.
+  - **Kapsam dışı (bilinçli):** "Yeni şifre eskisiyle aynı olamaz" kuralı bu issue'nun kabul
+    kriterlerinde yoktur ve eklenmemiştir; gerekirse ayrı bir issue ile değerlendirilir.
 - **Kapsam dışı:** Route/endpoint bazlı yetkilendirme (RBAC) ve tenant seçimi ayrı issue'ların
   kapsamındadır.
 
@@ -189,11 +228,11 @@ stateless Auth.js JWT mimarisi korunur.
   etkilenmez).
 - **Rol/membership değişiklikleri bu mekanizmayı TETİKLEMEZ** — sadece credential (şifre)
   değişiklikleri.
-- **Bağımlılık notu:** Authenticated (login sonrası, mevcut şifreyi bilerek) password change
-  endpoint'i bu repo'da HENÜZ mevcut değil (Epic 3 kapsamında beklemektedir). Password reset
-  (#7) akışı bu issue kapsamında tam entegre edilmiştir; `updateUserPassword()` reusable bir
-  primitive olarak tasarlanmıştır ve authenticated password change eklendiğinde AYNI fonksiyon
-  kullanılmalıdır.
+- **Şifre değiştiren tüm akışlar bu mekanizmaya bağlıdır:** Password reset (#7) ve authenticated
+  password change (#33) — her ikisi de `updateUserPassword()` üzerinden yazar, dolayısıyla ikisi
+  de session revocation'ı tetikler. Şifre hash'ini değiştiren yeni bir akış eklenirse kendi
+  `prisma.user.update()` çağrısını YAZMAMALI, aynı fonksiyonu kullanmalıdır; aksi halde
+  `credentialsChangedAt` bumplanmaz ve revocation o akış için sessizce devre dışı kalır.
 
 ## Rate Limiting (Issue #27)
 
@@ -209,7 +248,14 @@ bazlı bir sliding-window rate limiter ile korunur (`src/lib/rate-limit/`).
   | `POST /api/auth/signup` | 5 / 10 dk | `auth:sign-up` |
   | `POST /api/auth/forgot-password` | 5 / 15 dk | `auth:forgot-password` |
   | `POST /api/auth/reset-password` | 10 / 15 dk | `auth:reset-password` |
+  | `POST /api/auth/change-password` | 10 / 15 dk | `auth:change-password` |
   | `POST /api/tenants` (tenant oluşturma) | 10 / 10 dk | `tenant:create` |
+
+  `change-password`, listedeki tek **authenticated** credential-değiştirme endpoint'idir; limiti
+  yine de authentication'dan ÖNCE uygulanır, çünkü korunmak istenen tehdit "çalınmış bir session
+  cookie'siyle mevcut şifreyi online brute-force etmek"tir (bkz. Issue #33). Limit IP bazlıdır
+  (kullanıcı bazlı değil) — mevcut `checkRateLimit()` sözleşmesiyle tutarlı kalmak için; kullanıcı
+  bazlı bir bucket gerekirse ayrı bir issue ile eklenmelidir.
 
 - **Kullanım:** `checkRateLimit(request, bucket, policy)` (`src/lib/rate-limit/guard.ts`) mevcut
   `requireUser()` / `requirePermission()` guard'larıyla AYNI deseni izler: limit aşılmışsa hazır

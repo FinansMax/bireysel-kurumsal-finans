@@ -40,6 +40,7 @@ kaldırmadan doğrudan çağrılabilir.
 | `src/lib/authz/` | Permission sabitleri, rol→izin matrisi, `requirePermission()` guard'ı |
 | `src/lib/tenancy/scope.ts` | `tenantScoped()` — tenant izolasyonunun tek helper'ı |
 | `src/lib/tenants/` | Tenant, membership, davet, aktif tenant context'i, doğrulama |
+| `src/lib/finance/` | Finansal modeller (`Account`, sonraki issue'larda `Transaction`, ...) |
 | `src/lib/audit/` | Audit action sabitleri, sanitization, `writeAuditLog()` |
 | `src/lib/rate-limit/` | `RateLimiter` interface'i, in-memory limiter, policy kataloğu, guard |
 | `src/lib/prisma.ts` | PrismaClient singleton (dev'de hot-reload güvenli) |

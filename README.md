@@ -704,3 +704,51 @@ Bir tenant'a yeni kullanıcı davet etme akışı (`src/lib/tenants/invitation.t
 - Gerçek e-posta gönderimi kapsam dışıdır; `InvitationSender` interface'i
   (`src/lib/tenants/invitation-email.ts`) arkasında, `EmailSender` (şifre sıfırlama) ile AYNI
   desende minimal bir konsol/dosya tabanlı implementasyon kullanılır.
+
+## Finansal Hesaplar (Issue #46)
+
+İlk finansal model: `Account` (banka hesabı / kasa). Şema `prisma/schema.prisma`, iş mantığı
+`src/lib/finance/account.ts`, endpoint'ler `GET/POST /api/tenants/[tenantId]/accounts` ve
+`PATCH/DELETE /api/tenants/[tenantId]/accounts/[accountId]`.
+
+### Para nasıl taşınır ve saklanır
+
+- **DB'de `Decimal(19, 4)`**, `Float`/`number` DEĞİL (invariant #10). `number` ikili kayan
+  noktadır (`0.1 + 0.2 !== 0.3`); finansal bir üründe bu kabul edilemez.
+- **API sözleşmesinde string.** Hem girdi hem çıktı: `"1234.5600"`. Girdide `number`
+  **reddedilir** (`400`) — bir kez `number`'a dönüşen tutar `Decimal`e çevrilse bile
+  yuvarlanmış olabilir. Çıktıda dönüşüm tek bir yerde (`toView()`) yapılır ki sözleşme
+  Prisma'nın JSON serileştirme davranışına bağlı kalmasın.
+- **Ondalık ayırıcı yalnızca `.`**; "1.234,56" gibi yerelleştirilmiş biçimler API'nin işi
+  değildir (biçimlendirme sunum katmanına aittir).
+- **Negatif bakiye serbesttir**: bir hesap eksiye düşebilir, kredi kartı zaten negatif taşır.
+- **Para birimi ayrı alandır** (ISO 4217, 3 harf). Doğrulama biçimseldir; tam ISO listesi bir
+  bağımlılık ya da elle bakımı gereken bir tablo gerektirirdi ve çoklu kur/dönüşüm bu issue'nun
+  kapsamı dışıdır.
+
+### Yetki ve izolasyon
+
+- **`VIEW_ACCOUNTS` ile `MANAGE_ACCOUNTS` ayrı izinlerdir.** MEMBER hesapları **görür** ama
+  oluşturamaz/güncelleyemez/silemez; ADMIN ve OWNER yönetebilir. Gerekçe: finansal kayıtları
+  okumak ekibin günlük işidir, hesap açmak/silmek ve bakiyeyi elle değiştirmek yönetim işidir.
+- **Her sorgu `tenantScoped()` üzerinden geçer**, mutation'lar `updateMany`/`deleteMany` +
+  `count === 1` ile yapılır — yalnız-ID ile `update`/`delete` yoktur. Pattern koruması:
+  `integration/tenant-scope-pattern.spec.ts` (artık `account.ts`'i de kapsıyor).
+- **Cross-tenant ID ile var olmayan ID aynı yanıtı alır** (`404`, aynı gövde) — enumeration
+  engeli.
+- Trusted `tenantId` daima `requirePermission()` context'inden gelir; body'deki `tenantId`/`id`
+  alanları yok sayılır (regresyon testi: `security/account-security.spec.ts`).
+
+### Diğer kararlar
+
+- **`@@unique([tenantId, name])`**: aynı tenant'ta aynı isimde iki hesap olamaz. "Önce kontrol
+  et sonra yaz" yarışı yerine unique constraint'e güvenilir; P2002 → `409`. Kıyas büyük/küçük
+  harfe duyarlıdır (case-insensitive unique ayrı bir index/collation gerektirir).
+- **`AccountType` bir Prisma enum'ıdır** (`BANK`, `CASH`): küme küçük ve kararlı, yeni tür
+  eklemek migration gerektirir. (Karşılaştır: `AuditLog.action` serbest `String`'tir çünkü o
+  küme sürekli büyür.)
+- **Audit:** `ACCOUNT_CREATED` / `ACCOUNT_UPDATED` / `ACCOUNT_DELETED`. Güncellemede metadata
+  yalnızca **hangi alanların** değiştiğini tutar, yeni değerleri değil — audit log finansal
+  tutarların ikinci bir kopyası değildir.
+- **Rate limit yoktur:** bu endpoint'ler authenticated ve tenant-scoped'tur; mevcut politika
+  kataloğu (`src/lib/rate-limit/policies.ts`) public/pahalı endpoint'ler içindir.

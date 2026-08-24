@@ -20,6 +20,10 @@ export const PERMISSIONS = {
   SEND_INVITE: "invites:send",
   CANCEL_INVITE: "invites:cancel",
   VIEW_AUDIT_LOG: "audit-log:view",
+  // Finansal hesaplar (Issue #46). GÖRÜNTÜLEME ile YÖNETİM ayrı izinlerdir: tenant'ın her
+  // üyesi hesapları görebilir, ama oluşturma/güncelleme/silme yönetim yetkisi ister.
+  VIEW_ACCOUNTS: "accounts:view",
+  MANAGE_ACCOUNTS: "accounts:manage",
 } as const;
 
 /** Geçerli permission string literal'lerinin union tipi — rastgele string kabul edilmez. */
@@ -47,6 +51,8 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.SEND_INVITE,
     PERMISSIONS.CANCEL_INVITE,
     PERMISSIONS.VIEW_AUDIT_LOG,
+    PERMISSIONS.VIEW_ACCOUNTS,
+    PERMISSIONS.MANAGE_ACCOUNTS,
   ],
   [MembershipRole.ADMIN]: [
     PERMISSIONS.VIEW_TENANT,
@@ -56,8 +62,16 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.SEND_INVITE,
     PERMISSIONS.CANCEL_INVITE,
     PERMISSIONS.VIEW_AUDIT_LOG,
+    PERMISSIONS.VIEW_ACCOUNTS,
+    PERMISSIONS.MANAGE_ACCOUNTS,
   ],
-  [MembershipRole.MEMBER]: [PERMISSIONS.VIEW_TENANT, PERMISSIONS.VIEW_MEMBERS],
+  // MEMBER hesapları GÖRÜR ama yönetemez (Issue #46): finansal kayıtları okumak ekibin
+  // günlük işidir; hesap açmak/silmek ve bakiyeyi elle değiştirmek yönetim işidir.
+  [MembershipRole.MEMBER]: [
+    PERMISSIONS.VIEW_TENANT,
+    PERMISSIONS.VIEW_MEMBERS,
+    PERMISSIONS.VIEW_ACCOUNTS,
+  ],
 };
 
 /** Bir rolün belirli bir izne sahip olup olmadığını kontrol eder. Tamamen pure'dur. */

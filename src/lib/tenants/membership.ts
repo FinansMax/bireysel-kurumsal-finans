@@ -2,6 +2,7 @@ import { MembershipRole, Prisma } from "@prisma/client";
 
 import { AUDIT_ACTIONS, AUDIT_TARGET_TYPES } from "@/lib/audit/actions";
 import { writeAuditLog } from "@/lib/audit/write-audit-log";
+import { runSerializable, SerializationConflictError } from "@/lib/db/serializable";
 import { prisma } from "@/lib/prisma";
 import { tenantScoped } from "@/lib/tenancy/scope";
 
@@ -41,7 +42,11 @@ export async function listMembers(tenantId: string): Promise<MemberView[]> {
 
 export type UpdateRoleResult =
   | { ok: true; member: MemberView }
-  | { ok: false; status: 400 | 403 | 404 | 409; error: string };
+  // 503: eşzamanlı yükte transaction serialize edilemedi ve yeniden denemeler tükendi
+  // (Issue #122). GEÇİCİ bir durumdur — 409 (iş kuralı ihlali) ile karıştırılmamalıdır.
+  | { ok: false; status: 400 | 403 | 404 | 409 | 503; error: string };
+
+const SERIALIZATION_CONFLICT_ERROR = "Temporary write conflict, please retry";
 
 /**
  * Rolü günceller. Permission kontrolü (kimin bu işlemi çağırabileceği) route seviyesinde
@@ -50,7 +55,9 @@ export type UpdateRoleResult =
  *
  * Hedef membership + ownership/son-OWNER kontrolü + update, tek bir Serializable transaction
  * içinde yapılır: iki eşzamanlı istek aynı anda "son OWNER" durumunu okuyup ikisi de downgrade
- * edemez (Prisma/Postgres serialization hatası, kaybeden isteği reddeder).
+ * edemez (Prisma/Postgres serialization hatası, kaybeden isteği reddeder). Kaybeden istek
+ * `runSerializable()` tarafından OTOMATİK YENİDEN DENENİR (Issue #122) — serialization failure
+ * geçici bir durumdur, kullanıcıya 500 olarak yansıtılmamalıdır. Denemeler tükenirse 503.
  *
  * Ownership/privilege-escalation koruması (Issue #12):
  * - ADMIN hiç kimseyi (kendisi dahil) OWNER yapamaz.
@@ -80,7 +87,7 @@ export async function updateMemberRole(
   try {
     let previousRole: MembershipRole | undefined;
 
-    const member = await prisma.$transaction(
+    const member = await runSerializable(
       async (tx) => {
         // Hem id hem tenantId birlikte filtrelenir (tenantScoped()): başka tenant'a ait
         // bir membershipId burada asla eşleşmez (tenant isolation, Issue #13).
@@ -125,7 +132,6 @@ export async function updateMemberRole(
           select: memberSelect,
         });
       },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
 
     // Audit yazımı BİLEREK transaction'ın DIŞINDA ve sadece commit olduktan SONRA yapılır
@@ -150,11 +156,16 @@ export async function updateMemberRole(
     if (error instanceof LastOwnerError) {
       return { ok: false, status: 409, error: "Cannot change role of the last remaining OWNER" };
     }
+    if (error instanceof SerializationConflictError) {
+      return { ok: false, status: 503, error: SERIALIZATION_CONFLICT_ERROR };
+    }
     throw error;
   }
 }
 
-export type RemoveMemberResult = { ok: true } | { ok: false; status: 403 | 404 | 409; error: string };
+export type RemoveMemberResult =
+  | { ok: true }
+  | { ok: false; status: 403 | 404 | 409 | 503; error: string };
 
 /**
  * Üyeyi tenant'tan çıkarır; aynı Serializable transaction + ownership/son-OWNER koruması
@@ -168,7 +179,7 @@ export async function removeMember(
   actorRole: MembershipRole,
 ): Promise<RemoveMemberResult> {
   try {
-    await prisma.$transaction(
+    await runSerializable(
       async (tx) => {
         const target = await tx.membership.findFirst({
           where: tenantScoped(tenantId, { id: membershipId }),
@@ -219,7 +230,6 @@ export async function removeMember(
           data: { cancelledAt: new Date() },
         });
       },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
 
     return { ok: true };
@@ -232,6 +242,9 @@ export async function removeMember(
     }
     if (error instanceof LastOwnerError) {
       return { ok: false, status: 409, error: "Cannot remove the last remaining OWNER" };
+    }
+    if (error instanceof SerializationConflictError) {
+      return { ok: false, status: 503, error: SERIALIZATION_CONFLICT_ERROR };
     }
     throw error;
   }

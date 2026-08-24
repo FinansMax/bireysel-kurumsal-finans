@@ -8,6 +8,12 @@ import type { ReactNode } from "react";
  * (bkz. Issue #34 "Yeni ağır UI kütüphanesi zorunlu değil"). Yalnızca iki ekran arasında
  * birebir tekrar eden markup'ı toplar. Bu bileşenler saf sunumdur — state, fetch veya
  * yönlendirme içermez; o mantık sayfaların kendisindedir.
+ *
+ * KAPSAM NOTU (Issue #42): `TextField`/`FormError`/`SubmitButton` artık kabuk içindeki
+ * formlarda da (ör. tenant oluşturma) kullanılıyor; `AuthCard`/`AuthLink` ise hâlâ yalnızca
+ * public auth ekranlarına aittir. Dosya adı bilinçli olarak DEĞİŞTİRİLMEDİ: yeniden
+ * adlandırmak dört auth ekranının import satırını #42'nin diff'ine sokardı. Üçüncü bir form
+ * ekranı geldiğinde (ör. #43) generic parçaları ayrı bir dosyaya taşımak doğru olur.
  */
 
 export function AuthCard({
@@ -45,15 +51,23 @@ export function TextField({
   value,
   onChange,
   disabled,
+  required = true,
+  hint,
 }: {
   id: string;
   label: string;
-  type: "email" | "password";
+  type: "email" | "password" | "text";
   autoComplete: string;
   value: string;
   onChange: (value: string) => void;
   disabled: boolean;
+  /** Varsayılan `true` — auth ekranlarındaki tüm alanlar zorunludur (davranış değişmedi). */
+  required?: boolean;
+  /** Alanın altında gösterilen açıklama (ör. "boş bırakılırsa isimden türetilir"). */
+  hint?: string;
 }) {
+  const hintId = hint ? `${id}-hint` : undefined;
+
   return (
     <div className="space-y-1.5">
       {/* `htmlFor`/`id` eşleşmesi: etikete tıklamak alanı odaklar ve ekran okuyucular alanı
@@ -66,12 +80,20 @@ export function TextField({
         name={id}
         type={type}
         autoComplete={autoComplete}
-        required
+        required={required}
+        // `aria-describedby`: açıklama metni ekran okuyucuda alanla BİRLİKTE okunur; yalnızca
+        // görsel olarak alt satıra koymak bu bağı kurmazdı.
+        aria-describedby={hintId}
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 outline-none placeholder:text-zinc-400 focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:ring-zinc-800"
       />
+      {hint && (
+        <p id={hintId} className="text-xs text-zinc-500 dark:text-zinc-500">
+          {hint}
+        </p>
+      )}
     </div>
   );
 }

@@ -61,6 +61,16 @@ const ENDPOINT_EXPECTATIONS = [
     mustCall: "/api/auth/reset-password",
     mustNotCall: "resetPassword(",
   },
+  {
+    // Bir AUTH ekranı değildir (Issue #42) ama korunan invariant birebir aynıdır: tenant
+    // oluşturma rate limiti (Issue #27) route seviyesinde uygulanır, `createTenant()`
+    // servisinde değil — servisi bir Server Action'dan doğrudan çağırmak otomatik tenant
+    // üretimine karşı korumayı sessizce baypas ederdi.
+    label: "tenant oluşturma",
+    file: path.join(APP_ROOT, "(app)", "tenants", "new", "create-tenant-form.tsx"),
+    mustCall: "/api/tenants",
+    mustNotCall: "createTenant(",
+  },
 ];
 
 /**
@@ -138,8 +148,12 @@ test.describe("Auth ekranları — rate limit baypasına karşı koruma", () => 
     expect(code).toContain("signOut(");
   });
 
-  for (const { file, mustCall, mustNotCall } of ENDPOINT_EXPECTATIONS) {
-    test(`${path.basename(path.dirname(file))} ekranı servisi doğrudan değil HTTP üzerinden çağırıyor`, () => {
+  for (const expectation of ENDPOINT_EXPECTATIONS) {
+    const { file, mustCall, mustNotCall } = expectation;
+    // Klasör adı ekranı anlatmaya yetmediğinde (`.../tenants/new/`) açık bir etiket verilir.
+    const label = "label" in expectation ? expectation.label : path.basename(path.dirname(file));
+
+    test(`${label} ekranı servisi doğrudan değil HTTP üzerinden çağırıyor`, () => {
       const code = readPageCode(file);
 
       expect(code, `${file} servis fonksiyonunu doğrudan çağırmamalı`).not.toContain(mustNotCall);

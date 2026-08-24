@@ -508,6 +508,32 @@ E2E kanıtı: `e2e/tenant-switcher.spec.ts`. Geçişin gerçekten sunucu tarafı
 kutusundaki değere değil, aktif tenant'a bağlı gerçek bir endpoint'e bakılarak doğrulanır
 (aktif tenant A iken A→200 / B→403, geçişten sonra tersi; hiç seçim yokken 400).
 
+### Çalışma alanı oluşturma ekranı (Issue #42)
+
+`/tenants/new` (`src/app/(app)/tenants/new/`). Kabuk menüsündeki "Yeni Çalışma Alanı"
+bağlantısından erişilir; oluşturan kullanıcı OWNER olur (`createTenant()`).
+
+- **Servis doğrudan çağrılmaz, `POST /api/tenants`'a HTTP isteği atılır.** Tenant oluşturma
+  rate limiti (Issue #27) route seviyesindedir; `createTenant()`'ı bir Server Action'dan
+  çağırmak otomatik tenant üretimine karşı korumayı sessizce baypas ederdi. Regresyon koruması:
+  `integration/auth-ui-pattern.spec.ts` (auth ekranlarıyla aynı tabloya eklendi).
+- **`409` (kullanılan adres) açık bir mesaj gösterir.** Bu, auth ekranlarındaki enumeration
+  duruşuyla çelişmez: orada gizlenen şey bir **hesabın** varlığıydı; slug ise global ve
+  kullanıcıya görünür bir adres parçasıdır, "bu ad alınmış" bilgisi zaten adresin kendisinden
+  öğrenilir.
+- **Boş adres alanı gönderilmez** (`undefined` ile alan tamamen düşer): backend slug'ı isimden
+  türetir. Boş string göndermek "geçersiz slug" dalını tetiklerdi.
+- **Yeni tenant otomatik olarak aktif yapılmaz.** Aktif tenant seçimi kullanıcının açık
+  eylemidir (seçici, Issue #40); oluşturmanın ardından sessizce ikinci bir state değişikliği
+  yapmak, başarısız olması hâlinde açıklaması zor bir yarı-durum bırakırdı.
+- `src/components/auth-form.tsx`'teki `TextField` bu ekran için `type="text"`, opsiyonel alan
+  (`required={false}`) ve açıklama (`hint`, `aria-describedby` ile bağlanır) destekleyecek
+  şekilde genişletildi; auth ekranlarının davranışı değişmedi (varsayılanlar korundu).
+
+E2E kanıtı: `e2e/tenant-create-ui.spec.ts`. Sonuç formun yönlendirmesine değil, bağımsız bir
+okuma yoluna (`GET /api/tenants`) bakılarak doğrulanır: kayıt gerçekten oluştu mu, rol OWNER mı,
+hata durumunda ikinci kayıt oluşmadı mı.
+
 ## Güvenlik Header'ları
 
 Tüm yanıtlara (sayfalar ve `/api/*`, hata yanıtları dahil) `next.config.ts` üzerinden temel

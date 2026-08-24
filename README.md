@@ -752,3 +752,26 @@ Bir tenant'a yeni kullanıcı davet etme akışı (`src/lib/tenants/invitation.t
   tutarların ikinci bir kopyası değildir.
 - **Rate limit yoktur:** bu endpoint'ler authenticated ve tenant-scoped'tur; mevcut politika
   kataloğu (`src/lib/rate-limit/policies.ts`) public/pahalı endpoint'ler içindir.
+
+### Hesap ekranı (Issue #47)
+
+`/accounts` (`src/app/(app)/accounts/`). Aktif çalışma alanının hesaplarını listeler ve yetkili
+role oluşturma formunu gösterir. `/members` ile aynı desen: URL'de `tenantId` yoktur, kaynak
+aktif tenant'tır.
+
+- **Bakiye ham string olarak gösterilir, `Intl.NumberFormat` ile DEĞİL.** Biçimlendirme değeri
+  önce `Number`'a çevirmeyi gerektirir; bu, para için yasak olan kayan nokta dönüşümünü
+  (invariant #10) arayüz katmanından geri getirirdi. Yerelleştirilmiş gösterim, string üzerinde
+  çalışan ayrı bir yardımcı ile ele alınmalıdır — bu issue'nun kapsamı değil.
+- **Boş bakiye alanı gönderilmez** (`undefined`): backend o zaman şemadaki `@default(0)`'ı
+  uygular. Boş string göndermek "geçersiz tutar" dalını tetiklerdi.
+- **Oluşturma formu yalnızca `MANAGE_ACCOUNTS` iznine sahip role render edilir** — bu bir
+  güvenlik kontrolü değil, MEMBER'a kesin 403 alacağı bir form göstermeme tercihidir; asıl
+  kontrol route'taki `requirePermission()`'dır.
+- **Kapsam:** liste + oluşturma. Güncelleme/silme API'si (#46) hazırdır ama arayüzü bilerek bu
+  issue'da yapılmadı; ayrı bir issue gerektirir.
+
+E2E kanıtı: `e2e/accounts-ui.spec.ts` — her sonuç `GET /api/tenants/:id/accounts` ile
+doğrulanır (kayıt gerçekten oluştu mu, bakiye string ve hassasiyeti korunmuş mu, hata
+durumunda kayıt oluşmamış mı); MEMBER için formun hiç render edilmediği ve baypas edilirse
+`403` alındığı ayrıca test edilir.

@@ -21,7 +21,9 @@ src/lib/prisma.ts (PrismaClient singleton) → PostgreSQL
 **Bağımlılık yönü tek yönlüdür.** `src/lib/**` içinden `next/server` import edilmez; iş mantığı
 HTTP'den habersizdir. Tek istisna, HTTP'nin kendisi olan guard'lardır (`src/lib/auth/guard.ts`,
 `src/lib/authz/authorize.ts`, `src/lib/rate-limit/guard.ts`) — bunlar bilinçli olarak hazır
-`NextResponse` döndürür ve route'larda tek satırda kullanılır.
+`NextResponse` döndürür ve route'larda tek satırda kullanılır. Aynı istisnanın sayfa tarafındaki
+karşılığı `src/lib/auth/page-guard.ts`'tir (`requirePageUser()`): 401 yerine `/login`'e
+`redirect()` eder ve yalnızca sunucu bileşenlerinden çağrılır.
 
 Bu ayrımın pratik faydası: iş mantığı `integration/` testlerinde HTTP sunucusu ayağa
 kaldırmadan doğrudan çağrılabilir.
@@ -31,7 +33,9 @@ kaldırmadan doğrudan çağrılabilir.
 | Yol | Sorumluluk |
 | --- | --- |
 | `src/app/api/**/route.ts` | HTTP endpoint'leri (App Router Route Handlers) |
-| `src/app/*.tsx`, `globals.css` | UI (henüz iskelet; Epic 4 kapsamında büyüyecek) |
+| `src/app/*.tsx`, `globals.css` | Public ekranlar (`/login`, `/signup`, şifre sıfırlama) + root layout |
+| `src/app/(app)/` | Korumalı route group: kabuk layout'u + authenticated ekranlar (Issue #39) |
+| `src/components/` | Ekranların paylaştığı saf sunum bileşenleri (design system DEĞİL) |
 | `src/lib/auth/` | Auth.js yapılandırması, credentials, şifre hash, reset, session revocation |
 | `src/lib/authz/` | Permission sabitleri, rol→izin matrisi, `requirePermission()` guard'ı |
 | `src/lib/tenancy/scope.ts` | `tenantScoped()` — tenant izolasyonunun tek helper'ı |

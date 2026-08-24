@@ -401,8 +401,8 @@ Bu invariant `integration/auth-ui-pattern.spec.ts` ile otomatik olarak korunur.
   hata döndürmez. Bu yüzden çağrı `try/catch` içindedir; blok kaldırılırsa rate limit'e takılan
   kullanıcı boş ekranla kalır.
 - Başarılı kayıt sonrası otomatik giriş yapılmaz; kullanıcı `/login`'e yönlendirilir.
-- Giriş sonrası şimdilik `/`'a yönlendirilir — korumalı layout ve navigasyon Issue #39'un
-  kapsamındadır.
+- Giriş sonrası `/dashboard`'a yönlendirilir (korumalı kabuk, Issue #39; bkz. aşağıdaki
+  "Korumalı Kabuk" bölümü).
 
 ### Şifre sıfırlama ekranları (Issue #37)
 
@@ -434,6 +434,51 @@ component'lerdeki form handler'ları hiç çalışmıyordu (form native GET'e d�
 yazıyordu). Bu mismatch baştan beri vardı; client-side JS'e ihtiyaç duyan ilk ekranlar
 eklenene kadar görünmedi. `next.config.ts`'teki `allowedDevOrigins` yalnızca development'ı
 etkiler, production build'de karşılığı yoktur.
+
+## Korumalı Kabuk (Issue #39)
+
+Giriş yapmış kullanıcının gördüğü alan `(app)` route group'unun altındadır
+(`src/app/(app)/layout.tsx` + `src/app/(app)/dashboard/page.tsx`; sunum
+`src/components/app-shell.tsx`). Parantezli klasör adı URL'e yansımaz — `/login`, `/signup`
+gibi public ekranlar root layout'un altında kalır ve kabuğu hiç almaz.
+
+### Oturum kontrolü neden layout'ta "da", sadece layout'ta değil
+
+`requirePageUser()` (`src/lib/auth/page-guard.ts`) hem layout'ta hem de korunan **her sayfada**
+çağrılır. Next.js'in kendi rehberi (`node_modules/next/dist/docs/01-app/02-guides/authentication.md`
+→ "Layouts and auth checks") layout kontrolüne tek başına güvenmemeyi söyler:
+
+- **Partial rendering** nedeniyle layout'lar istemci tarafı gezinmelerde yeniden render
+  **edilmez** — oturum her rota değişiminde kontrol edilmiş olmaz.
+- Bir layout, alt segmentlerin render edilmesini (ve RSC payload'ında görünmesini)
+  **engellemez**; "layout'ta `return null`" bir yetkilendirme mekanizması değildir.
+
+Bu yönlendirme zaten savunmanın son hattı değildir: veriye erişen her API route'u kendi
+`requireUser()`/`requirePermission()` kontrolünü yapar. Sayfa guard'ı bir **UX** kararıdır.
+
+`getCurrentUser()` JWT'yi çözerken session revocation için bir DB sorgusu tetiklediğinden
+(bkz. `callbacks.jwt`), layout + sayfa aynı istekte iki sorgu yapmasın diye sonuç React'in
+`cache()`'i ile paylaşılır.
+
+### Kayda geçen kararlar
+
+- **`?next=<yol>` (callbackUrl) parametresi YOKTUR.** Kullanıcı kontrolündeki bir hedefi
+  yönlendirmede kullanmak, doğrulaması unutulduğu anda **open redirect**'e dönüşen bir
+  yüzeydir. "Giriş sonrası geldiği sayfaya dön" davranışı bu issue'nun kapsamında değildi;
+  eklenirse yalnızca `/` ile başlayan (ve `//` ile başlamayan) yollar kabul edilmelidir.
+- **Kabukta e-posta gösterilir, `session.user.name` değil.** JWT'deki `name` profil
+  güncellemesinden sonra bayat kalıyor (açık hata: Issue #113); e-posta bu endpoint'lerle
+  değiştirilemediği için aynı sorunu taşımaz.
+- **Çıkış düğmesi istemci tarafı `signOut()` kullanır** (login/signup ile aynı gerekçe: sunucu
+  tarafı `signOut()` `Auth()`'u doğrudan çağırıp `skipCSRFCheck` geçer, HTTP route'u hiç
+  çalışmaz). Ayrıca `callbackUrl` ile **tam sayfa** yönlendirme yapılır: yumuşak bir gezinme,
+  Next.js'in istemci router cache'indeki korumalı sayfaları ekranda bırakabilirdi. Regresyon
+  koruması: `integration/auth-ui-pattern.spec.ts`.
+- **Henüz var olmayan menü öğeleri link değildir** (`NAV_ITEMS` içinde `href: null`), devre dışı
+  metin olarak render edilir — link olsalardı kullanıcıyı 404'e götürürlerdi.
+
+E2E kanıtı: `e2e/app-shell.spec.ts` (oturumsuz erişimde yönlendirme + kabuğun hiç render
+edilmemesi, oturumlu erişimde kabuk, çıkış sonrası oturumun gerçekten kapanması).
 
 ## Güvenlik Header'ları
 

@@ -56,7 +56,8 @@ export default function LoginPage() {
 
       // Oturum cookie'si yanıtla birlikte tarayıcıya yazıldı; `refresh()`, sunucu
       // bileşenlerinin yeni oturumla yeniden render edilmesini sağlar.
-      router.push("/");
+      // Hedef `/` değil `/dashboard`: korumalı kabuk Issue #39 ile eklendi.
+      router.push("/dashboard");
       router.refresh();
     } catch {
       // `next-auth/react`'in `signIn`'i, yanıt gövdesinde `url` alanı olmayan durumlarda

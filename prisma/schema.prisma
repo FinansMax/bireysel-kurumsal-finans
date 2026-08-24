@@ -13,6 +13,15 @@ enum MembershipRole {
   MEMBER
 }
 
+// Hesabın türü (Issue #46). Banka API entegrasyonu kapsam dışı olduğu için tür yalnızca
+// sınıflandırma amaçlıdır; davranışsal bir farkı yoktur. Yeni tür eklemek migration gerektirir
+// — bu bilinçlidir: tür kümesi küçük ve kararlıdır (AuditLog.action'daki serbest String
+// tercihiyle karşılaştır; oradaki küme sürekli büyüyor).
+enum AccountType {
+  BANK
+  CASH
+}
+
 model User {
   id                   String    @id @default(cuid())
   email                String    @unique
@@ -44,6 +53,40 @@ model Tenant {
   memberships Membership[]
   invitations TenantInvitation[]
   auditLogs   AuditLog[]
+  accounts    Account[]
+}
+
+// Bir tenant'ın finansal hesabı: banka hesabı veya kasa (Issue #46).
+model Account {
+  id   String      @id @default(cuid())
+  name String
+  type AccountType
+
+  // Para DAİMA Decimal (bkz. docs/security-invariants.md #10): `Float`/`number` kayan nokta
+  // yuvarlama hatası üretir ve finansal bir üründe bu kabul edilemez. (19, 4) ölçeği,
+  // mevcut para birimlerinin tamamı için yeterli kuruş hassasiyeti + çok büyük tutarlar
+  // demektir. Uygulama katmanı bu alanı JSON'a DAİMA string olarak yazar.
+  balance Decimal @default(0) @db.Decimal(19, 4)
+
+  // Para birimi tutardan AYRI bir alandır (aynı invariant): ISO 4217 kodu, ör. "TRY", "USD".
+  // Tam ISO listesi bir bağımlılık gerektireceği için doğrulama biçimseldir (3 büyük harf);
+  // gerçek dünyada geçersiz bir kodun zararı, yanlış bir kur dönüşümü DEĞİL, yalnızca
+  // etiketin anlamsız olmasıdır — dönüşüm/çoklu kur bu issue'nun kapsamı dışıdır.
+  currency String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Aynı tenant içinde aynı isimde iki hesap olamaz. Bu, "önce kontrol et sonra yaz" yarışını
+  // veritabanı seviyesinde kapatır: servis katmanı P2002'yi 409'a çevirir (bkz.
+  // src/lib/finance/account.ts). Kıyas büyük/küçük harfe DUYARLIDIR ("Kasa" ile "kasa" ayrı
+  // kabul edilir) — Postgres'te case-insensitive unique ayrı bir index/collation gerektirir
+  // ve bu issue için gereksiz karmaşıklıktır.
+  @@unique([tenantId, name])
+  @@index([tenantId])
 }
 
 model Membership {

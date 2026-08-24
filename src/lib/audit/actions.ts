@@ -18,6 +18,12 @@ export const AUDIT_ACTIONS = {
   AUTH_PASSWORD_CHANGE_FAILURE: "AUTH_PASSWORD_CHANGE_FAILURE",
   TENANT_CREATED: "TENANT_CREATED",
   MEMBERSHIP_ROLE_CHANGED: "MEMBERSHIP_ROLE_CHANGED",
+  // Finansal hesap yaşam döngüsü (Issue #46). Bir hesabın oluşturulması/silinmesi ve
+  // bakiyesinin elle değiştirilmesi, tenant içinde para akışını doğrudan etkileyen
+  // işlemlerdir; "kim ne zaman değiştirdi" sorusunun yanıtsız kalmaması gerekir.
+  ACCOUNT_CREATED: "ACCOUNT_CREATED",
+  ACCOUNT_UPDATED: "ACCOUNT_UPDATED",
+  ACCOUNT_DELETED: "ACCOUNT_DELETED",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
@@ -26,6 +32,7 @@ export const AUDIT_TARGET_TYPES = {
   USER: "USER",
   TENANT: "TENANT",
   MEMBERSHIP: "MEMBERSHIP",
+  ACCOUNT: "ACCOUNT",
 } as const;
 
 export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[keyof typeof AUDIT_TARGET_TYPES];

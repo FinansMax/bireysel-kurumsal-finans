@@ -16,6 +16,9 @@ import { expect, test } from "@playwright/test";
 const MEMBERSHIP_SOURCE_PATH = path.join(__dirname, "..", "src", "lib", "tenants", "membership.ts");
 const MEMBERSHIP_SOURCE = readFileSync(MEMBERSHIP_SOURCE_PATH, "utf-8");
 
+const ACCOUNT_SOURCE_PATH = path.join(__dirname, "..", "src", "lib", "finance", "account.ts");
+const ACCOUNT_SOURCE = readFileSync(ACCOUNT_SOURCE_PATH, "utf-8");
+
 test.describe("Tenant scoping pattern koruması — membership.ts", () => {
   test("tenantId filtresini zorlayan tenantScoped() helper'ı import edilip kullanılıyor", () => {
     expect(MEMBERSHIP_SOURCE).toContain('from "@/lib/tenancy/scope"');
@@ -37,5 +40,35 @@ test.describe("Tenant scoping pattern koruması — membership.ts", () => {
 
     // Riskli literal desen: tenantId olmadan, sadece id ile where.
     expect(MEMBERSHIP_SOURCE).not.toMatch(/where:\s*\{\s*id:\s*membershipId\s*\}/);
+  });
+});
+
+/**
+ * Aynı koruma, ikinci tenant-scoped model olan `Account` için (Issue #46). Yeni finansal
+ * modeller (Transaction/Category/Budget/Invoice ...) eklendikçe bu blok çoğaltılmalıdır.
+ */
+test.describe("Tenant scoping pattern koruması — account.ts", () => {
+  test("tenantScoped() import edilip her sorguda kullanılıyor", () => {
+    expect(ACCOUNT_SOURCE).toContain('from "@/lib/tenancy/scope"');
+
+    const usageCount = ACCOUNT_SOURCE.match(/tenantScoped\(/g)?.length ?? 0;
+    // listAccounts (1) + updateAccount (updateMany + findFirstOrThrow = 2) +
+    // deleteAccount (1) = en az 4 kullanım.
+    expect(usageCount).toBeGreaterThanOrEqual(4);
+  });
+
+  test("tenant-scoped resource id'siyle sadece-id update/delete/findUnique kullanılmıyor", () => {
+    expect(ACCOUNT_SOURCE).not.toMatch(/\.account\.update\(/);
+    expect(ACCOUNT_SOURCE).not.toMatch(/\.account\.delete\(/);
+    expect(ACCOUNT_SOURCE).not.toMatch(/\.account\.findUnique\(/);
+
+    expect(ACCOUNT_SOURCE).not.toMatch(/where:\s*\{\s*id:\s*accountId\s*\}/);
+  });
+
+  test("create sırasında tenantId açıkça yazılıyor (client input'tan türetilmiyor)", () => {
+    // `account.create` tek istisnadır (yeni kayıtta scope filtrelenmez, ATANIR): bu yüzden
+    // `data`'da tenantId'nin açıkça geçtiği doğrulanır — aksi halde kayıt tenant'sız veya
+    // yanlış tenant'la oluşabilirdi.
+    expect(ACCOUNT_SOURCE).toMatch(/data:\s*\{\s*tenantId/);
   });
 });

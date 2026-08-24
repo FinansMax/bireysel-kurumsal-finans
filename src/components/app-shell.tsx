@@ -22,6 +22,7 @@ import { TenantSwitcher, type SwitchableTenant } from "./tenant-switcher";
  */
 const NAV_ITEMS: ReadonlyArray<{ label: string; href: string | null }> = [
   { label: "Genel Bakış", href: "/dashboard" },
+  { label: "Üyeler", href: "/members" }, // Issue #43
   { label: "Yeni Çalışma Alanı", href: "/tenants/new" }, // Issue #42
   { label: "Hesaplar", href: null }, // Issue #47
   { label: "İşlemler", href: null }, // Issue #54

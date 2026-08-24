@@ -21,6 +21,7 @@ import { expect, test } from "@playwright/test";
  */
 
 const APP_ROOT = path.join(__dirname, "..", "src", "app");
+const COMPONENTS_ROOT = path.join(__dirname, "..", "src", "components");
 
 /**
  * Kimlik doğrulama akışlarını çalıştıran İSTEMCİ dosyaları.
@@ -34,6 +35,9 @@ const AUTH_PAGES = [
   path.join(APP_ROOT, "signup", "page.tsx"),
   path.join(APP_ROOT, "forgot-password", "page.tsx"),
   path.join(APP_ROOT, "reset-password", "reset-password-form.tsx"),
+  // Bir sayfa değil, kabuktaki çıkış düğmesidir (Issue #39) — ama aynı tuzağa açıktır:
+  // sunucu tarafı `signOut()` de `Auth()`'u doğrudan çağırıp HTTP route'unu atlar.
+  path.join(COMPONENTS_ROOT, "sign-out-button.tsx"),
 ];
 
 /**
@@ -123,6 +127,15 @@ test.describe("Auth ekranları — rate limit baypasına karşı koruma", () => 
     // doğrulanmalı, aksi halde sayfa hiç sign-in yapmıyor olsa da test geçerdi.
     expect(code).toMatch(/from\s+["']next-auth\/react["']/);
     expect(code).toContain("signIn(");
+  });
+
+  test("çıkış düğmesi istemci tarafı signOut'u (next-auth/react) kullanıyor", () => {
+    const code = readPageCode(path.join(COMPONENTS_ROOT, "sign-out-button.tsx"));
+
+    // Kontrol grubu: "yasak import yok" tek başına yetmez — düğmenin GERÇEKTEN çıkış yaptığı
+    // da doğrulanmalı, aksi halde hiçbir şey yapmayan bir düğme testi geçerdi.
+    expect(code).toMatch(/from\s+["']next-auth\/react["']/);
+    expect(code).toContain("signOut(");
   });
 
   for (const { file, mustCall, mustNotCall } of ENDPOINT_EXPECTATIONS) {

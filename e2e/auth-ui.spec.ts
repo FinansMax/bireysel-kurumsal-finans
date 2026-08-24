@@ -114,7 +114,8 @@ test.describe("/login — giriş ekranı", () => {
     await fillCredentials(page, email, PASSWORD);
     await submit(page, /giriş yap/i);
 
-    await expect(page).toHaveURL(/\/$/);
+    // Giriş sonrası hedef korumalı kabuktur (Issue #39).
+    await expect(page).toHaveURL(/\/dashboard$/);
 
     // Asıl kanıt: sunucu tarafında gerçek bir oturum var mı?
     const me = await page.request.get("/api/auth/me");

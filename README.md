@@ -534,6 +534,40 @@ E2E kanıtı: `e2e/tenant-create-ui.spec.ts`. Sonuç formun yönlendirmesine de�
 okuma yoluna (`GET /api/tenants`) bakılarak doğrulanır: kayıt gerçekten oluştu mu, rol OWNER mı,
 hata durumunda ikinci kayıt oluşmadı mı.
 
+### Üye yönetimi ekranı (Issue #43)
+
+`/members` (`src/app/(app)/members/`). Aktif çalışma alanının üyelerini listeler; yetkili
+rollere rol değiştirme ve üyeyi çıkarma aksiyonlarını gösterir.
+
+- **URL'de `tenantId` yoktur.** Hangi tenant'ın üyeleri gösterileceğinin tek kaynağı aktif
+  tenant'tır (Issue #10 cookie'si, membership'i her istekte DB'den doğrulanır). URL'e tenantId
+  koymak "adres çubuğunu değiştirip başka tenant'ı görme" denemelerine yüzey açardı; backend
+  bunu zaten 403'le reddeder (`requirePermission()` → `expectedTenantId`), ama parametreyi hiç
+  sunmamak daha temizdir.
+- **Issue metninden bilinçli sapma.** #43'ün kabul kriteri "OWNER olmayan kullanıcı bu ekrana
+  erişemiyor" der; ancak o metin izin matrisinden (#11/#12) öncedir ve **matris yetkili
+  kaynaktır**: `MEMBER` rolü `VIEW_MEMBERS` iznine sahiptir. Bu yüzden ekran listeyi tüm
+  üyelere gösterir, yönetim aksiyonlarını yalnızca `UPDATE_MEMBER_ROLE` / `REMOVE_MEMBER`
+  iznine sahip role render eder. Matrisi gevşetmek yerine matrisi uygulamak tercih edildi.
+- **UI'daki "devre dışı" kuralları güvenlik kontrolü değildir.** ADMIN'in bir OWNER'a
+  dokunamaması, son OWNER'ın düşürülememesi/çıkarılamaması ve rol izinleri backend'de
+  (`src/lib/tenants/membership.ts` + `src/lib/authz/`) Serializable transaction içinde
+  zorlanır. Arayüzdeki kilitler yalnızca kesin başarısız olacak bir işlemi kullanıcıya
+  denetmemek içindir; kaldırılsalar güvenlik değişmez (kanıt:
+  `security/tenant-membership-authorization-security.spec.ts`).
+- **Native `confirm()` yerine satır içi onay.** Tarayıcı diyaloğu sayfa akışını bloke eder,
+  ekran okuyucularda ve testlerde daha kırılgandır.
+- **Aksiyon sonrası `router.refresh()` yeterlidir** (tenant switcher'daki tam sayfa
+  yüklemesinden farklı olarak): aktif tenant değişmiyor, yalnızca bu route'un verisi
+  değişiyor.
+- Prisma Client istemci paketine girmesin diye `MembershipRole` client bileşenine **yalnızca
+  `type` olarak** import edilir; rol listesi string literal olarak yazılıp `satisfies` ile
+  tipe bağlanır.
+
+E2E kanıtı: `e2e/tenant-members-ui.spec.ts`. Her sonuç `GET /api/tenants/:id/members` ile
+doğrulanır; ayrıca **duyarlılık kanıtı** olarak arayüz baypas edilip endpoint doğrudan çağrılır
+(son OWNER → 409, MEMBER'ın rol değiştirme denemesi → 403).
+
 ## Güvenlik Header'ları
 
 Tüm yanıtlara (sayfalar ve `/api/*`, hata yanıtları dahil) `next.config.ts` üzerinden temel

@@ -28,15 +28,33 @@ export async function getActiveTenant(): Promise<ActiveTenantContext | null> {
     return null;
   }
 
-  const store = await cookies();
-  const raw = store.get(ACTIVE_TENANT_COOKIE_NAME)?.value;
-
-  const resolved = await resolveActiveTenant(user.id, raw);
+  const resolved = await resolveActiveTenantForUser(user.id);
   if (!resolved) {
     return null;
   }
 
   return { user, tenant: resolved.tenant, role: resolved.role };
+}
+
+/**
+ * Kullanıcı ZATEN elimizdeyken (ör. `requirePageUser()` çağrılmış bir sunucu bileşeninde)
+ * aktif tenant'ı çözer (Issue #40).
+ *
+ * `getActiveTenant()` ile aynı işi yapar; farkı, oturumu YENİDEN çözmemesidir. `getCurrentUser()`
+ * her çağrıldığında Auth.js JWT callback'i session revocation için bir DB sorgusu tetikler
+ * (bkz. `src/lib/auth/config.ts`); kabuk zaten kullanıcıyı okumuşken `getActiveTenant()`
+ * çağırmak aynı istekte bu maliyeti gereksiz yere ikiye katlardı.
+ *
+ * `userId` DAİMA trusted bir kaynaktan (session) gelmelidir — client'ın gönderdiği bir değer
+ * buraya geçirilemez; aksi halde başkasının aktif tenant'ı çözülebilirdi.
+ */
+export async function resolveActiveTenantForUser(
+  userId: string,
+): Promise<{ tenant: ActiveTenant; role: MembershipRole } | null> {
+  const store = await cookies();
+  const raw = store.get(ACTIVE_TENANT_COOKIE_NAME)?.value;
+
+  return resolveActiveTenant(userId, raw);
 }
 
 type RequireActiveTenantResult =

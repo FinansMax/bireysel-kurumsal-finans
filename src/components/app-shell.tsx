@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { SignOutButton } from "./sign-out-button";
+import { TenantSwitcher, type SwitchableTenant } from "./tenant-switcher";
 
 /**
  * Giriş yapmış kullanıcının gördüğü uygulama kabuğu — header + navigasyon iskeleti (Issue #39).
@@ -28,7 +29,17 @@ const NAV_ITEMS: ReadonlyArray<{ label: string; href: string | null }> = [
   { label: "Ayarlar", href: null }, // Issue #86
 ];
 
-export function AppShell({ userEmail, children }: { userEmail: string; children: ReactNode }) {
+export function AppShell({
+  userEmail,
+  tenants,
+  activeTenantId,
+  children,
+}: {
+  userEmail: string;
+  tenants: SwitchableTenant[];
+  activeTenantId: string | null;
+  children: ReactNode;
+}) {
   return (
     <div className="flex flex-1 flex-col bg-zinc-50 dark:bg-black">
       <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
@@ -41,6 +52,8 @@ export function AppShell({ userEmail, children }: { userEmail: string; children:
           </Link>
 
           <div className="flex items-center gap-4">
+            <TenantSwitcher tenants={tenants} activeTenantId={activeTenantId} />
+
             {/* Kimliğin göstergesi olarak e-posta kullanılır, `session.user.name` DEĞİL:
                 JWT'deki `name`, profil güncellendikten sonra bayat kalıyor (açık hata:
                 Issue #113). E-posta bu endpoint'lerle değiştirilemediği için aynı sorunu

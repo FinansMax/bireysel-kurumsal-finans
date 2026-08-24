@@ -1,5 +1,7 @@
 import { AppShell } from "@/components/app-shell";
 import { requirePageUser } from "@/lib/auth/page-guard";
+import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
+import { listTenantsForUser } from "@/lib/tenants/user-tenants";
 
 /**
  * Korumalı route group'un layout'u (Issue #39).
@@ -12,9 +14,29 @@ import { requirePageUser } from "@/lib/auth/page-guard";
  * Buradaki `requirePageUser()` kabuğun ihtiyaç duyduğu kullanıcıyı okur ve oturum yoksa
  * `/login`'e yönlendirir; ancak bu TEK kontrol değildir — aynı guard her korumalı sayfada da
  * çağrılır (gerekçesi: `src/lib/auth/page-guard.ts`).
+ *
+ * TENANT LİSTESİ SUNUCUDA ÜRETİLİR (Issue #40): seçici bir client component'tir ama listeyi
+ * kendisi çekmez. `listTenantsForUser()` sorgusu daima `userId` ile scope'ludur ve `userId`
+ * trusted session'dan gelir — client'ın gönderdiği hiçbir değer bu listeyi etkilemez.
+ * Aktif tenant da aynı istekte, kullanıcı yeniden çözülmeden okunur.
  */
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   const user = await requirePageUser();
 
-  return <AppShell userEmail={user.email}>{children}</AppShell>;
+  const [tenants, activeTenant] = await Promise.all([
+    listTenantsForUser(user.id),
+    resolveActiveTenantForUser(user.id),
+  ]);
+
+  return (
+    <AppShell
+      userEmail={user.email}
+      tenants={tenants.map(({ id, name }) => ({ id, name }))}
+      // Cookie geçerli olsa bile membership her istekte DB'den doğrulanır; üyelik silinmişse
+      // `resolveActiveTenantForUser()` `null` döner ve seçici "seçim yok" durumuna düşer.
+      activeTenantId={activeTenant?.tenant.id ?? null}
+    >
+      {children}
+    </AppShell>
+  );
 }

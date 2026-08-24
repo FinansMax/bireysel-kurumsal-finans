@@ -480,6 +480,34 @@ Bu yönlendirme zaten savunmanın son hattı değildir: veriye erişen her API r
 E2E kanıtı: `e2e/app-shell.spec.ts` (oturumsuz erişimde yönlendirme + kabuğun hiç render
 edilmemesi, oturumlu erişimde kabuk, çıkış sonrası oturumun gerçekten kapanması).
 
+### Tenant switcher (Issue #40)
+
+Kabuk header'ındaki çalışma alanı seçici (`src/components/tenant-switcher.tsx`). Seçenekler
+**sunucuda**, oturum sahibinin membership'lerinden üretilir (`listTenantsForUser()`); seçim
+mevcut `POST /api/tenants/active` endpoint'ine gider.
+
+- **"Üyesi olmadığı tenant seçilemez" garantisi arayüzden gelmez.** Liste kullanıcıya yalnızca
+  kendi tenant'larını gösterir, ama asıl kontrol backend'dedir: endpoint, membership'i her
+  istekte DB'den doğrular ve üye değilse **403** döner ("tenant yok" ile "üye değilsin" aynı
+  yanıta düşer — enumeration engeli). E2E, seçiciyi baypas edip doğrudan istek atarak bunu
+  kanıtlar.
+- **Aktif tenant otomatik SEÇİLMEZ.** Sayfa render'ı bir `GET`'tir; orada cookie yazmak
+  "GET yan etkisizdir" invariant'ını (CSRF duruşunun dayanağı) ihlal ederdi. Aktif tenant yokken
+  seçici bir placeholder gösterir ve seçimi kullanıcı yapar.
+- **Başarılı geçişte tam sayfa yükleme yapılır, `router.refresh()` değil.** `refresh()` istemci
+  cache'ini yalnızca **mevcut** route için temizler (Next.js `useRouter` dokümanı); çok kiracılı
+  bir üründe diğer route'ların cache'inde eski tenant'ın verisi kalır ve kullanıcı oraya
+  geçtiğinde yanlış çalışma alanının verisini görürdü.
+- **Hata mesajı ayrıştırılmaz:** 403/404/ağ hatası tek bir Türkçe mesaja düşer; başarısız
+  seçimde kutu sunucudan gelen gerçek duruma geri alınır.
+- `resolveActiveTenantForUser()` (`src/lib/tenants/tenant-context.ts`), kullanıcı zaten
+  elimizdeyken oturumu **yeniden çözmeden** aktif tenant'ı okur — `getActiveTenant()` aynı
+  istekte ikinci bir session-revocation DB sorgusu tetiklerdi.
+
+E2E kanıtı: `e2e/tenant-switcher.spec.ts`. Geçişin gerçekten sunucu tarafında olduğu, seçici
+kutusundaki değere değil, aktif tenant'a bağlı gerçek bir endpoint'e bakılarak doğrulanır
+(aktif tenant A iken A→200 / B→403, geçişten sonra tersi; hiç seçim yokken 400).
+
 ### Çalışma alanı oluşturma ekranı (Issue #42)
 
 `/tenants/new` (`src/app/(app)/tenants/new/`). Kabuk menüsündeki "Yeni Çalışma Alanı"

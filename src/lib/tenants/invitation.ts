@@ -4,6 +4,7 @@ import { MembershipRole, Prisma } from "@prisma/client";
 
 import { normalizeEmail, isValidEmail } from "@/lib/auth/validation";
 import { getAppBaseUrl } from "@/lib/config/app-url";
+import { runSerializable, SerializationConflictError } from "@/lib/db/serializable";
 import { prisma } from "@/lib/prisma";
 
 import { consoleInvitationSender, type InvitationSender } from "./invitation-email";
@@ -18,12 +19,10 @@ const INVITATION_TOKEN_BYTES = 32;
 // kişinin hemen o an online olmasını gerektirmez.
 const INVITATION_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-// "Cancel eski pending + create yeni" transaction'ı Serializable isolation altında bile
-// nadiren bir yazma çakışmasıyla (P2034) başarısız olabilir (bkz. createInvitation
-// dokümantasyonu) — bu durumda birkaç kez otomatik yeniden denenir.
-const MAX_CREATE_ATTEMPTS = 3;
-
-const PRISMA_TRANSACTION_CONFLICT_ERROR_CODE = "P2034";
+// NOT (Issue #122): "Cancel eski pending + create yeni" transaction'ı Serializable isolation
+// altında bile nadiren bir yazma çakışmasıyla (P2034) başarısız olabilir. Buradaki elle yazılmış
+// retry döngüsü ve sabitleri (`MAX_CREATE_ATTEMPTS`, `P2034` kodu) `runSerializable()`e taşındı
+// (bkz. `src/lib/db/serializable.ts`); davranış aynıdır, tanım tek yerdedir.
 
 export function hashInvitationToken(rawToken: string): string {
   return createHash("sha256").update(rawToken).digest("hex");
@@ -53,7 +52,9 @@ export type CreateInvitationOptions = {
 
 export type CreateInvitationResult =
   | { ok: true; invitation: InvitationView }
-  | { ok: false; status: 400 | 403; error: string };
+  // 503: eşzamanlı yükte transaction serialize edilemedi ve yeniden denemeler tükendi
+  // (Issue #122) — GEÇİCİ bir durumdur, bir iş kuralı ihlali değildir.
+  | { ok: false; status: 400 | 403 | 503; error: string };
 
 /**
  * Tenant'a yeni bir kullanıcı daveti oluşturur (Issue #14).
@@ -114,44 +115,38 @@ export async function createInvitation(
   const tokenHash = hashInvitationToken(rawToken);
   const expiresAt = new Date(Date.now() + INVITATION_TOKEN_TTL_MS);
 
-  let invitation: InvitationView | undefined;
+  let invitation: InvitationView;
 
-  for (let attempt = 1; attempt <= MAX_CREATE_ATTEMPTS; attempt++) {
-    try {
-      invitation = await prisma.$transaction(
-        async (tx) => {
-          await tx.tenantInvitation.updateMany({
-            where: { tenantId, email, usedAt: null, cancelledAt: null },
-            data: { cancelledAt: new Date() },
-          });
+  try {
+    // Retry döngüsü burada ELLE yazılıydı; Issue #122 ile `runSerializable()`e taşındı —
+    // aynı davranış, ama tek bir yerde tanımlı ve test edilmiş (membership mutation'ları da
+    // aynı yardımcıyı kullanır).
+    invitation = await runSerializable(async (tx) => {
+      await tx.tenantInvitation.updateMany({
+        where: { tenantId, email, usedAt: null, cancelledAt: null },
+        data: { cancelledAt: new Date() },
+      });
 
-          return tx.tenantInvitation.create({
-            data: {
-              tenantId,
-              email,
-              role,
-              tokenHash,
-              expiresAt,
-              invitedByUserId: actorUserId,
-            },
-            select: invitationSelect,
-          });
+      return tx.tenantInvitation.create({
+        data: {
+          tenantId,
+          email,
+          role,
+          tokenHash,
+          expiresAt,
+          invitedByUserId: actorUserId,
         },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-      );
-      break;
-    } catch (error) {
-      const isConflict =
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === PRISMA_TRANSACTION_CONFLICT_ERROR_CODE;
-      if (!isConflict || attempt === MAX_CREATE_ATTEMPTS) {
-        throw error;
-      }
+        select: invitationSelect,
+      });
+    });
+  } catch (error) {
+    // Denemeler tükendi: 500 yerine "geçici, tekrar dene" anlamına gelen tanımlı bir sonuç
+    // (bkz. `src/lib/db/serializable.ts`). Davet e-postası GÖNDERİLMEZ — zaten transaction
+    // dışında ve bu satırdan sonra.
+    if (error instanceof SerializationConflictError) {
+      return { ok: false, status: 503, error: "Temporary write conflict, please retry" };
     }
-  }
-
-  if (!invitation) {
-    throw new Error("createInvitation: transaction did not produce an invitation");
+    throw error;
   }
 
   const acceptUrl = `${baseUrl}/invitations/accept?token=${rawToken}`;

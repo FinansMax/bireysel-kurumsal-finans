@@ -41,6 +41,7 @@ kaldırmadan doğrudan çağrılabilir.
 | `src/lib/tenancy/scope.ts` | `tenantScoped()` — tenant izolasyonunun tek helper'ı |
 | `src/lib/tenants/` | Tenant, membership, davet, aktif tenant context'i, doğrulama |
 | `src/lib/finance/` | Finansal modeller (`Account`, sonraki issue'larda `Transaction`, ...) |
+| `src/lib/db/` | Veritabanı seviyesi yardımcılar — `runSerializable()` (Serializable + retry) |
 | `src/lib/audit/` | Audit action sabitleri, sanitization, `writeAuditLog()` |
 | `src/lib/rate-limit/` | `RateLimiter` interface'i, in-memory limiter, policy kataloğu, guard |
 | `src/lib/prisma.ts` | PrismaClient singleton (dev'de hot-reload güvenli) |
@@ -126,8 +127,12 @@ bir istek invariant'ı bozar. Kullanılan üç desen:
    `P2002` hatasını yakalayarak yapılır (`src/lib/tenants/create-tenant.ts`).
 2. **Serializable transaction + retry.** Okuma sonucuna bağlı bir invariant varsa (son OWNER
    koruması, "eskisini iptal et + yenisini oluştur") transaction `Serializable` izolasyonda
-   çalışır ve serialization hatası alan istek yeniden denenir
-   (`src/lib/tenants/membership.ts`, `src/lib/tenants/invitation.ts`).
+   çalışır ve serialization hatası (`P2034`) alan istek yeniden denenir. Retry, elle
+   yazılmaz: **tek giriş noktası `runSerializable()`**'dır (`src/lib/db/serializable.ts`).
+   `prisma.$transaction(..., { isolationLevel: Serializable })`'ı doğrudan çağırmak, retry'ı
+   atlamak demektir — o durumda serialization hatası kullanıcıya **500** olarak yansır
+   (Issue #122'de tam olarak bu oldu). Denemeler tükenirse servis `503` döner; `409` **değil**
+   (409 bu kod tabanında iş kuralı ihlalidir).
 3. **Koşullu atomik `updateMany`.** Tek kullanımlık token tüketimi tek bir SQL ifadesiyle
    yapılır; `count` sonucu kimin kazandığını söyler (`src/lib/auth/password-reset.ts`).
 

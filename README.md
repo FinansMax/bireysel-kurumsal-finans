@@ -662,6 +662,38 @@ alt alan adlarıyla aynı site altında dağıtılırsa veya cross-origin creden
 desteklenmek zorunda kalınırsa — `SameSite` tek başına yetmez ve ayrı bir issue ile gerçek bir
 CSRF token katmanı eklenmelidir.
 
+## Eşzamanlılık: Serializable + Retry (Issue #122)
+
+Okumaya bağlı invariant'ları (son OWNER koruması, "eski daveti iptal et + yenisini oluştur")
+koruyan transaction'lar `Serializable` izolasyonda çalışır. Bu izolasyonun sözleşmesi
+**"hiç hata almazsın" değildir**: PostgreSQL, iki transaction birbirini geçersiz kılacak
+şekilde çakıştığında birini **serialization failure** ile reddeder (Prisma `P2034`) ve
+çağıranın **yeniden denemesini** bekler.
+
+- **Tek giriş noktası `runSerializable()`** (`src/lib/db/serializable.ts`).
+  `prisma.$transaction(..., { isolationLevel: Serializable })`'ı doğrudan çağırmak retry'ı
+  atlamak demektir; o durumda serialization hatası kullanıcıya **500** olarak yansır.
+  Issue #122'de tam olarak bu oluyordu: eşzamanlı bir rol değişikliğinde meşru kullanıcı 500
+  alıyordu. (Hata CI'da görünmüyordu çünkü `playwright.config.ts`'teki `retries: 2` onu
+  maskeliyordu — yani bu bir test gürültüsü değil, **maskelenmiş bir üretim hatasıydı**.)
+- **Yalnızca `P2034` yeniden denenir.** Domain hataları (NotFound, LastOwner,
+  ForbiddenOwnership) ve diğer Prisma hataları (ör. `P2002`) olduğu gibi yukarı çıkar —
+  kalıcı bir durumu tekrar tekrar denemek hem gecikme üretir hem de gerçek hatayı maskeler.
+- **5 deneme + kademeli, sapmalı bekleme** (`attempt * 10ms` + 0-10ms rastgele). Sabit bekleme
+  yetmez: çakışan istemciler aynı süre bekleyip aynı anda tekrar dener ve çakışma birebir
+  tekrarlanır (thundering herd). Önceki elle yazılmış implementasyon 3 denemeydi ve ölçüldüğünde
+  5 eşzamanlı rol değişikliğinde yetersiz kaldı.
+- **Denemeler tükenirse `503`**, `409` **değil**: `409` bu kod tabanında iş kuralı ihlalidir
+  (ör. "son OWNER düşürülemez") ve arayüz ona göre mesaj gösterir. Retry tükenmesi geçici bir
+  sunucu durumudur; doğru mesaj "biraz sonra tekrar deneyin"dir.
+- **`runSerializable()`'a verilen fonksiyon yeniden çalıştırılabilir olmalıdır**: transaction
+  DIŞINDAKİ yan etkiler (audit log yazımı, davet e-postası) içine konmaz. DB değişiklikleri
+  rollback edilebilir, gönderilmiş bir e-posta edilemez.
+
+Kanıt: `integration/serializable-retry.spec.ts` (neyin denendiği/denenmediği, rollback
+semantiği) ve `integration/membership-concurrency.spec.ts` (gerçek eşzamanlı yük; retry
+kaldırılırsa kırmızıya döner).
+
 ## Tenant Davetleri (Invitations)
 
 Bir tenant'a yeni kullanıcı davet etme akışı (`src/lib/tenants/invitation.ts`).

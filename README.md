@@ -501,7 +501,8 @@ mevcut `POST /api/tenants/active` endpoint'ine gider.
 - **Hata mesajı ayrıştırılmaz:** 403/404/ağ hatası tek bir Türkçe mesaja düşer; başarısız
   seçimde kutu sunucudan gelen gerçek duruma geri alınır.
 - `resolveActiveTenantForUser()` (`src/lib/tenants/tenant-context.ts`), kullanıcı zaten
-  elimizdeyken oturumu **yeniden çözmeden** aktif tenant'ı okur — `getActiveTenant()` aynı
+  elimizdeyken oturumu **yeniden çözmeden** aktif tenant'ı 
+  okur — `getActiveTenant()` aynı
   istekte ikinci bir session-revocation DB sorgusu tetiklerdi.
 
 E2E kanıtı: `e2e/tenant-switcher.spec.ts`. Geçişin gerçekten sunucu tarafında olduğu, seçici
@@ -874,3 +875,32 @@ Kapsam dışı bırakılan diğer iki şey: **alt kategori hiyerarşisi** (issue
 dışı; düz liste ilk sürüm için yeterli) ve **varsayılan kategori seti ile tenant tohumlama**
 (yeni bir tenant'ın hangi kategorilerle açılacağı ürün kararıdır, bu issue'nun değil).
 Kategori yönetimi arayüzü #50'dir.
+
+### Kategori ekranı (Issue #50)
+
+`/categories` (`src/app/(app)/categories/`). Aktif çalışma alanının kategorilerini listeler ve
+yetkili role oluşturma formunu gösterir. `/accounts` ile aynı desen: URL'de `tenantId` yoktur,
+kaynak aktif tenant'tır; form servis fonksiyonunu değil `POST /api/.../categories`'i çağırır
+(yetki ve aktif tenant tutarlılığı route seviyesindedir).
+
+- **`?type` filtresi bu ekranda kullanılmaz.** O filtre işlem formu içindir (#53); burada
+  kullanıcı kategorilerinin tamamını tek listede görür. Liste API'den türe göre sıralı
+  geldiği için zaten gruplu okunur — ayrı bir filtre kontrolü eklemek bu issue'nun kapsamını
+  genişletirdi.
+- **`409` mesajı türü de söyler:** "Bu **türde** bu isimde bir kategori zaten var". Benzersizlik
+  tenant + tür + isim üzerinden olduğu için (bkz. yukarıdaki karar), "bu isimde bir kategori
+  zaten var" demek yanıltıcı olurdu — kullanıcı aynı ismi diğer türde kullanabilir.
+- **Başarılı kayıttan sonra ad temizlenir, tür seçimi korunur.** Kullanıcı genellikle arka
+  arkaya aynı taraftan birkaç kategori girer; türü her kayıtta "Gider"e döndürmek onu her
+  seferinde yeniden seçmeye zorlardı. Formun varsayılanı da bu yüzden **Gider**'dir.
+- **Oluşturma formu yalnızca `MANAGE_CATEGORIES` iznine sahip role render edilir** — bu bir
+  güvenlik kontrolü değil, MEMBER'a kesin 403 alacağı bir form göstermeme tercihidir; asıl
+  kontrol route'taki `requirePermission()`'dır.
+- **Kapsam:** liste + oluşturma. Güncelleme/silme API'si (#49) hazırdır ama arayüzü bilerek bu
+  issue'da yapılmadı — hesap ekranında da aynı sınır var; ikisi tek bir "düzenle/sil"
+  issue'sunda birlikte ele alınmalıdır.
+
+E2E kanıtı: `e2e/categories-ui.spec.ts` — her sonuç `GET /api/tenants/:id/categories` ile
+doğrulanır. Aynı ismin gelir ve gider tarafında ayrı ayrı kullanılabildiği (yani #49'un
+`@@unique([tenantId, type, name])` kararı) uçtan uca ayrıca kanıtlanır; MEMBER için formun hiç
+render edilmediği ve baypas edilirse `403` alındığı da test edilir.

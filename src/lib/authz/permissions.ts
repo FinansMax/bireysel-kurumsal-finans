@@ -24,6 +24,11 @@ export const PERMISSIONS = {
   // üyesi hesapları görebilir, ama oluşturma/güncelleme/silme yönetim yetkisi ister.
   VIEW_ACCOUNTS: "accounts:view",
   MANAGE_ACCOUNTS: "accounts:manage",
+  // Gelir/gider kategorileri (Issue #49). Hesaplarla AYNI ayrım: kategori listesini görmek
+  // her üyenin işidir (işlem kaydederken seçecektir), kategori açmak/yeniden adlandırmak/
+  // silmek ise tenant'ın sınıflandırma şemasını değiştirmektir — yönetim işi.
+  VIEW_CATEGORIES: "categories:view",
+  MANAGE_CATEGORIES: "categories:manage",
 } as const;
 
 /** Geçerli permission string literal'lerinin union tipi — rastgele string kabul edilmez. */
@@ -53,6 +58,8 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.VIEW_AUDIT_LOG,
     PERMISSIONS.VIEW_ACCOUNTS,
     PERMISSIONS.MANAGE_ACCOUNTS,
+    PERMISSIONS.VIEW_CATEGORIES,
+    PERMISSIONS.MANAGE_CATEGORIES,
   ],
   [MembershipRole.ADMIN]: [
     PERMISSIONS.VIEW_TENANT,
@@ -64,6 +71,8 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.VIEW_AUDIT_LOG,
     PERMISSIONS.VIEW_ACCOUNTS,
     PERMISSIONS.MANAGE_ACCOUNTS,
+    PERMISSIONS.VIEW_CATEGORIES,
+    PERMISSIONS.MANAGE_CATEGORIES,
   ],
   // MEMBER hesapları GÖRÜR ama yönetemez (Issue #46): finansal kayıtları okumak ekibin
   // günlük işidir; hesap açmak/silmek ve bakiyeyi elle değiştirmek yönetim işidir.
@@ -71,6 +80,7 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.VIEW_TENANT,
     PERMISSIONS.VIEW_MEMBERS,
     PERMISSIONS.VIEW_ACCOUNTS,
+    PERMISSIONS.VIEW_CATEGORIES,
   ],
 };
 

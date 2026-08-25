@@ -19,6 +19,9 @@ const MEMBERSHIP_SOURCE = readFileSync(MEMBERSHIP_SOURCE_PATH, "utf-8");
 const ACCOUNT_SOURCE_PATH = path.join(__dirname, "..", "src", "lib", "finance", "account.ts");
 const ACCOUNT_SOURCE = readFileSync(ACCOUNT_SOURCE_PATH, "utf-8");
 
+const CATEGORY_SOURCE_PATH = path.join(__dirname, "..", "src", "lib", "finance", "category.ts");
+const CATEGORY_SOURCE = readFileSync(CATEGORY_SOURCE_PATH, "utf-8");
+
 test.describe("Tenant scoping pattern koruması — membership.ts", () => {
   test("tenantId filtresini zorlayan tenantScoped() helper'ı import edilip kullanılıyor", () => {
     expect(MEMBERSHIP_SOURCE).toContain('from "@/lib/tenancy/scope"');
@@ -70,5 +73,40 @@ test.describe("Tenant scoping pattern koruması — account.ts", () => {
     // `data`'da tenantId'nin açıkça geçtiği doğrulanır — aksi halde kayıt tenant'sız veya
     // yanlış tenant'la oluşabilirdi.
     expect(ACCOUNT_SOURCE).toMatch(/data:\s*\{\s*tenantId/);
+  });
+});
+
+/**
+ * Aynı koruma, üçüncü tenant-scoped model olan `Category` için (Issue #49). Yeni finansal
+ * modeller (Transaction/Budget/Invoice ...) eklendikçe bu blok çoğaltılmalıdır.
+ */
+test.describe("Tenant scoping pattern koruması — category.ts", () => {
+  test("tenantScoped() import edilip her sorguda kullanılıyor", () => {
+    expect(CATEGORY_SOURCE).toContain('from "@/lib/tenancy/scope"');
+
+    const usageCount = CATEGORY_SOURCE.match(/tenantScoped\(/g)?.length ?? 0;
+    // listCategories (1) + updateCategory (updateMany + findFirstOrThrow = 2) +
+    // deleteCategory (1) = en az 4 kullanım.
+    expect(usageCount).toBeGreaterThanOrEqual(4);
+  });
+
+  test("tenant-scoped resource id'siyle sadece-id update/delete/findUnique kullanılmıyor", () => {
+    expect(CATEGORY_SOURCE).not.toMatch(/\.category\.update\(/);
+    expect(CATEGORY_SOURCE).not.toMatch(/\.category\.delete\(/);
+    expect(CATEGORY_SOURCE).not.toMatch(/\.category\.findUnique\(/);
+
+    expect(CATEGORY_SOURCE).not.toMatch(/where:\s*\{\s*id:\s*categoryId\s*\}/);
+  });
+
+  test("create sırasında tenantId açıkça yazılıyor (client input'tan türetilmiyor)", () => {
+    expect(CATEGORY_SOURCE).toMatch(/data:\s*\{\s*tenantId/);
+  });
+
+  test("tür filtresi tenant filtresinin YERİNE geçmiyor", () => {
+    // `Category`ye özgü risk: `listCategories()` opsiyonel bir `type` filtresi alır. Birinin
+    // bu filtreyi `where`'e DOĞRUDAN yazıp tenant filtresini düşürmesi, listeyi tüm
+    // tenant'lara açardı. Filtre daima `tenantScoped()`in ÜZERİNE verilir.
+    expect(CATEGORY_SOURCE).not.toMatch(/where:\s*\{\s*type\s*\}/);
+    expect(CATEGORY_SOURCE).toMatch(/tenantScoped\(tenantId,\s*type\s*\?/);
   });
 });

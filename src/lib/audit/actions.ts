@@ -24,6 +24,12 @@ export const AUDIT_ACTIONS = {
   ACCOUNT_CREATED: "ACCOUNT_CREATED",
   ACCOUNT_UPDATED: "ACCOUNT_UPDATED",
   ACCOUNT_DELETED: "ACCOUNT_DELETED",
+  // Kategori yaşam döngüsü (Issue #49). Kategoriler işlemlerin sınıflandırmasıdır: bir
+  // kategorinin yeniden adlandırılması veya silinmesi geçmiş raporların anlamını değiştirir,
+  // bu yüzden "kim ne zaman değiştirdi" izi tutulur.
+  CATEGORY_CREATED: "CATEGORY_CREATED",
+  CATEGORY_UPDATED: "CATEGORY_UPDATED",
+  CATEGORY_DELETED: "CATEGORY_DELETED",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
@@ -33,6 +39,7 @@ export const AUDIT_TARGET_TYPES = {
   TENANT: "TENANT",
   MEMBERSHIP: "MEMBERSHIP",
   ACCOUNT: "ACCOUNT",
+  CATEGORY: "CATEGORY",
 } as const;
 
 export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[keyof typeof AUDIT_TARGET_TYPES];

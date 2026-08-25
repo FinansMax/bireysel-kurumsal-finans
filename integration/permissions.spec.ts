@@ -21,6 +21,9 @@ const MANAGEMENT_PERMISSIONS: Permission[] = [
   // Hesap yönetimi (Issue #46) da bir yönetim iznidir: MEMBER hesapları görebilir ama
   // oluşturamaz/silemez/bakiyesini değiştiremez.
   PERMISSIONS.MANAGE_ACCOUNTS,
+  // Kategori yönetimi (Issue #49) da bir yönetim iznidir: MEMBER kategorileri görebilir ama
+  // tenant'ın sınıflandırma şemasını değiştiremez.
+  PERMISSIONS.MANAGE_CATEGORIES,
 ];
 
 test.describe("hasPermission() — tablo-driven matris", () => {
@@ -42,6 +45,8 @@ test.describe("hasPermission() — tablo-driven matris", () => {
     { role: MembershipRole.ADMIN, permission: PERMISSIONS.VIEW_AUDIT_LOG, expected: true },
     { role: MembershipRole.ADMIN, permission: PERMISSIONS.VIEW_ACCOUNTS, expected: true },
     { role: MembershipRole.ADMIN, permission: PERMISSIONS.MANAGE_ACCOUNTS, expected: true },
+    { role: MembershipRole.ADMIN, permission: PERMISSIONS.VIEW_CATEGORIES, expected: true },
+    { role: MembershipRole.ADMIN, permission: PERMISSIONS.MANAGE_CATEGORIES, expected: true },
     { role: MembershipRole.ADMIN, permission: PERMISSIONS.UPDATE_TENANT_SETTINGS, expected: false },
 
     // MEMBER: sadece temel görüntüleme.
@@ -56,6 +61,9 @@ test.describe("hasPermission() — tablo-driven matris", () => {
     // Hesaplar (Issue #46): görüntüleme VAR, yönetim YOK.
     { role: MembershipRole.MEMBER, permission: PERMISSIONS.VIEW_ACCOUNTS, expected: true },
     { role: MembershipRole.MEMBER, permission: PERMISSIONS.MANAGE_ACCOUNTS, expected: false },
+    // Kategoriler (Issue #49): görüntüleme VAR, yönetim YOK.
+    { role: MembershipRole.MEMBER, permission: PERMISSIONS.VIEW_CATEGORIES, expected: true },
+    { role: MembershipRole.MEMBER, permission: PERMISSIONS.MANAGE_CATEGORIES, expected: false },
   ];
 
   for (const { role, permission, expected } of cases) {

@@ -1,4 +1,4 @@
-import { AccountType, Prisma } from "@prisma/client";
+import { AccountType, CategoryType, Prisma } from "@prisma/client";
 
 // Temel, bağımlılıksız input validasyonu (bkz. src/lib/tenants/validation.ts deseni).
 
@@ -13,6 +13,24 @@ const ACCOUNT_TYPES = Object.values(AccountType);
 
 export function isValidAccountType(value: unknown): value is AccountType {
   return typeof value === "string" && (ACCOUNT_TYPES as string[]).includes(value);
+}
+
+export const MIN_CATEGORY_NAME_LENGTH = 2;
+export const MAX_CATEGORY_NAME_LENGTH = 100;
+
+/**
+ * Kategori adı (Issue #49). Sınırlar `Account` ile BİLEREK aynıdır: ikisi de kullanıcının
+ * yazdığı kısa bir etikettir ve farklı bir sayı seçmek, gerekçesi olmayan bir tutarsızlık
+ * olurdu.
+ */
+export function isValidCategoryName(name: string): boolean {
+  return name.length >= MIN_CATEGORY_NAME_LENGTH && name.length <= MAX_CATEGORY_NAME_LENGTH;
+}
+
+const CATEGORY_TYPES = Object.values(CategoryType);
+
+export function isValidCategoryType(value: unknown): value is CategoryType {
+  return typeof value === "string" && (CATEGORY_TYPES as string[]).includes(value);
 }
 
 /**

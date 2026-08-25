@@ -22,6 +22,14 @@ enum AccountType {
   CASH
 }
 
+// Kategorinin yönü (Issue #49): bir kategori ya gelir ya gider tarafındadır. `AccountType`
+// ile aynı gerekçeyle Prisma enum'ıdır — küme küçük ve KARARLIDIR (muhasebede üçüncü bir
+// yön yoktur), yeni değer eklemek migration gerektirir ve bu istenen davranıştır.
+enum CategoryType {
+  INCOME
+  EXPENSE
+}
+
 model User {
   id                   String    @id @default(cuid())
   email                String    @unique
@@ -54,6 +62,7 @@ model Tenant {
   invitations TenantInvitation[]
   auditLogs   AuditLog[]
   accounts    Account[]
+  categories  Category[]
 }
 
 // Bir tenant'ın finansal hesabı: banka hesabı veya kasa (Issue #46).
@@ -86,6 +95,29 @@ model Account {
   // kabul edilir) — Postgres'te case-insensitive unique ayrı bir index/collation gerektirir
   // ve bu issue için gereksiz karmaşıklıktır.
   @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+// Bir tenant'ın gelir/gider kategorisi (Issue #49). İşlemlerin (#53) sınıflandırılmasında
+// kullanılacak DÜZ bir listedir; alt kategori hiyerarşisi bilinçli olarak kapsam dışıdır.
+model Category {
+  id   String       @id @default(cuid())
+  name String
+  type CategoryType
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Unique anahtar `Account`takinden FARKLI olarak TÜRÜ de içerir: "Diğer", "Faiz", "Kira"
+  // gibi isimler hem gelir hem gider tarafında doğal olarak bulunur; bunları tek bir isim
+  // uzayına sıkıştırmak kullanıcıyı "Diğer (Gelir)" gibi kaçamak isimlere zorlardı.
+  // Belirsizlik doğmaz: kategori daima bir türün bağlamında seçilir (gider işlemine gider
+  // kategorisi). Yarış durumu yine DB'de kapatılır — servis P2002'yi 409'a çevirir (bkz.
+  // src/lib/finance/category.ts). Kıyas büyük/küçük harfe DUYARLIDIR (Account ile aynı sınır).
+  @@unique([tenantId, type, name])
   @@index([tenantId])
 }
 

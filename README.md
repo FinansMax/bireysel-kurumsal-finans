@@ -807,3 +807,70 @@ E2E kanıtı: `e2e/accounts-ui.spec.ts` — her sonuç `GET /api/tenants/:id/acc
 doğrulanır (kayıt gerçekten oluştu mu, bakiye string ve hassasiyeti korunmuş mu, hata
 durumunda kayıt oluşmamış mı); MEMBER için formun hiç render edilmediği ve baypas edilirse
 `403` alındığı ayrıca test edilir.
+
+## Gelir/Gider Kategorileri (Issue #49)
+
+İkinci finansal model: `Category` — işlemlerin (#53) sınıflandırılacağı **düz** liste. Şema
+`prisma/schema.prisma`, iş mantığı `src/lib/finance/category.ts`, endpoint'ler
+`GET/POST /api/tenants/[tenantId]/categories` ve
+`PATCH/DELETE /api/tenants/[tenantId]/categories/[categoryId]`.
+
+Yetki, izolasyon ve hata sözleşmesi `Account` (#46) ile **aynıdır** ve burada tekrarlanmaz;
+aşağıda yalnızca bu modele özgü kararlar vardır.
+
+### Benzersizlik anahtarı türü de içerir
+
+`@@unique([tenantId, type, name])` — `Account`taki `@@unique([tenantId, name])`'den **bilinçli
+olarak farklı**. "Diğer", "Faiz", "Kira" gibi isimler hem gelir hem gider tarafında doğal
+olarak bulunur; bunları tek bir isim uzayına sıkıştırmak kullanıcıyı "Diğer (Gelir)" gibi
+kaçamak isimler yazmaya zorlardı. Belirsizlik doğmaz, çünkü kategori daima bir türün
+bağlamında seçilir (gider işlemine gider kategorisi).
+
+Yarış durumu yine DB'de kapatılır: "önce aynı isim var mı diye bak, sonra yaz" deseni iki
+eşzamanlı isteğin ikisini de oluşturabilirdi; unique constraint'e güvenilir ve `P2002` → `409`
+çevrilir. Kıyas büyük/küçük harfe duyarlıdır (`Account` ile aynı sınır: case-insensitive
+unique, ayrı bir index/collation gerektirir).
+
+### Tür değiştirmek serbesttir
+
+`PATCH` ile `type` güncellenebilir. Alternatif — "türü değiştirilemez, silip yeniden oluştur" —
+ileride kategoriye bağlanacak işlemleri (#53) koparacağı için daha kötüdür. Tür unique
+anahtarın parçası olduğundan, hedef tarafta aynı isim varsa `409` döner; bu karar da önden
+okuma yerine constraint'e bırakılmıştır.
+
+### `?type` filtresi: geçersiz değer sessizce yok sayılmaz
+
+`GET .../categories?type=INCOME|EXPENSE` opsiyonel bir filtredir ve işlem formu içindir (gider
+işlemine yalnızca gider kategorisi seçilebilmelidir). Geçersiz bir değer **`400`** alır,
+sessizce yok sayılmaz: yok saymak, filtrenin uygulandığını sanan bir istemciye TÜM listeyi
+döndürürdü ve bunun ilk sonucu gider işlemine gelir kategorisi seçtirmek olurdu.
+
+Filtre `where`'e doğrudan değil, `tenantScoped()`in **üzerine** eklenir — tenant filtresinin
+yerine geçemez. Bu, `integration/tenant-scope-pattern.spec.ts`'te bu modele özgü ek bir
+pattern testiyle korunur (`where: { type }` yazılmasını yakalar), HTTP tarafındaki karşılığı
+`security/category-security.spec.ts`'tedir.
+
+### Yetki
+
+`VIEW_CATEGORIES` ile `MANAGE_CATEGORIES` ayrıdır (hesaplarla aynı ayrım): kategori listesini
+görmek her üyenin işidir — işlem kaydederken seçecektir; kategori açmak/yeniden
+adlandırmak/silmek ise tenant'ın sınıflandırma şemasını değiştirmektir, yani yönetim işi.
+MEMBER görür, ADMIN ve OWNER yönetir.
+
+### Audit
+
+`CATEGORY_CREATED` / `CATEGORY_UPDATED` / `CATEGORY_DELETED`. Bir kategorinin yeniden
+adlandırılması veya silinmesi **geçmiş raporların anlamını değiştirir**, bu yüzden iz tutulur.
+Güncellemede metadata yalnızca hangi alanların değiştiğini taşır (`Account` ile aynı gerekçe).
+
+### Bilinen sınır: silme, kullanımda olan kategoriyi kontrol etmez
+
+`Transaction` modeli henüz yoktur (#53). "Kullanımda olan kategori silinmek istenirse ne olur"
+(engelle / işlemleri kategorisiz bırak) o modelin kararıdır ve orada verilmelidir; bugün
+kategoriye bağlanan hiçbir kayıt olmadığı için koşulsuz silme doğru davranıştır. Önceden bir
+koruma yazmak, dayanacağı bir ilişki olmadığından ölü kod olurdu.
+
+Kapsam dışı bırakılan diğer iki şey: **alt kategori hiyerarşisi** (issue'da açıkça kapsam
+dışı; düz liste ilk sürüm için yeterli) ve **varsayılan kategori seti ile tenant tohumlama**
+(yeni bir tenant'ın hangi kategorilerle açılacağı ürün kararıdır, bu issue'nun değil).
+Kategori yönetimi arayüzü #50'dir.

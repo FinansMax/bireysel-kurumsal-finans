@@ -223,10 +223,15 @@ export type DeleteCategoryResult = { ok: true } | { ok: false; status: 404; erro
 /**
  * Kategoriyi siler.
  *
- * BİLİNEN SINIR: `Transaction` modeli henüz yok (#53). "Kullanımda olan kategori silinmek
- * istenirse ne olur" (engelle / işlemleri kategorisiz bırak) o modelin kararıdır ve orada
- * verilmelidir. Bugün kategoriye bağlanan hiçbir kayıt olmadığı için koşulsuz silme doğru
- * davranıştır; önceden bir koruma yazmak, dayanacağı bir ilişki olmadığından ölü kod olurdu.
+ * KULLANIMDA OLAN KATEGORİ DE SİLİNEBİLİR (#49'un açık bıraktığı karar, #53'te verildi):
+ * kategoriye bağlı işlemler SİLİNMEZ, `categoryId`leri `null`a düşer ve "kategorisiz" kalır
+ * (şemadaki `onDelete: SetNull`).
+ *
+ * Alternatif — "işlemi olan kategori silinemez" (`Account` için seçilen davranış) — burada
+ * REDDEDİLDİ: hesap paranın kendisidir, kategori ise yalnızca bir ETİKETTİR. Tek bir eski işlem
+ * yüzünden artık kullanılmayan bir etiketi listede sonsuza dek tutmaya zorlamak, kullanıcıyı
+ * "Kullanılmıyor - silmeyin" gibi kaçamak isimlere iterdi. Kaybedilen şey geri alınamaz bir
+ * finansal kayıt değil, bir sınıflandırmadır; silme işleminin kendisi audit log'a yazılır.
  */
 export async function deleteCategory(
   tenantId: string,

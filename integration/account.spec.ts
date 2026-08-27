@@ -367,4 +367,48 @@ test.describe("deleteAccount()", () => {
 
     expect(await prisma.account.count({ where: { tenantId } })).toBe(0);
   });
+
+  test("İŞLEMİ OLAN hesap silinemiyor (409) ve ne hesap ne işlem kayboluyor", async () => {
+    // Issue #53 ile gelen kısıt: cascade REDDEDİLDİ — bir hesabı silmek, o hesabın tüm
+    // finansal geçmişini sessizce yok ederdi (bkz. prisma/schema.prisma'daki `onDelete`
+    // notu ve README).
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+
+    const created = await createAccount(tenantId, actorId, validInput());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    await prisma.transaction.create({
+      data: { tenantId, accountId: created.account.id, type: "EXPENSE", amount: "10" },
+    });
+
+    const result = await deleteAccount(tenantId, created.account.id, actorId);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(409);
+
+    expect(await prisma.account.count({ where: { id: created.account.id } })).toBe(1);
+    expect(await prisma.transaction.count({ where: { tenantId } })).toBe(1);
+  });
+
+  test("işlemler silindikten sonra hesap silinebiliyor (duyarlılık kanıtı)", async () => {
+    // Yukarıdaki 409 hesabın kendisinden değil, BAĞLI KAYITTAN gelmeli.
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+
+    const created = await createAccount(tenantId, actorId, validInput());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const transaction = await prisma.transaction.create({
+      data: { tenantId, accountId: created.account.id, type: "EXPENSE", amount: "10" },
+      select: { id: true },
+    });
+    await prisma.transaction.delete({ where: { id: transaction.id } });
+
+    const result = await deleteAccount(tenantId, created.account.id, actorId);
+    expect(result.ok).toBe(true);
+  });
 });

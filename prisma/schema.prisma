@@ -58,11 +58,12 @@ model Tenant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships Membership[]
-  invitations TenantInvitation[]
-  auditLogs   AuditLog[]
-  accounts    Account[]
-  categories  Category[]
+  memberships  Membership[]
+  invitations  TenantInvitation[]
+  auditLogs    AuditLog[]
+  accounts     Account[]
+  categories   Category[]
+  transactions Transaction[]
 }
 
 // Bir tenant'ın finansal hesabı: banka hesabı veya kasa (Issue #46).
@@ -89,6 +90,8 @@ model Account {
   tenantId String
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  transactions Transaction[]
+
   // Aynı tenant içinde aynı isimde iki hesap olamaz. Bu, "önce kontrol et sonra yaz" yarışını
   // veritabanı seviyesinde kapatır: servis katmanı P2002'yi 409'a çevirir (bkz.
   // src/lib/finance/account.ts). Kıyas büyük/küçük harfe DUYARLIDIR ("Kasa" ile "kasa" ayrı
@@ -111,6 +114,8 @@ model Category {
   tenantId String
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  transactions Transaction[]
+
   // Unique anahtar `Account`takinden FARKLI olarak TÜRÜ de içerir: "Diğer", "Faiz", "Kira"
   // gibi isimler hem gelir hem gider tarafında doğal olarak bulunur; bunları tek bir isim
   // uzayına sıkıştırmak kullanıcıyı "Diğer (Gelir)" gibi kaçamak isimlere zorlardı.
@@ -119,6 +124,70 @@ model Category {
   // src/lib/finance/category.ts). Kıyas büyük/küçük harfe DUYARLIDIR (Account ile aynı sınır).
   @@unique([tenantId, type, name])
   @@index([tenantId])
+}
+
+// Bir tenant'ın gelir/gider işlemi (Issue #53): paranın gerçekten hareket ettiği kayıt.
+// `Account.balance` bu kayıtlardan TÜRETİLİR — işlem oluşturma/güncelleme/silme, bakiyeyi aynı
+// DB transaction'ı içinde günceller (bkz. src/lib/finance/transaction.ts).
+model Transaction {
+  id String @id @default(cuid())
+
+  // Yön (para giriyor mu çıkıyor mu). `CategoryType` BİLEREK yeniden kullanılır, ayrı bir
+  // `TransactionType` enum'ı TANIMLANMAZ: bu tek bir alan adı meselesi değil, iki değerin
+  // KARŞILAŞTIRILMASI meselesidir — bir gider işlemine yalnızca gider kategorisi seçilebilir
+  // (bkz. README "?type filtresi"). İkiz bir enum, tam da bu karşılaştırmanın yapıldığı yerde
+  // TypeScript'i bir cast'e zorlardı; aynı domain kavramı için iki tip tutmanın bedeli budur.
+  type CategoryType
+
+  // Tutar DAİMA POZİTİFTİR; yönü `type` taşır (servis katmanı 0 ve negatifi 400 ile reddeder).
+  // Negatif bir EXPENSE, kılık değiştirmiş bir gelir olurdu ve "toplam gider" gibi her toplamı
+  // sessizce bozardı. Ölçek `Account.balance` ile aynı: (19, 4) — bkz. invariant #10.
+  amount Decimal @db.Decimal(19, 4)
+
+  // Kullanıcının serbest notu (ör. "Ocak kirası"). null = not girilmemiş; boş string DEĞİL
+  // (servis katmanı boş/boşluk-only notu `null`a indirger — "yok" için tek bir gösterim).
+  description String?
+
+  // İşlemin GERÇEKLEŞTİĞİ an — `createdAt` (kaydın SİSTEME girildiği an) ile karıştırılmamalı.
+  // Geçmişe dönük kayıt girmek normaldir, bu yüzden ikisi ayrı alandır. İstemci göndermezse
+  // "şimdi" varsayılır: işlem formunun doğal varsayılanı bugündür.
+  occurredAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Paranın hareket ettiği hesap ZORUNLUDUR — bakiyesi bu kayıtlardan türetildiği için
+  // hesapsız bir işlemin anlamı yoktur.
+  //
+  // `onDelete: NoAction`: işlemi olan bir hesap SİLİNEMEZ (servis P2003'ü 409'a çevirir).
+  // Cascade REDDEDİLDİ — bir hesabı silmek, o hesabın tüm finansal geçmişini sessizce yok
+  // ederdi. `Restrict` DEĞİL `NoAction`: ikisi de aynı engeli koyar, ama Postgres'te
+  // `RESTRICT` kontrolü ERTELENEMEZ; tenant silindiğinde tenant→account ve tenant→transaction
+  // cascade'leri AYNI ifadede çalışır ve `RESTRICT` bu meşru durumu da hatayla keserdi.
+  // `NO ACTION` kontrolü ifade sonunda yapar, dolayısıyla tenant silme çalışmaya devam eder
+  // (kanıt: integration/transaction.spec.ts'teki cascade testi).
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: NoAction)
+
+  // Kategori OPSİYONELDİR: sınıflandırma sonradan da yapılabilir, kayıt bunu beklemez.
+  // `onDelete: SetNull`: kategori silinince işlem "kategorisiz" kalır, SİLİNMEZ. Hesabın
+  // aksine kategori paranın kendisi değil bir ETİKETTİR; tek bir eski işlem yüzünden bir
+  // etiketi sonsuza dek tutmaya zorlamak yanlış olurdu (bkz. README, Issue #49'un açık bıraktığı
+  // karar burada veriliyor).
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  // Listeleme daima tenant içinde ve tarihe göre azalan sırada yapılır; bileşik index ikisini
+  // birden karşılar. Ayrı bir `@@index([tenantId])` YOKTUR — bileşik index'in en soldaki
+  // sütunu zaten tenantId'dir, ikincisi yalnızca yazma maliyeti eklerdi.
+  @@index([tenantId, occurredAt])
+  // FK sütunlarına index: Postgres FK'leri otomatik indexlemez. Hesap silinirken yapılan
+  // "işlemi var mı" kontrolü ve kategori silinirken yapılan SetNull taraması bunlara dayanır.
+  @@index([accountId])
+  @@index([categoryId])
 }
 
 model Membership {

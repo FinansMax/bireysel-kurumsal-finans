@@ -457,4 +457,38 @@ test.describe("deleteCategory()", () => {
 
     expect(await prisma.category.count({ where: { tenantId } })).toBe(0);
   });
+
+  test("KULLANIMDA olan kategori silinebiliyor; işlem SİLİNMEZ, kategorisiz kalır", async () => {
+    // Issue #49'un açık bıraktığı karar #53'te verildi: kategori bir ETİKETTİR, `Account`
+    // gibi paranın kendisi değildir — bu yüzden `onDelete: SetNull` (bkz. README). Hesapta
+    // aynı durum 409 ile ENGELLENİR; ikisinin farklı olması bilinçlidir.
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+
+    const created = await createCategory(tenantId, actorId, validInput());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const account = await prisma.account.create({
+      data: { tenantId, name: `Hesap ${randomUUID()}`, type: "CASH", currency: "TRY" },
+      select: { id: true },
+    });
+    const transaction = await prisma.transaction.create({
+      data: {
+        tenantId,
+        accountId: account.id,
+        categoryId: created.category.id,
+        type: "EXPENSE",
+        amount: "10",
+      },
+      select: { id: true },
+    });
+
+    const result = await deleteCategory(tenantId, created.category.id, actorId);
+    expect(result.ok).toBe(true);
+
+    const row = await prisma.transaction.findUniqueOrThrow({ where: { id: transaction.id } });
+    expect(row.categoryId).toBeNull();
+    expect(row.amount.toFixed(2)).toBe("10.00");
+  });
 });

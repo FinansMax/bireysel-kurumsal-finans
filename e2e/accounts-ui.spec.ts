@@ -111,6 +111,29 @@ function formAlert(page: Page) {
   return page.locator("form").getByRole("alert");
 }
 
+/**
+ * Kayıttan SONRA listede beliren satırı bekler (Issue #129).
+ *
+ * Süre bilerek varsayılanın (5 sn) üstünde: form `router.refresh()` çağırır, yani satırın
+ * görünmesi bir sunucu round-trip'ine ve RSC yeniden render'ına bağlıdır. Tam e2e suite'i
+ * paralel koşarken bu adım 5 saniyeyi aşabiliyor ve test, uygulama doğru çalıştığı hâlde
+ * kırmızıya düşüyordu — CI'daki `retries: 2` bunu örtüyor, yerelde ise sürekli sahte kırmızı
+ * üretiyordu.
+ *
+ * Bu bir GEVŞETME DEĞİLDİR: iddia aynı (satır listede görünmeli), yalnızca bilinen bir yavaş
+ * adıma daha fazla süre tanınıyor. Kaydın sunucuda gerçekten oluştuğu zaten bağımsız bir API
+ * okumasıyla, bu beklemeden ayrı olarak doğrulanıyor. Desen ilk kez
+ * `transactions-ui.spec.ts`'te (#54) uygulandı ve orada kararsızlığı tamamen bitirdi.
+ *
+ * Aynı süre form HATA KUTUSU beklemelerinde de kullanılır: o da bir sunucu round-trip'inden
+ * sonra belirir (form `fetch` ile POST atar, mesajı yanıtın durum kodundan kurar).
+ */
+const ROW_TIMEOUT_MS = 15_000;
+
+function expectRow(page: Page, name: string) {
+  return expect(page.getByRole("cell", { name })).toBeVisible({ timeout: ROW_TIMEOUT_MS });
+}
+
 test.describe("/accounts — oluşturma ve listeleme", () => {
   test("menüden gidilip hesap oluşturuluyor ve listede görünüyor", async ({ page }) => {
     await signUpAndSignIn(page, "accounts-create");
@@ -135,7 +158,7 @@ test.describe("/accounts — oluşturma ve listeleme", () => {
     await submit(page);
 
     // Liste sunucudan yeniden render edilir.
-    await expect(page.getByRole("cell", { name: "Vadesiz TL" })).toBeVisible();
+    await expectRow(page, "Vadesiz TL");
 
     // Asıl kanıt: kayıt sunucuda var ve para STRING olarak, hassasiyeti bozulmadan duruyor.
     const accounts = await apiAccounts(page, tenantId);
@@ -160,7 +183,7 @@ test.describe("/accounts — oluşturma ve listeleme", () => {
     await fillAccountForm(page, { name: "Merkez Nakit", type: "CASH", currency: "TRY" });
     await submit(page);
 
-    await expect(page.getByRole("cell", { name: "Merkez Nakit" })).toBeVisible();
+    await expectRow(page, "Merkez Nakit");
 
     const accounts = await apiAccounts(page, tenantId);
     expect(accounts[0].balance).toBe("0");
@@ -174,12 +197,12 @@ test.describe("/accounts — oluşturma ve listeleme", () => {
     await page.goto("/accounts");
     await fillAccountForm(page, { name: "Tek Hesap", currency: "TRY" });
     await submit(page);
-    await expect(page.getByRole("cell", { name: "Tek Hesap" })).toBeVisible();
+    await expectRow(page, "Tek Hesap");
 
     await fillAccountForm(page, { name: "Tek Hesap", currency: "TRY" });
     await submit(page);
 
-    await expect(formAlert(page)).toContainText("zaten var");
+    await expect(formAlert(page)).toContainText("zaten var", { timeout: ROW_TIMEOUT_MS });
     expect(await apiAccounts(page, tenantId)).toHaveLength(1);
   });
 
@@ -192,7 +215,9 @@ test.describe("/accounts — oluşturma ve listeleme", () => {
     await fillAccountForm(page, { name: "Hatali", currency: "TRY", balance: "10.12345" });
     await submit(page);
 
-    await expect(formAlert(page)).toContainText("Bilgileri kontrol edin");
+    await expect(formAlert(page)).toContainText("Bilgileri kontrol edin", {
+      timeout: ROW_TIMEOUT_MS,
+    });
     expect(await apiAccounts(page, tenantId)).toHaveLength(0);
   });
 });

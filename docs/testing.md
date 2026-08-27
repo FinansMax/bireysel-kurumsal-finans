@@ -152,3 +152,44 @@ yoksa) bunu **açıkça söyle**; "geçiyor" deme.
 E2E suite'i CI'da 2 kez retry eder; lokalde etmez. Bir test flaky ise sebebi bulunur — retry
 sayısı artırılarak veya `test.skip` ile susturularak geçilmez. Sık sebepler: paylaşılan DB'de
 benzersiz olmayan test verisi, ortak rate-limit bucket'ı, sabit `waitForTimeout`.
+
+**Yeşil CI "stabil" demek değildir.** `retries: process.env.CI ? 2 : 0` (bkz.
+`playwright.config.ts`) CI'da kararsızlığı ÖRTER: yerelde kırmızı olan bir suite CI'da yeşil
+görünebilir. Bu yüzden yerel `retries: 0` bilinçlidir — kararsızlığı görünür tutar. Bir PR'da
+e2e'yi değerlendirirken CI'nın yeşilliği tek başına kanıt sayılmamalıdır.
+
+### Sunucu round-trip'i bekleyen assertion'lara açık süre verin
+
+Bir formu gönderdikten sonra listede beliren satırı (veya hata kutusunu) bekleyen assertion,
+`router.refresh()` kaynaklı bir sunucu round-trip'ine ve RSC yeniden render'ına bağlıdır. Tam
+suite paralel koşarken bu adım varsayılan 5 saniyeyi aşabiliyor ve test, uygulama doğru
+çalıştığı hâlde kırmızıya düşüyor. Bu tür beklemelerde açık bir süre verin:
+
+```ts
+const ROW_TIMEOUT_MS = 15_000;
+
+function expectRow(page: Page, name: string) {
+  return expect(page.getByRole("cell", { name })).toBeVisible({ timeout: ROW_TIMEOUT_MS });
+}
+```
+
+Bu bir **gevşetme değildir** ve "flaky testi susturma" yasağının istisnası da değildir: iddia
+aynı kalır, yalnızca bilinen bir yavaş adıma süre tanınır. Kaydın sunucuda gerçekten oluştuğu
+zaten bağımsız bir API okumasıyla, bu beklemeden ayrı olarak doğrulanmalıdır (kural #2:
+kontrol grubu). Süreyi bir iddiayı kurtarmak için değil, yalnızca round-trip beklemek için
+kullanın.
+
+### Yerelde bozuk bir dev sunucusu tüm suite'i zehirler
+
+`webServer.reuseExistingServer` lokalde açıktır. Önceki bir koşu yarıda kesildiyse (ör. terminal
+kapatıldı, süreç SIGTERM aldı) port 3000'de yarım kalmış bir `next dev` süreci kalabilir;
+Playwright onu yeniden kullanır ve API route'ları JSON yerine HTML hata sayfası döndürmeye
+başlar. Belirti kolay tanınır: `SyntaxError: Unexpected token '<', "<!DOCTYPE "...` ve suite'in
+neredeyse tamamının aynı anda düşmesi.
+
+Tek tük değil de **onlarca** test birden düştüyse önce süreci kontrol edin:
+
+```bash
+netstat -ano | grep ":3000.*LISTENING"   # PID'i bul
+taskkill //PID <pid> //F                 # Windows
+```

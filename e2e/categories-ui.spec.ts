@@ -102,6 +102,29 @@ function formAlert(page: Page) {
   return page.locator("form").getByRole("alert");
 }
 
+/**
+ * Kayıttan SONRA listede beliren satırı bekler (Issue #129).
+ *
+ * Süre bilerek varsayılanın (5 sn) üstünde: form `router.refresh()` çağırır, yani satırın
+ * görünmesi bir sunucu round-trip'ine ve RSC yeniden render'ına bağlıdır. Tam e2e suite'i
+ * paralel koşarken bu adım 5 saniyeyi aşabiliyor ve test, uygulama doğru çalıştığı hâlde
+ * kırmızıya düşüyordu — CI'daki `retries: 2` bunu örtüyor, yerelde ise sürekli sahte kırmızı
+ * üretiyordu.
+ *
+ * Bu bir GEVŞETME DEĞİLDİR: iddia aynı (satır listede görünmeli), yalnızca bilinen bir yavaş
+ * adıma daha fazla süre tanınıyor. Kaydın sunucuda gerçekten oluştuğu zaten bağımsız bir API
+ * okumasıyla, bu beklemeden ayrı olarak doğrulanıyor. Desen ilk kez
+ * `transactions-ui.spec.ts`'te (#54) uygulandı ve orada kararsızlığı tamamen bitirdi.
+ *
+ * Aynı süre form HATA KUTUSU beklemelerinde de kullanılır: o da bir sunucu round-trip'inden
+ * sonra belirir (form `fetch` ile POST atar, mesajı yanıtın durum kodundan kurar).
+ */
+const ROW_TIMEOUT_MS = 15_000;
+
+function expectRow(page: Page, name: string) {
+  return expect(page.getByRole("cell", { name })).toBeVisible({ timeout: ROW_TIMEOUT_MS });
+}
+
 test.describe("/categories — oluşturma ve listeleme", () => {
   test("menüden gidilip kategori oluşturuluyor ve listede görünüyor", async ({ page }) => {
     await signUpAndSignIn(page, "categories-create");
@@ -121,7 +144,7 @@ test.describe("/categories — oluşturma ve listeleme", () => {
     await submit(page);
 
     // Liste sunucudan yeniden render edilir.
-    await expect(page.getByRole("cell", { name: "Kira Gideri" })).toBeVisible();
+    await expectRow(page, "Kira Gideri");
 
     // Asıl kanıt: kayıt sunucuda var.
     const categories = await apiCategories(page, tenantId);
@@ -139,11 +162,11 @@ test.describe("/categories — oluşturma ve listeleme", () => {
     // hem gelir hem gider tarafında doğal bir isimdir ve ikisi de kabul edilmelidir.
     await fillCategoryForm(page, { name: "Faiz", type: "EXPENSE" });
     await submit(page);
-    await expect(page.getByRole("cell", { name: "Gider" })).toBeVisible();
+    await expectRow(page, "Gider");
 
     await fillCategoryForm(page, { name: "Faiz", type: "INCOME" });
     await submit(page);
-    await expect(page.getByRole("cell", { name: "Gelir" })).toBeVisible();
+    await expectRow(page, "Gelir");
 
     // Formda hata YOK: ikinci kayıt reddedilmedi.
     await expect(formAlert(page)).toHaveCount(0);
@@ -162,13 +185,15 @@ test.describe("/categories — oluşturma ve listeleme", () => {
     await page.goto("/categories");
     await fillCategoryForm(page, { name: "Market", type: "EXPENSE" });
     await submit(page);
-    await expect(page.getByRole("cell", { name: "Market" })).toBeVisible();
+    await expectRow(page, "Market");
 
     await fillCategoryForm(page, { name: "Market", type: "EXPENSE" });
     await submit(page);
 
     // Mesaj TÜRÜ de söyler: benzersizlik tenant + tür + isim üzerindendir.
-    await expect(formAlert(page)).toContainText("Bu türde bu isimde");
+    await expect(formAlert(page)).toContainText("Bu türde bu isimde", {
+      timeout: ROW_TIMEOUT_MS,
+    });
     expect(await apiCategories(page, tenantId)).toHaveLength(1);
   });
 
@@ -181,7 +206,9 @@ test.describe("/categories — oluşturma ve listeleme", () => {
     await fillCategoryForm(page, { name: "A", type: "EXPENSE" });
     await submit(page);
 
-    await expect(formAlert(page)).toContainText("Bilgileri kontrol edin");
+    await expect(formAlert(page)).toContainText("Bilgileri kontrol edin", {
+      timeout: ROW_TIMEOUT_MS,
+    });
     expect(await apiCategories(page, tenantId)).toHaveLength(0);
   });
 
@@ -192,7 +219,7 @@ test.describe("/categories — oluşturma ve listeleme", () => {
     await page.goto("/categories");
     await fillCategoryForm(page, { name: "Maas", type: "INCOME" });
     await submit(page);
-    await expect(page.getByRole("cell", { name: "Maas" })).toBeVisible();
+    await expectRow(page, "Maas");
 
     // Kullanıcı genellikle arka arkaya aynı taraftan kategori girer; türün sıfırlanması
     // her kayıtta yeniden seçmeyi gerektirirdi.

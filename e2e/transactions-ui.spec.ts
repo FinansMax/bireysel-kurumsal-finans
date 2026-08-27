@@ -307,7 +307,7 @@ test.describe("/transactions — kaydetme ve listeleme", () => {
     await fillTransactionForm(page, { amount: "-50", description: "Olmamali" });
     await submit(page);
 
-    await expect(formAlert(page)).toBeVisible();
+    await expect(formAlert(page)).toBeVisible({ timeout: ROW_TIMEOUT_MS });
 
     expect(await apiTransactions(page, tenantId)).toHaveLength(0);
     expect(await apiBalance(page, tenantId, accountId)).toBe("1000");

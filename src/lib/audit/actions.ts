@@ -30,6 +30,12 @@ export const AUDIT_ACTIONS = {
   CATEGORY_CREATED: "CATEGORY_CREATED",
   CATEGORY_UPDATED: "CATEGORY_UPDATED",
   CATEGORY_DELETED: "CATEGORY_DELETED",
+  // İşlem yaşam döngüsü (Issue #53). Diğer finansal modellerden farkı: bu kayıtlar paranın
+  // KENDİSİDİR — her biri bir hesabın bakiyesini değiştirir. Sonradan silinmiş veya tutarı
+  // düzeltilmiş bir işlemin izi kalmasaydı, bakiyenin neden değiştiği yanıtsız kalırdı.
+  TRANSACTION_CREATED: "TRANSACTION_CREATED",
+  TRANSACTION_UPDATED: "TRANSACTION_UPDATED",
+  TRANSACTION_DELETED: "TRANSACTION_DELETED",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
@@ -40,6 +46,7 @@ export const AUDIT_TARGET_TYPES = {
   MEMBERSHIP: "MEMBERSHIP",
   ACCOUNT: "ACCOUNT",
   CATEGORY: "CATEGORY",
+  TRANSACTION: "TRANSACTION",
 } as const;
 
 export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[keyof typeof AUDIT_TARGET_TYPES];

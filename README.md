@@ -903,3 +903,150 @@ E2E kanıtı: `e2e/categories-ui.spec.ts` — her sonuç `GET /api/tenants/:id/c
 doğrulanır. Aynı ismin gelir ve gider tarafında ayrı ayrı kullanılabildiği (yani #49'un
 `@@unique([tenantId, type, name])` kararı) uçtan uca ayrıca kanıtlanır; MEMBER için formun hiç
 render edilmediği ve baypas edilirse `403` alındığı da test edilir.
+
+## Gelir/Gider İşlemleri (Issue #53)
+
+Üçüncü finansal model: `Transaction` — paranın gerçekten hareket ettiği kayıt. Şema
+`prisma/schema.prisma`, iş mantığı `src/lib/finance/transaction.ts`, endpoint'ler
+`GET/POST /api/tenants/[tenantId]/transactions` ve
+`PATCH/DELETE /api/tenants/[tenantId]/transactions/[transactionId]`.
+
+Tenant izolasyonu, enumeration duruşu ve hata sözleşmesi `Account` (#46) ile **aynıdır** ve
+burada tekrarlanmaz. Bu modeli diğer ikisinden ayıran şey tektir: bir işlem yalnızca kendi
+satırını değil, **bağlı olduğu hesabın bakiyesini** de yazar. Aşağıdaki kararların hemen hepsi
+bu tek gerçeğin sonucudur.
+
+### `Account.balance` işlemlerden türetilir, ama saklanır
+
+Bakiye her okumada işlemler toplanarak HESAPLANMAZ; `Account.balance` sütununda tutulur ve her
+işlem yazımında güncellenir. Alternatif — bakiyeyi `SUM(amount)` ile anlık hesaplamak — bakiyeyi
+tanım gereği doğru yapardı, ama hesap listesi büyüdükçe her sayfa açılışında tüm işlem
+geçmişini taramak gerekirdi. Saklanan bakiyenin bedeli, doğruluğunun **korunması gereken bir
+invariant** hâline gelmesidir; bu yüzden:
+
+- **Kayıt ile bakiye güncellemesi daima TEK bir DB transaction'ı içindedir.** İkisinin arasında
+  bir çökme, bakiyesi kayıtlarına uymayan bir hesap bırakırdı.
+- **Bakiye `increment` ile kaydırılır** (`balance = balance + x` SQL'i), uygulama katmanında
+  "oku, JS'te topla, geri yaz" ile DEĞİL. İkincisi iki eşzamanlı işlemde lost update üretirdi.
+- Bir doğrulama başarısız olursa (yabancı hesap, uyumsuz kategori) **ne kayıt ne bakiye**
+  değişir — `integration/transaction.spec.ts` bunu her hata dalında ayrıca doğrular.
+
+### Tutar daima pozitiftir; yönü `type` taşır
+
+`amount` için `parseMoney()`in kesin pozitif varyantı kullanılır: `0` ve negatif değerler `400`
+alır. `Account.balance` negatif olabilir (hesap eksiye düşebilir) ama bir işlemin tutarı
+olamaz — negatif bir `EXPENSE`, kılık değiştirmiş bir gelir olurdu ve "dönemin toplam gideri"
+gibi her toplamı sessizce bozardı. Sıfır da reddedilir: bakiyeyi değiştirmeyen bir para hareketi
+kayıt değil gürültüdür.
+
+Para sözleşmesinin geri kalanı `Account` ile aynıdır: DB'de `Decimal(19, 4)`, API'de **string**,
+girdide `number` reddedilir (invariant #10).
+
+### `Serializable` YALNIZCA güncellemede — ve nedeni ölçüldü
+
+`CLAUDE.md`, "okumaya bağlı invariant'lar için Serializable + retry" der. Buradaki üç mutation
+bu tanıma **farklı** oranlarda uyar:
+
+| İşlem | İzolasyon | Neden |
+| --- | --- | --- |
+| `create` | varsayılan | Hiçbir eski değer okumaz; bakiye atomik `increment` ile kayar. |
+| `delete` | varsayılan | `deleteMany` + `count === 1` kapısı, eşzamanlı ikinci silmenin bakiyeyi ikinci kez geri almasını imkânsız kılar. |
+| `update` | **Serializable + retry** | Bakiye düzeltmesi işlemin ESKİ tutarını okumaya dayanır ("önceki etkiyi geri al, yenisini uygula"). |
+
+Her yere Serializable koymak kolay olurdu ama her eşzamanlı kayıt için gereksiz yeniden deneme
+üretirdi. Update'teki ihtiyaç varsayım değil, **ölçüm**: `runSerializable()` düz bir
+`$transaction` ile değiştirildiğinde `integration/transaction.spec.ts`'teki eşzamanlılık testi
+üç denemenin üçünde de kırmızıya döndü ve bakiye tam da tarif edilen şekilde bozuldu
+(son tutar `700` iken bakiye `-1800`).
+
+O testin **altı** eşzamanlı istek kullanması da bir ölçümün sonucudur: iki istekle okumalar
+pratikte iç içe geçmiyor ve test, Serializable kaldırılsa bile yeşil kalıyordu — yani hiçbir şey
+kanıtlamıyordu. (Aynı tuzak `membership-concurrency.spec.ts`'te de notlanmıştı.)
+
+Denemeler tükenirse yanıt **`503`**'tür, `409` değil: geçici bir yazma çakışması bir iş kuralı
+ihlali değildir (bkz. "Eşzamanlılık: Serializable + Retry").
+
+### Kategorinin türü işlemin türüyle eşleşmek zorunda
+
+Bir gider işlemine gelir kategorisi bağlanamaz (`400`). Bu, #49'un `@@unique([tenantId, type,
+name])` kararının doğrudan devamıdır: kategori daima bir türün bağlamında seçilir, aksi hâlde
+tür bazlı her rapor anlamsızlaşırdı.
+
+Bunun daha ince bir sonucu: **`type` güncellenirken mevcut kategori yeniden kontrol edilir.**
+Kategori hiç değişmese bile, işlemin yönü değiştiğinde eski kategori yanlış tarafta kalmış
+olabilir; böyle bir `PATCH` sessizce geçseydi kayıt tutarsız kalırdı. Kullanıcı ya kategoriyi de
+değiştirmeli ya da `categoryId: null` ile kaldırmalıdır.
+
+"Kategori yok" (`404`) ile "kategori yanlış türde" (`400`) **farklı** yanıtlar alır ve bu bilgi
+sızdırmaz: her iki kayıt da çağıranın kendi tenant'ındadır. Yabancı bir tenant'ın kategorisi ise
+hiç var olmayan bir kategoriyle **aynı** `404`'ü alır.
+
+### Silme kuralları: hesap engeller, kategori kategorisiz bırakır
+
+Issue #49'un bilerek açık bıraktığı karar burada verildi ve ikisi **kasten farklıdır**:
+
+- **İşlemi olan hesap silinemez** (`409`, `onDelete: NoAction`). Cascade reddedildi: bir hesabı
+  silmek, o hesabın tüm finansal geçmişini sessizce yok ederdi. Kullanıcının önce işlemleri
+  silmesi gerekir — bu, geri alınamaz bir kaybı bilinçli bir eyleme dönüştürür.
+- **Kullanımda olan kategori silinebilir**; bağlı işlemler silinmez, `categoryId`leri `null`a
+  düşer (`onDelete: SetNull`). Hesap paranın kendisidir, kategori yalnızca bir **etikettir**;
+  tek bir eski işlem yüzünden artık kullanılmayan bir etiketi listede sonsuza dek tutmaya
+  zorlamak kullanıcıyı "Kullanılmıyor - silmeyin" gibi kaçamak isimlere iterdi. Kaybedilen şey
+  geri alınamaz bir finansal kayıt değil, bir sınıflandırmadır ve silme audit log'a yazılır.
+
+`Restrict` DEĞİL `NoAction` seçilmesi bir ayrıntı değil: ikisi de aynı engeli koyar, ama
+Postgres'te `RESTRICT` kontrolü **ertelenemez**. Tenant silindiğinde tenant→account ve
+tenant→transaction cascade'leri aynı ifadede çalışır; `RESTRICT` bu meşru silmeyi de hatayla
+keserdi. `NO ACTION` kontrolü ifade sonunda yapar. Bu, varsayım değil ölçümdür ve
+`integration/transaction.spec.ts`'teki cascade testiyle korunur.
+
+### `occurredAt` ile `createdAt` ayrı alanlardır
+
+`occurredAt` işlemin **gerçekleştiği**, `createdAt` kaydın **sisteme girildiği** andır; geçmişe
+dönük kayıt girmek normaldir. İstemci göndermezse "şimdi" varsayılır (işlem formunun doğal
+varsayılanı bugündür).
+
+Doğrulama `YYYY-MM-DD` veya tam ISO 8601 kabul eder ve takvim kontrolünü **elle** yapar: bu
+kontrol `new Date()`e bırakılamaz, çünkü JavaScript `"2026-02-31"`i hataya çevirmez, sessizce
+3 Mart'a **taşır** — yani kullanıcının yazdığından farklı bir tarih kaydedilirdi.
+
+**Gelecek tarih serbesttir** (ileri tarihli çek/planlı ödeme meşrudur). Bilinen sonucu, böyle bir
+kaydın bakiyeyi hemen etkilemesidir; "bekleyen işlem" ayrımı ayrı bir issue'nun konusudur.
+
+### Yetki: MEMBER okur, kaydedemez
+
+`VIEW_TRANSACTIONS` ile `MANAGE_TRANSACTIONS` ayrıdır. MEMBER işlemleri **görür** ama
+kaydedemez/düzeltemez/silemez; ADMIN ve OWNER yönetir.
+
+Bu, matristeki **en tartışmaya açık** karardır ve bilerek dar tarafta bırakılmıştır. Gerekçe
+matrisin kendi mantığından gelir: `MANAGE_ACCOUNTS` MEMBER'dan esirgenirken sebep olarak
+"bakiyeyi elle değiştirmek yönetim işidir" yazılmıştı — bir işlem kaydetmek de tam olarak
+bakiyeyi değiştirmektir. Karşı argüman da gerçektir: gideri fişi elinde olan kişi girer ve bu
+kural MEMBER rolünü günlük akışta işlevsiz bırakır.
+
+Dar taraf seçildi çünkü **yön asimetriktir**: yetkiyi sonradan genişletmek geriye dönük bir
+sorun yaratmaz, daraltmak ise o güne kadar girilmiş kayıtları tartışmalı hâle getirir. Karar
+ürün tarafından değiştirilirse tek satırlık bir matris değişikliğidir
+(`src/lib/authz/permissions.ts`) ve `integration/permissions.spec.ts` ile
+`security/transaction-security.spec.ts`'teki karşılıkları güncellenmelidir.
+
+### Audit
+
+`TRANSACTION_CREATED` / `TRANSACTION_UPDATED` / `TRANSACTION_DELETED`. Metadata **tutarı
+taşımaz** (`Account`/`Category` ile aynı karar): audit log finansal tutarların ikinci bir
+kopyası değil, "kim, ne zaman, hangi hesapta" sorusunun yanıtıdır. Güncellemede yalnızca hangi
+alanların değiştiği kaydedilir.
+
+### Bilinen sınırlar
+
+- **Liste sayfalanmaz ve filtrelenmez.** Filtreleme/arama #56'nın konusudur; buraya yapay bir
+  limit koymak o issue'nun tasarımını önden bağlardı. Sıralama yine de deterministiktir (önce
+  `occurredAt`, eşitlikte `createdAt`) — aksi hâlde sayfalama eklendiğinde satır atlayan bir
+  liste doğardı.
+- **Hesaplar arası transfer yoktur.** Bugün bir transfer, iki ayrı işlem olarak girilir; tek
+  kayıtta iki hesabı etkileyen bir "transfer" türü ayrı bir modelleme kararıdır.
+- **Tekrarlayan işlemler ve toplu import** issue'da açıkça kapsam dışıdır (Epic 10).
+- **`Decimal(19, 4)` taşması** (bakiyenin 15 basamağı aşması) uygulama katmanında yakalanmaz;
+  Postgres hata verir. Gerçekçi olmayan bir sınır olduğu için önden kontrol yazılmadı.
+
+Arayüz (`/transactions`) #54'ün konusudur.

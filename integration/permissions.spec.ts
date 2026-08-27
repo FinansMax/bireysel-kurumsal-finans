@@ -24,6 +24,9 @@ const MANAGEMENT_PERMISSIONS: Permission[] = [
   // Kategori yönetimi (Issue #49) da bir yönetim iznidir: MEMBER kategorileri görebilir ama
   // tenant'ın sınıflandırma şemasını değiştiremez.
   PERMISSIONS.MANAGE_CATEGORIES,
+  // İşlem yönetimi (Issue #53) da bir yönetim iznidir: bir işlem kaydetmek/düzeltmek/silmek,
+  // dayandığı hesabın BAKİYESİNİ değiştirir.
+  PERMISSIONS.MANAGE_TRANSACTIONS,
 ];
 
 test.describe("hasPermission() — tablo-driven matris", () => {
@@ -47,6 +50,8 @@ test.describe("hasPermission() — tablo-driven matris", () => {
     { role: MembershipRole.ADMIN, permission: PERMISSIONS.MANAGE_ACCOUNTS, expected: true },
     { role: MembershipRole.ADMIN, permission: PERMISSIONS.VIEW_CATEGORIES, expected: true },
     { role: MembershipRole.ADMIN, permission: PERMISSIONS.MANAGE_CATEGORIES, expected: true },
+    { role: MembershipRole.ADMIN, permission: PERMISSIONS.VIEW_TRANSACTIONS, expected: true },
+    { role: MembershipRole.ADMIN, permission: PERMISSIONS.MANAGE_TRANSACTIONS, expected: true },
     { role: MembershipRole.ADMIN, permission: PERMISSIONS.UPDATE_TENANT_SETTINGS, expected: false },
 
     // MEMBER: sadece temel görüntüleme.
@@ -64,6 +69,9 @@ test.describe("hasPermission() — tablo-driven matris", () => {
     // Kategoriler (Issue #49): görüntüleme VAR, yönetim YOK.
     { role: MembershipRole.MEMBER, permission: PERMISSIONS.VIEW_CATEGORIES, expected: true },
     { role: MembershipRole.MEMBER, permission: PERMISSIONS.MANAGE_CATEGORIES, expected: false },
+    // İşlemler (Issue #53): aynı ayrım — MEMBER kayıtları okur, ama bakiyeyi değiştiremez.
+    { role: MembershipRole.MEMBER, permission: PERMISSIONS.VIEW_TRANSACTIONS, expected: true },
+    { role: MembershipRole.MEMBER, permission: PERMISSIONS.MANAGE_TRANSACTIONS, expected: false },
   ];
 
   for (const { role, permission, expected } of cases) {

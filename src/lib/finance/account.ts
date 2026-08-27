@@ -16,6 +16,8 @@ import {
 } from "./validation";
 
 const PRISMA_UNIQUE_CONSTRAINT_ERROR_CODE = "P2002";
+// Foreign key ihlali: silinmek istenen hesaba bağlı işlem(ler) var (Issue #53).
+const PRISMA_FOREIGN_KEY_ERROR_CODE = "P2003";
 
 /**
  * Tenant'ın finansal hesapları (Issue #46).
@@ -90,6 +92,7 @@ const INVALID_CURRENCY_ERROR = "Currency must be a 3-letter ISO 4217 code";
 const INVALID_BALANCE_ERROR = "Balance must be a decimal string with at most 4 decimal places";
 const DUPLICATE_NAME_ERROR = "An account with this name already exists";
 const NOT_FOUND_ERROR = "Account not found";
+const HAS_TRANSACTIONS_ERROR = "Account still has transactions";
 
 export async function createAccount(
   tenantId: string,
@@ -271,18 +274,43 @@ export async function updateAccount(
   }
 }
 
-export type DeleteAccountResult = { ok: true } | { ok: false; status: 404; error: string };
+export type DeleteAccountResult =
+  | { ok: true }
+  | { ok: false; status: 404 | 409; error: string };
 
+/**
+ * Hesabı siler.
+ *
+ * İŞLEMİ OLAN HESAP SİLİNEMEZ (`409`, Issue #53). Kısıt uygulama katmanında "önce işlemi var mı
+ * diye bak, sonra sil" ile DEĞİL, şemadaki `onDelete: NoAction` ile konur; buradaki iş yalnızca
+ * DB'nin verdiği `P2003`ü sözleşmeye çevirmektir. Gerekçe `createAccount()`'taki ile aynı:
+ * önden okuma yarışa açıktır — okuma ile silme arasında yeni bir işlem eklenebilir.
+ *
+ * Cascade REDDEDİLDİ: bir hesabı silmek, o hesabın tüm finansal geçmişini sessizce yok ederdi.
+ * Kullanıcının önce işlemleri silmesi (ya da başka hesaba taşıması) gerekir — bu, geri
+ * alınamaz bir kaybı bilinçli bir eyleme dönüştürür.
+ */
 export async function deleteAccount(
   tenantId: string,
   accountId: string,
   actorUserId: string,
 ): Promise<DeleteAccountResult> {
-  // `delete({ where: { id } })` yerine `deleteMany` + `tenantScoped()`: silme sorgusunun
-  // kendisi de tenant ile scope'lanır (bkz. `updateAccount()`'taki aynı gerekçe).
-  const { count } = await prisma.account.deleteMany({
-    where: tenantScoped(tenantId, { id: accountId }),
-  });
+  let count: number;
+  try {
+    // `delete({ where: { id } })` yerine `deleteMany` + `tenantScoped()`: silme sorgusunun
+    // kendisi de tenant ile scope'lanır (bkz. `updateAccount()`'taki aynı gerekçe).
+    ({ count } = await prisma.account.deleteMany({
+      where: tenantScoped(tenantId, { id: accountId }),
+    }));
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === PRISMA_FOREIGN_KEY_ERROR_CODE
+    ) {
+      return { ok: false, status: 409, error: HAS_TRANSACTIONS_ERROR };
+    }
+    throw error;
+  }
 
   if (count !== 1) {
     return { ok: false, status: 404, error: NOT_FOUND_ERROR };

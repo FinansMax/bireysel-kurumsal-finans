@@ -9,8 +9,8 @@ import { expect, test } from "@playwright/test";
  * geçtiğini statik olarak doğrular. Bu bir lint/AST aracı DEĞİLDİR — regresyonu (birinin
  * tekrar `where: { id }` yazmasını) yakalayan basit bir kaynak-metni pattern testidir.
  *
- * Yeni tenant-scoped modeller (Account/Transaction/Category/Budget/Invoice ...)
- * eklendiğinde bu dosyaya benzer bir kontrol eklenmesi önerilir.
+ * Yeni tenant-scoped modeller (Budget/Invoice ...) eklendiğinde bu dosyaya benzer bir kontrol
+ * eklenmesi önerilir.
  */
 
 const MEMBERSHIP_SOURCE_PATH = path.join(__dirname, "..", "src", "lib", "tenants", "membership.ts");
@@ -21,6 +21,16 @@ const ACCOUNT_SOURCE = readFileSync(ACCOUNT_SOURCE_PATH, "utf-8");
 
 const CATEGORY_SOURCE_PATH = path.join(__dirname, "..", "src", "lib", "finance", "category.ts");
 const CATEGORY_SOURCE = readFileSync(CATEGORY_SOURCE_PATH, "utf-8");
+
+const TRANSACTION_SOURCE_PATH = path.join(
+  __dirname,
+  "..",
+  "src",
+  "lib",
+  "finance",
+  "transaction.ts",
+);
+const TRANSACTION_SOURCE = readFileSync(TRANSACTION_SOURCE_PATH, "utf-8");
 
 test.describe("Tenant scoping pattern koruması — membership.ts", () => {
   test("tenantId filtresini zorlayan tenantScoped() helper'ı import edilip kullanılıyor", () => {
@@ -48,7 +58,7 @@ test.describe("Tenant scoping pattern koruması — membership.ts", () => {
 
 /**
  * Aynı koruma, ikinci tenant-scoped model olan `Account` için (Issue #46). Yeni finansal
- * modeller (Transaction/Category/Budget/Invoice ...) eklendikçe bu blok çoğaltılmalıdır.
+ * modeller (Budget/Invoice ...) eklendikçe bu blok çoğaltılmalıdır.
  */
 test.describe("Tenant scoping pattern koruması — account.ts", () => {
   test("tenantScoped() import edilip her sorguda kullanılıyor", () => {
@@ -78,7 +88,7 @@ test.describe("Tenant scoping pattern koruması — account.ts", () => {
 
 /**
  * Aynı koruma, üçüncü tenant-scoped model olan `Category` için (Issue #49). Yeni finansal
- * modeller (Transaction/Budget/Invoice ...) eklendikçe bu blok çoğaltılmalıdır.
+ * modeller (Budget/Invoice ...) eklendikçe bu blok çoğaltılmalıdır.
  */
 test.describe("Tenant scoping pattern koruması — category.ts", () => {
   test("tenantScoped() import edilip her sorguda kullanılıyor", () => {
@@ -108,5 +118,52 @@ test.describe("Tenant scoping pattern koruması — category.ts", () => {
     // tenant'lara açardı. Filtre daima `tenantScoped()`in ÜZERİNE verilir.
     expect(CATEGORY_SOURCE).not.toMatch(/where:\s*\{\s*type\s*\}/);
     expect(CATEGORY_SOURCE).toMatch(/tenantScoped\(tenantId,\s*type\s*\?/);
+  });
+});
+
+/**
+ * Aynı koruma, dördüncü tenant-scoped model olan `Transaction` için (Issue #53).
+ *
+ * Burada risk daha yüksektir: işlem yalnızca kendi satırını değil, BAĞLI OLDUĞU HESABIN
+ * BAKİYESİNİ de yazar. Yani scope'u kaçırılmış tek bir sorgu, başka bir tenant'ın parasını
+ * oynatır.
+ */
+test.describe("Tenant scoping pattern koruması — transaction.ts", () => {
+  test("tenantScoped() import edilip her sorguda kullanılıyor", () => {
+    expect(TRANSACTION_SOURCE).toContain('from "@/lib/tenancy/scope"');
+
+    const usageCount = TRANSACTION_SOURCE.match(/tenantScoped\(/g)?.length ?? 0;
+    // shiftBalance (1) + requireAccount (1) + requireCategory (1) + listTransactions (1) +
+    // updateTransaction (findFirst + updateMany + findFirstOrThrow = 3) +
+    // deleteTransaction (findFirst + deleteMany = 2) = en az 9 kullanım.
+    expect(usageCount).toBeGreaterThanOrEqual(9);
+  });
+
+  test("tenant-scoped resource id'siyle sadece-id update/delete/findUnique kullanılmıyor", () => {
+    expect(TRANSACTION_SOURCE).not.toMatch(/\.transaction\.update\(/);
+    expect(TRANSACTION_SOURCE).not.toMatch(/\.transaction\.delete\(/);
+    expect(TRANSACTION_SOURCE).not.toMatch(/\.transaction\.findUnique\(/);
+
+    expect(TRANSACTION_SOURCE).not.toMatch(/where:\s*\{\s*id:\s*transactionId\s*\}/);
+  });
+
+  test("BAKİYE yazan sorgu da tenant ile scope'lanıyor", () => {
+    // Bu modelin en tehlikeli sorgusu kendi tablosunda değil, `Account` üzerindedir: `balance`
+    // güncellemesi. `where: { id: accountId }` yazmak, gövdeden gelen bir id ile başka
+    // tenant'ın bakiyesini değiştirmeye kapı açardı.
+    expect(TRANSACTION_SOURCE).not.toMatch(/where:\s*\{\s*id:\s*accountId\s*\}/);
+    expect(TRANSACTION_SOURCE).not.toMatch(/where:\s*\{\s*id:\s*categoryId\s*\}/);
+
+    // Bu dosyadaki HER `account` yazımı tenantScoped() ile başlamalı; başka bir modelin
+    // tablosuna yazan tek yer burasıdır ve gözden kaçması kolaydır.
+    const accountWrites = TRANSACTION_SOURCE.match(/\.account\.\w+\(\{[\s\S]{0,80}?where:[^\n]*/g);
+    expect(accountWrites?.length ?? 0).toBeGreaterThanOrEqual(1);
+    for (const write of accountWrites ?? []) {
+      expect(write).toContain("tenantScoped(");
+    }
+  });
+
+  test("create sırasında tenantId açıkça yazılıyor (client input'tan türetilmiyor)", () => {
+    expect(TRANSACTION_SOURCE).toMatch(/data:\s*\{\s*tenantId/);
   });
 });

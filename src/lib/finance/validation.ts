@@ -81,3 +81,95 @@ export function parseMoney(value: unknown): Prisma.Decimal | null {
 
   return new Prisma.Decimal(trimmed);
 }
+
+export const MAX_TRANSACTION_DESCRIPTION_LENGTH = 500;
+
+/**
+ * İşlem notu (Issue #53). Kategori/hesap adından FARKLI olarak alt sınırı yoktur ve üst sınırı
+ * daha geniştir: bu bir etiket değil, kullanıcının serbest açıklamasıdır ("Ocak kirası, 3 aylık
+ * peşin"). 500 karakter, bir açıklama için fazlasıyla yeterlidir ve sınırsız metnin liste
+ * yanıtlarını şişirmesini engeller.
+ *
+ * Boş/yalnızca-boşluk not `null`a indirgenir: "not yok" durumunun tek bir gösterimi olur,
+ * aksi halde `null` ve `""` aynı anlama gelen iki ayrı değer olarak yan yana yaşardı.
+ * Geçersizse `undefined` döner (boş nota karşılık gelen `null`dan ayırt edilebilsin diye).
+ */
+export function parseDescription(value: unknown): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return trimmed.length <= MAX_TRANSACTION_DESCRIPTION_LENGTH ? trimmed : undefined;
+}
+
+/**
+ * İşlem tutarı: `parseMoney()`in KESİN POZİTİF varyantı.
+ *
+ * `Account.balance` negatif olabilir (hesap eksiye düşebilir), ama bir işlemin tutarı
+ * olamaz: yönü `type` taşır. Negatif bir `EXPENSE`, kılık değiştirmiş bir gelir olurdu ve
+ * "dönemin toplam gideri" gibi her toplamı sessizce bozardı. Sıfır da reddedilir — bakiyeyi
+ * değiştirmeyen bir para hareketi kayıt değil, gürültüdür.
+ */
+export function parsePositiveMoney(value: unknown): Prisma.Decimal | null {
+  const parsed = parseMoney(value);
+  if (!parsed || parsed.lessThanOrEqualTo(0)) {
+    return null;
+  }
+  return parsed;
+}
+
+/**
+ * `YYYY-MM-DD` veya tam ISO 8601 tarih-saat. Yerelleştirilmiş biçimler (`27.08.2026`)
+ * KABUL EDİLMEZ — `parseMoney()` ile aynı gerekçe: biçimlendirme sunum katmanının işidir.
+ */
+// Basamaklar `[0-9]`, ondalık noktası `[.]` ile yazılır: desen ters bölü kaçışı içermez,
+// dolayısıyla okurken "burada bir kaçış eksik mi" sorusu doğmaz.
+const OCCURRED_AT_PATTERN =
+  /^([0-9]{4})-([0-9]{2})-([0-9]{2})(T[0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]{1,3})?)?(Z|[+-][0-9]{2}:[0-9]{2})?)?$/;
+
+/**
+ * Takvimde gerçekten var olan bir gün mü?
+ *
+ * Bu kontrol `new Date()`e BIRAKILAMAZ: JavaScript `"2026-02-31"`i hataya çevirmez, sessizce
+ * 3 Mart'a TAŞIRIR. Yani doğrulama olmadan, kullanıcının yazdığı tarihten farklı bir tarih
+ * kaydedilirdi — finansal bir kayıtta kabul edilemez.
+ */
+function isRealCalendarDate(year: number, month: number, day: number): boolean {
+  if (month < 1 || month > 12 || day < 1) {
+    return false;
+  }
+  // Ayın 0. günü = bir önceki ayın son günü; artık yıl kuralını elle yazmaya gerek kalmaz.
+  return day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/**
+ * İşlemin gerçekleştiği anı çözer; geçersizse `null` döner (asla fırlatmaz).
+ *
+ * GELECEK TARİH SERBESTTİR: ileri tarihli çek/planlı ödeme kaydetmek meşrudur. Bunun bilinen
+ * sonucu, böyle bir kaydın bakiyeyi HEMEN etkilemesidir; "bekleyen işlem" ayrımı ayrı bir
+ * issue'nun konusudur (bkz. README).
+ */
+export function parseOccurredAt(value: unknown): Date | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const match = OCCURRED_AT_PATTERN.exec(value.trim());
+  if (!match) {
+    return null;
+  }
+
+  if (!isRealCalendarDate(Number(match[1]), Number(match[2]), Number(match[3]))) {
+    return null;
+  }
+
+  const parsed = new Date(value.trim());
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}

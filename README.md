@@ -501,8 +501,7 @@ mevcut `POST /api/tenants/active` endpoint'ine gider.
 - **Hata mesajı ayrıştırılmaz:** 403/404/ağ hatası tek bir Türkçe mesaja düşer; başarısız
   seçimde kutu sunucudan gelen gerçek duruma geri alınır.
 - `resolveActiveTenantForUser()` (`src/lib/tenants/tenant-context.ts`), kullanıcı zaten
-  elimizdeyken oturumu **yeniden çözmeden** aktif tenant'ı 
-  okur — `getActiveTenant()` aynı
+  elimizdeyken oturumu **yeniden çözmeden** aktif tenant'ı okur — `getActiveTenant()` aynı
   istekte ikinci bir session-revocation DB sorgusu tetiklerdi.
 
 E2E kanıtı: `e2e/tenant-switcher.spec.ts`. Geçişin gerçekten sunucu tarafında olduğu, seçici

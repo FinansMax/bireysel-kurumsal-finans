@@ -26,7 +26,7 @@ const NAV_ITEMS: ReadonlyArray<{ label: string; href: string | null }> = [
   { label: "Yeni Çalışma Alanı", href: "/tenants/new" }, // Issue #42
   { label: "Hesaplar", href: "/accounts" }, // Issue #47
   { label: "Kategoriler", href: "/categories" }, // Issue #50
-  { label: "İşlemler", href: null }, // Issue #54
+  { label: "İşlemler", href: "/transactions" }, // Issue #54
   { label: "Raporlar", href: null }, // Issue #63
   { label: "Ayarlar", href: null }, // Issue #86
 ];

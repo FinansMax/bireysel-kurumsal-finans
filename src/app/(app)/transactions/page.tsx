@@ -6,9 +6,11 @@ import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { listAccounts } from "@/lib/finance/account";
 import { listCategories } from "@/lib/finance/category";
 import { listTransactions } from "@/lib/finance/transaction";
+import { parseTransactionFilters } from "@/lib/finance/transaction-filters";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 
 import { CreateTransactionForm } from "./create-transaction-form";
+import { TransactionFiltersForm, type ActiveFilterValues } from "./transaction-filters-form";
 
 export const metadata: Metadata = {
   title: "İşlemler",
@@ -34,6 +36,17 @@ function serverTodayIsoDate(): string {
 }
 
 /**
+ * Bir arama parametresinin form alanına geri yazılacak hâli.
+ *
+ * Tekrarlanan parametre (`?q=a&q=b`) burada boşa düşer — o durumda `parseTransactionFilters()`
+ * zaten hata döndürüyor ve liste gösterilmiyor; forma iki değerden birini seçip yazmak,
+ * kullanıcıya reddedilen girdisini "kabul edilmiş" gibi göstermek olurdu.
+ */
+function singleParam(value: string | string[] | undefined): string {
+  return typeof value === "string" ? value : "";
+}
+
+/**
  * Aktif çalışma alanının gelir/gider işlemleri ekranı (Issue #54).
  *
  * `/accounts` (#47) ve `/categories` (#50) ile aynı desen: URL'de `tenantId` YOKTUR — hangi
@@ -45,11 +58,21 @@ function serverTodayIsoDate(): string {
  * `accountId`/`categoryId` alanlarını okunabilir isme çevirmek için de gerekir; API bilerek
  * ilişki genişletmez (dar `select` allowlist'i, bkz. `src/lib/finance/transaction.ts`).
  *
- * KAPSAM: liste + oluşturma. Güncelleme/silme API'si (#53) hazırdır ama arayüzü bu issue'da
- * BİLEREK yapılmadı — hesap ve kategori ekranlarında da aynı sınır var; üçü tek bir
- * "düzenle/sil" issue'sunda birlikte ele alınmalıdır. Arama/filtreleme #56'dır.
+ * FİLTRELEME (#56): filtre durumu URL'dedir (`?from=&to=&accountId=&categoryId=&q=`), React
+ * state'inde değil — sonuç paylaşılabilir ve geri tuşu doğru çalışır. Ayrıştırıcı API route'u
+ * ile ORTAKTIR (`transaction-filters.ts`), böylece aynı URL iki yerde aynı sonucu verir.
+ *
+ * KAPSAM: liste + oluşturma + filtreleme. Güncelleme/silme API'si (#53) hazırdır ama arayüzü
+ * bilerek yapılmadı — hesap ve kategori ekranlarında da aynı sınır var; üçü tek bir
+ * "düzenle/sil" issue'sunda (#130) birlikte ele alınmalıdır.
  */
-export default async function TransactionsPage() {
+export default async function TransactionsPage({
+  searchParams,
+}: {
+  // Next.js 16'da `searchParams` bir Promise'tir ve değer tekrarlanan parametrede dizi olur
+  // (bkz. node_modules/next/dist/docs/.../file-conventions/page.md).
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const user = await requirePageUser();
   const active = await resolveActiveTenantForUser(user.id);
 
@@ -82,15 +105,34 @@ export default async function TransactionsPage() {
 
   const canManage = hasPermission(role, PERMISSIONS.MANAGE_TRANSACTIONS);
 
-  // Üç okuma birbirinden bağımsız; sıraya dizmek sayfayı gereksiz yere yavaşlatırdı.
-  const [transactions, accounts, categories] = await Promise.all([
-    listTransactions(tenant.id),
+  const rawParams = await searchParams;
+  const parsedFilters = parseTransactionFilters((key) => rawParams[key]);
+
+  // Hesap ve kategori listeleri filtre geçersiz olsa DA gerekir: form yeniden çizilecek.
+  const [accounts, categories] = await Promise.all([
     listAccounts(tenant.id),
     listCategories(tenant.id),
   ]);
 
+  // Geçersiz filtrede liste HİÇ ÇEKİLMEZ ve gösterilmez. Filtreyi sessizce yok sayıp tüm
+  // listeyi göstermek, filtrenin uygulandığını sanan kullanıcıya yanlış bir veri kümesini
+  // doğruymuş gibi sunmak olurdu (#49'un `?type` kararındaki aynı gerekçe).
+  const transactions = parsedFilters.ok
+    ? await listTransactions(tenant.id, parsedFilters.filters)
+    : [];
+
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
   const categoriesById = new Map(categories.map((category) => [category.id, category]));
+
+  /** Formun geri yazacağı ham değerler — kullanıcının yazdığı gibi, çözümlenmiş hâli değil. */
+  const filterValues: ActiveFilterValues = {
+    from: singleParam(rawParams.from),
+    to: singleParam(rawParams.to),
+    accountId: singleParam(rawParams.accountId),
+    categoryId: singleParam(rawParams.categoryId),
+    q: singleParam(rawParams.q),
+  };
+  const hasActiveFilters = Object.values(filterValues).some((value) => value !== "");
 
   return (
     <section className="space-y-8">
@@ -102,10 +144,36 @@ export default async function TransactionsPage() {
         </p>
       </div>
 
-      {transactions.length === 0 ? (
+      <TransactionFiltersForm
+        accounts={accounts.map((account) => ({ id: account.id, name: account.name }))}
+        categories={categories.map((category) => ({
+          id: category.id,
+          name: category.name,
+          type: category.type,
+        }))}
+        values={filterValues}
+        hasActiveFilters={hasActiveFilters}
+      />
+
+      {!parsedFilters.ok ? (
+        <p
+          role="alert"
+          className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
+        >
+          Filtre geçersiz olduğu için liste gösterilmiyor. Tarihleri{" "}
+          <span className="font-medium">GG.AA.YYYY</span> biçiminde seçin ve başlangıcın
+          bitişten sonra olmadığından emin olun.
+        </p>
+      ) : transactions.length === 0 ? (
+        /* Boş liste iki FARKLI şey anlatabilir ve ikisini aynı cümleyle geçmek yanıltıcı
+           olurdu: hiç kayıt olmaması ile filtrenin hiçbir şeyle eşleşmemesi. İkincisinde
+           kullanıcıya "ilkini kaydedin" demek, elindeki kayıtları yok saymak olurdu. */
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Henüz işlem yok.
-          {canManage && accounts.length > 0 ? " Aşağıdaki formla ilkini kaydedin." : ""}
+          {hasActiveFilters
+            ? "Bu filtreyle eşleşen işlem yok. Filtreleri gevşetmeyi deneyin."
+            : `Henüz işlem yok.${
+                canManage && accounts.length > 0 ? " Aşağıdaki formla ilkini kaydedin." : ""
+              }`}
         </p>
       ) : (
         <div className="overflow-x-auto">

@@ -138,22 +138,37 @@ async function apiBalance(page: Page, tenantId: string, accountId: string): Prom
   return account!.balance;
 }
 
+/**
+ * Sayfada İKİ form var (kayıt ve filtre) ve ikisi "Hesap"/"Kategori" gibi etiketleri
+ * PAYLAŞIYOR; dahası `getByLabel("Tarih")` filtre formundaki "Başlangıç tarihi"ne de alt dize
+ * olarak uyuyor. Bu yüzden alanlar daima ilgili formun ERİŞİLEBİLİR ADIYLA kapsamlandırılır —
+ * aksi halde locator iki öğeye birden eşleşir ve test strict mode ihlaliyle düşer.
+ */
+function createForm(page: Page) {
+  return page.getByRole("form", { name: "Yeni işlem" });
+}
+
+function filterForm(page: Page) {
+  return page.getByRole("form", { name: "İşlem filtreleri" });
+}
+
 async function fillTransactionForm(
   page: Page,
   values: { amount: string; type?: string; category?: string; description?: string; date?: string },
 ) {
+  const form = createForm(page);
   if (values.type) {
-    await page.getByLabel("Tür").selectOption(values.type);
+    await form.getByLabel("Tür").selectOption(values.type);
   }
-  await page.getByLabel("Tutar").fill(values.amount);
+  await form.getByLabel("Tutar").fill(values.amount);
   if (values.category !== undefined) {
-    await page.getByLabel("Kategori").selectOption({ label: values.category });
+    await form.getByLabel("Kategori").selectOption({ label: values.category });
   }
   if (values.description !== undefined) {
-    await page.getByLabel("Açıklama").fill(values.description);
+    await form.getByLabel("Açıklama").fill(values.description);
   }
   if (values.date) {
-    await page.getByLabel("Tarih").fill(values.date);
+    await form.getByLabel("Tarih").fill(values.date);
   }
 }
 
@@ -166,11 +181,11 @@ async function fillTransactionForm(
  * kalıp çalışıyor çünkü oradaki metin "Kategori oluştur" ile başlıyor.)
  */
 function submit(page: Page) {
-  return page.getByRole("button", { name: "İşlem kaydet" }).click();
+  return createForm(page).getByRole("button", { name: "İşlem kaydet" }).click();
 }
 
 function formAlert(page: Page) {
-  return page.locator("form").getByRole("alert");
+  return createForm(page).getByRole("alert");
 }
 
 /**
@@ -259,7 +274,7 @@ test.describe("/transactions — kaydetme ve listeleme", () => {
 
     await page.goto("/transactions");
 
-    const category = page.getByLabel("Kategori");
+    const category = createForm(page).getByLabel("Kategori");
 
     // Varsayılan tür "Gider": yalnızca gider kategorisi seçilebilir olmalı.
     await expect(category.getByRole("option", { name: "Market" })).toHaveCount(1);
@@ -270,7 +285,7 @@ test.describe("/transactions — kaydetme ve listeleme", () => {
 
     // Tür değişince liste diğer tarafa döner VE önceki seçim düşer — aksi halde kullanıcı
     // ekranda görünmeyen bir kategoriyle kaydetmeye çalışır ve sebebi görünmeyen 400 alırdı.
-    await page.getByLabel("Tür").selectOption("INCOME");
+    await createForm(page).getByLabel("Tür").selectOption("INCOME");
     await expect(category).toHaveValue("");
     await expect(category.getByRole("option", { name: "Maas" })).toHaveCount(1);
     await expect(category.getByRole("option", { name: "Market" })).toHaveCount(0);
@@ -332,10 +347,10 @@ test.describe("/transactions — kaydetme ve listeleme", () => {
     await expectRow(page, "Ilk kayit");
 
     // Kullanıcı genellikle aynı günün fişlerini aynı hesaba arka arkaya girer.
-    await expect(page.getByLabel("Tutar")).toHaveValue("");
-    await expect(page.getByLabel("Açıklama")).toHaveValue("");
-    await expect(page.getByLabel("Tür")).toHaveValue("INCOME");
-    await expect(page.getByLabel("Tarih")).toHaveValue("2026-02-10");
+    await expect(createForm(page).getByLabel("Tutar")).toHaveValue("");
+    await expect(createForm(page).getByLabel("Açıklama")).toHaveValue("");
+    await expect(createForm(page).getByLabel("Tür")).toHaveValue("INCOME");
+    await expect(createForm(page).getByLabel("Tarih")).toHaveValue("2026-02-10");
   });
 });
 
@@ -349,7 +364,7 @@ test.describe("/transactions — yetki ve kurulum durumu", () => {
     // İşlem hesapsız kaydedilemez (`accountId` zorunlu); boş bir seçici göstermek yerine
     // kullanıcı doğrudan çözüme yönlendirilir.
     await expect(page.getByText("İşlem kaydedebilmek için önce bir hesap gerekiyor")).toBeVisible();
-    await expect(page.getByLabel("Tutar")).toHaveCount(0);
+    await expect(createForm(page)).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Hesaplar ekranından oluşturun." })).toBeVisible();
   });
 
@@ -390,7 +405,7 @@ test.describe("/transactions — yetki ve kurulum durumu", () => {
     await expect(page.getByRole("cell", { name: "Ortak harcama" })).toBeVisible();
 
     // Ama yönetim formu HİÇ render edilmez (MANAGE_TRANSACTIONS yok).
-    await expect(page.getByLabel("Tutar")).toHaveCount(0);
+    await expect(createForm(page)).toHaveCount(0);
 
     // Asıl kontrol arayüzde değil backend'de: form baypas edilirse 403 gelir ve bakiye
     // değişmez.
@@ -410,6 +425,188 @@ test.describe("/transactions — yetki ve kurulum durumu", () => {
 
     await expect(page.getByText("Önce üstteki menüden bir çalışma alanı seçin")).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(0);
-    await expect(page.getByLabel("Tutar")).toHaveCount(0);
+    await expect(createForm(page)).toHaveCount(0);
+  });
+});
+
+test.describe("/transactions — filtreleme (Issue #56)", () => {
+  async function createViaApi(
+    page: Page,
+    tenantId: string,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    const response = await page.request.post(`/api/tenants/${tenantId}/transactions`, { data });
+    expect(response.status()).toBe(201);
+  }
+
+  /** Tarihleri ve açıklamaları bilinen, iki hesaplı bir veri kümesi. */
+  async function seedScreen(page: Page, prefix: string) {
+    await signUpAndSignIn(page, prefix);
+    const tenantId = await createAndActivateTenant(page);
+    const kasa = await createAccount(page, tenantId, "Kasa", "0");
+    const banka = await createAccount(page, tenantId, "Banka", "0");
+
+    await createViaApi(page, tenantId, {
+      accountId: kasa,
+      type: "EXPENSE",
+      amount: "10",
+      description: "Ocak kirasi",
+      occurredAt: "2026-01-10",
+    });
+    await createViaApi(page, tenantId, {
+      accountId: kasa,
+      type: "INCOME",
+      amount: "20",
+      description: "Subat maasi",
+      occurredAt: "2026-02-20",
+    });
+    await createViaApi(page, tenantId, {
+      accountId: banka,
+      type: "EXPENSE",
+      amount: "30",
+      description: "Mart yakiti",
+      occurredAt: "2026-03-30",
+    });
+
+    return { tenantId, kasa, banka };
+  }
+
+  function row(page: Page, name: string) {
+    return page.getByRole("cell", { name });
+  }
+
+  test("tarih aralığı listeyi daraltıyor ve filtre URL'e yazılıyor", async ({ page }) => {
+    const { tenantId } = await seedScreen(page, "tx-filter-range");
+
+    await page.goto("/transactions");
+    await expect(row(page, "Ocak kirasi")).toBeVisible();
+
+    const filters = filterForm(page);
+    await filters.getByLabel("Başlangıç tarihi").fill("2026-02-01");
+    await filters.getByLabel("Bitiş tarihi").fill("2026-02-28");
+    await filters.getByRole("button", { name: "Filtrele" }).click();
+
+    await expect(row(page, "Subat maasi")).toBeVisible();
+    await expect(row(page, "Ocak kirasi")).toHaveCount(0);
+    await expect(row(page, "Mart yakiti")).toHaveCount(0);
+
+    // Filtre durumu URL'de: sonuç paylaşılabilir ve geri tuşu doğru çalışır.
+    await expect(page).toHaveURL(/from=2026-02-01/);
+    await expect(page).toHaveURL(/to=2026-02-28/);
+
+    // Bağımsız doğrulama: API aynı filtreyle aynı sonucu veriyor.
+    const api = await page.request.get(
+      `/api/tenants/${tenantId}/transactions?from=2026-02-01&to=2026-02-28`,
+    );
+    expect(api.status()).toBe(200);
+    expect(((await api.json()) as { transactions: unknown[] }).transactions).toHaveLength(1);
+  });
+
+  test("bitiş tarihi DAHİL — o gün içinde saati olan kayıt eleniyor değil", async ({ page }) => {
+    await signUpAndSignIn(page, "tx-filter-bound");
+    const tenantId = await createAndActivateTenant(page);
+    const kasa = await createAccount(page, tenantId, "Kasa", "0");
+
+    // Bu testin varlık sebebi: üst sınır `lte: gün başlangıcı` olarak yazılsaydı, aynı günün
+    // 10:00'unda kaydedilmiş bu işlem sessizce DIŞARIDA kalırdı.
+    await createViaApi(page, tenantId, {
+      accountId: kasa,
+      type: "EXPENSE",
+      amount: "1",
+      description: "Sinirdaki kayit",
+      occurredAt: "2026-03-15T10:00:00.000Z",
+    });
+
+    await page.goto("/transactions?to=2026-03-15");
+    await expect(row(page, "Sinirdaki kayit")).toBeVisible();
+  });
+
+  test("hesap filtresi yalnızca o hesabın kayıtlarını bırakıyor", async ({ page }) => {
+    await seedScreen(page, "tx-filter-account");
+
+    await page.goto("/transactions");
+    await filterForm(page).getByLabel("Hesap").selectOption({ label: "Banka" });
+    await filterForm(page).getByRole("button", { name: "Filtrele" }).click();
+
+    await expect(row(page, "Mart yakiti")).toBeVisible();
+    await expect(row(page, "Ocak kirasi")).toHaveCount(0);
+  });
+
+  test("açıklamada arama büyük/küçük harf duyarsız", async ({ page }) => {
+    await seedScreen(page, "tx-filter-search");
+
+    await page.goto("/transactions");
+    await filterForm(page).getByLabel("Açıklamada ara").fill("KIRA");
+    await filterForm(page).getByRole("button", { name: "Filtrele" }).click();
+
+    await expect(row(page, "Ocak kirasi")).toBeVisible();
+    await expect(row(page, "Subat maasi")).toHaveCount(0);
+  });
+
+  test("eşleşme yoksa 'filtreyle eşleşen yok' denir, 'henüz işlem yok' DENMEZ", async ({
+    page,
+  }) => {
+    await seedScreen(page, "tx-filter-empty");
+
+    await page.goto("/transactions?q=hicbiryerde-gecmeyen");
+
+    // İki boş durumu aynı cümleyle geçmek, kullanıcının elindeki kayıtları yok saymak olurdu.
+    await expect(page.getByText("Bu filtreyle eşleşen işlem yok")).toBeVisible();
+    await expect(page.getByText("Henüz işlem yok")).toHaveCount(0);
+  });
+
+  test("'Filtreleri temizle' tam listeye dönüyor", async ({ page }) => {
+    await seedScreen(page, "tx-filter-clear");
+
+    await page.goto("/transactions?q=kira");
+    await expect(row(page, "Subat maasi")).toHaveCount(0);
+
+    await page.getByRole("link", { name: "Filtreleri temizle" }).click();
+
+    await expect(row(page, "Ocak kirasi")).toBeVisible();
+    await expect(row(page, "Subat maasi")).toBeVisible();
+    await expect(row(page, "Mart yakiti")).toBeVisible();
+    await expect(page).toHaveURL(/\/transactions$/);
+  });
+
+  test("filtre yokken 'Filtreleri temizle' hiç gösterilmiyor", async ({ page }) => {
+    await seedScreen(page, "tx-filter-noclear");
+
+    await page.goto("/transactions");
+    await expect(page.getByRole("link", { name: "Filtreleri temizle" })).toHaveCount(0);
+  });
+
+  test("GEÇERSİZ filtre: hata gösteriliyor ve liste GÖSTERİLMİYOR (tam liste de değil)", async ({
+    page,
+  }) => {
+    await seedScreen(page, "tx-filter-invalid");
+
+    // Elle düzenlenmiş URL: ters aralık.
+    await page.goto("/transactions?from=2026-04-01&to=2026-03-01");
+
+    // Hata METNİYLE aranır, `getByRole("alert")` ile DEĞİL: Next.js her sayfaya kendi
+    // route duyurucusunu (`__next-route-announcer__`) `role="alert"` ile ekler ve rol
+    // sorgusu iki öğeye birden eşleşir.
+    await expect(page.getByText("Filtre geçersiz olduğu için")).toBeVisible();
+
+    // KRİTİK: geçersiz filtreyi yok sayıp tüm listeyi göstermek, filtrenin uygulandığını
+    // sanan kullanıcıya yanlış bir veri kümesini doğruymuş gibi sunmak olurdu.
+    await expect(page.getByRole("table")).toHaveCount(0);
+    await expect(row(page, "Ocak kirasi")).toHaveCount(0);
+
+    // Duyarlılık kanıtı: aralık düzeltilince liste geri geliyor.
+    await page.goto("/transactions?from=2026-01-01&to=2026-12-31");
+    await expect(row(page, "Ocak kirasi")).toBeVisible();
+  });
+
+  test("filtre alanları gönderilen değerlerle dolu kalıyor", async ({ page }) => {
+    await seedScreen(page, "tx-filter-sticky");
+
+    await page.goto("/transactions?from=2026-01-01&q=kira");
+
+    // Kullanıcı neye göre filtrelediğini formda görmeli; alanların sıfırlanması "filtre yok"
+    // izlenimi verirdi.
+    await expect(filterForm(page).getByLabel("Başlangıç tarihi")).toHaveValue("2026-01-01");
+    await expect(filterForm(page).getByLabel("Açıklamada ara")).toHaveValue("kira");
   });
 });

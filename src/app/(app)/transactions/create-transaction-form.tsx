@@ -154,7 +154,11 @@ export function CreateTransactionForm({
     <div className="max-w-sm space-y-4 border-t border-zinc-200 pt-6 dark:border-zinc-800">
       <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Yeni işlem</h2>
 
-      <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+      {/* `aria-label`: sayfada İKİ form var (filtre ve kayıt) ve ikisinde de "Hesap",
+          "Kategori" gibi aynı etiketler geçiyor. Erişilebilir ad olmadan ekran okuyucu
+          kullanıcısı hangi formda olduğunu ayırt edemez; E2E testleri de alanları bu adla
+          kapsamlandırır (bkz. transactions-ui.spec.ts). */}
+      <form onSubmit={handleSubmit} className="space-y-4" aria-label="Yeni işlem" noValidate>
         <div className="space-y-1.5">
           <label
             htmlFor="transaction-account"

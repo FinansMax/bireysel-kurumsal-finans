@@ -145,18 +145,75 @@ async function requireCategory(
 }
 
 /**
+ * Liste filtreleri (Issue #56). Hepsi opsiyoneldir; verilmeyen alan filtrelemez.
+ *
+ * Değerler ÇAĞIRAN TARAFINDA doğrulanmış olarak gelir (route katmanı) — bu tip, ham istemci
+ * girdisini temsil etmez.
+ */
+export type TransactionFilters = {
+  /** Dahil: bu günün başlangıcından itibaren. */
+  from?: Date;
+  /** Dahil: bu GÜNÜN SONUNA kadar (aşağıdaki `nextDay()` notuna bakın). */
+  to?: Date;
+  accountId?: string;
+  categoryId?: string;
+  /** `description` içinde geçen, büyük/küçük harf duyarsız serbest metin. */
+  q?: string;
+};
+
+/**
+ * Verilen günün ertesi gününün başlangıcı.
+ *
+ * `to` filtresi KULLANICI İÇİN DAHİLDİR ("15 Mart'a kadar" 15 Mart'ı da kapsar), ama
+ * `occurredAt` bir `DateTime`tir: `lte: 2026-03-15T00:00:00Z` yazmak o gün saat 10:00'da
+ * kaydedilmiş bir işlemi DIŞARIDA bırakırdı — kullanıcının gördüğü listeyle filtre sonucu
+ * sessizce ayrışırdı. Bu yüzden üst sınır, ertesi günün başlangıcına `lt` olarak uygulanır.
+ */
+function nextDay(date: Date): Date {
+  return new Date(date.getTime() + 24 * 60 * 60 * 1000);
+}
+
+/**
  * İşlemleri listeler: önce gerçekleşme tarihi (yeniden eskiye), eşitlikte kayıt zamanı.
  *
  * İkinci ölçüt sıralamayı DETERMİNİSTİK yapar — aynı güne girilmiş iki işlemin sırası aksi
- * halde DB'nin keyfine kalırdı ve sayfalama (#56) eklendiğinde bu, satır atlayan/tekrarlayan
- * bir listeye dönüşürdü.
+ * halde DB'nin keyfine kalırdı.
  *
- * BİLİNEN SINIR: liste sayfalanmaz. Filtreleme/arama ve sayfalama #56'nın konusudur; buraya
- * yapay bir limit koymak o issue'nun tasarımını önden bağlardı.
+ * FİLTRELER `tenantScoped()`İN ÜZERİNE eklenir, onun YERİNE geçmez (aynı kural `Category`nin
+ * `?type` filtresinde de var). Tek bir filtrenin tenant koşulunu düşürmesi, listeyi tüm
+ * tenant'lara açardı; koruma `integration/tenant-scope-pattern.spec.ts`'tedir.
+ *
+ * BİLİNEN SINIR: liste hâlâ sayfalanmaz. Sayfalama bu issue'nun kapsamında değildir ve ayrı
+ * bir issue gerektirir — filtreleme onu daha az acil yapar ama ortadan kaldırmaz.
  */
-export async function listTransactions(tenantId: string): Promise<TransactionView[]> {
+export async function listTransactions(
+  tenantId: string,
+  filters: TransactionFilters = {},
+): Promise<TransactionView[]> {
+  const occurredAt: Prisma.DateTimeFilter = {};
+  if (filters.from) {
+    occurredAt.gte = filters.from;
+  }
+  if (filters.to) {
+    occurredAt.lt = nextDay(filters.to);
+  }
+
   const transactions = await prisma.transaction.findMany({
-    where: tenantScoped(tenantId, {}),
+    where: tenantScoped(tenantId, {
+      ...(filters.from || filters.to ? { occurredAt } : {}),
+      ...(filters.accountId ? { accountId: filters.accountId } : {}),
+      ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
+      // `QueryMode.insensitive` Postgres'te ILIKE'a çevrilir. Sabit, düz `"insensitive"`
+      // string'i yerine typed enum'dan alınır: spread içinde literal tipi `string`e genişler
+      // ve Prisma'nın `QueryMode` beklentisiyle uyuşmazdı.
+      //
+      // `description` üzerinde index YOKTUR: bu sorgu tarama yapar. Tenant başına işlem sayısı
+      // büyüdüğünde bir trigram index gerekecek — bugün eklemek, ölçülmemiş bir maliyeti
+      // şemaya yazmak olurdu.
+      ...(filters.q
+        ? { description: { contains: filters.q, mode: Prisma.QueryMode.insensitive } }
+        : {}),
+    }),
     select: transactionSelect,
     orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }],
   });

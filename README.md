@@ -1050,3 +1050,62 @@ alanların değiştiği kaydedilir.
   Postgres hata verir. Gerçekçi olmayan bir sınır olduğu için önden kontrol yazılmadı.
 
 Arayüz (`/transactions`) #54'ün konusudur.
+
+### İşlem ekranı (Issue #54)
+
+`/transactions` (`src/app/(app)/transactions/`). Aktif çalışma alanının işlemlerini listeler ve
+yetkili role kayıt formunu gösterir. `/accounts` (#47) ve `/categories` (#50) ile aynı desen:
+URL'de `tenantId` yoktur, kaynak aktif tenant'tır; form servis fonksiyonunu değil
+`POST /api/.../transactions`'ı çağırır. Kabuktaki (#39) "İşlemler" menü öğesi artık gerçek bir
+link.
+
+Önceki iki ekrandan farkı: bu sayfa **üç** liste okur (işlemler, hesaplar, kategoriler). API
+bilerek ilişki genişletmez (dar `select` allowlist'i), bu yüzden listedeki `accountId` /
+`categoryId` alanlarını okunabilir isme çevirmek için hesap ve kategori listeleri de gerekir —
+zaten formun açılır menüleri için okunuyorlar. Üçü `Promise.all` ile paralel çekilir.
+
+- **Kategori seçicisi türe göre İSTEMCİDE süzülür**, API'nin `?type` filtresiyle (#49) değil.
+  Sayfa kategorilerin tamamını zaten listeyi çizmek için okumuş durumda; her tür değişiminde
+  ikinci bir istek atmak gereksiz gecikme ve ek bir hata durumu getirirdi. Filtre yine de ölü
+  değil: kategori listesi uzayıp seçici aramalı/asenkron hâle geldiğinde doğal kullanıcısı o
+  olacak. **Asıl koruma sunucuda:** uyumsuz bir kategori gönderilse backend `400` döner.
+- **Tür değişince kategori seçimi temizlenir.** Aksi hâlde seçim, artık listede görünmeyen ama
+  state'te duran bir kategoriye takılı kalır; kullanıcı "Gelir" seçtiği hâlde gizli bir gider
+  kategorisiyle kaydetmeye çalışır ve sebebi ekranda görünmeyen bir `400` alırdı.
+- **Tutar alanı `type="text"` + `inputMode="decimal"`, `type="number"` DEĞİL.** `type="number"`
+  tarayıcı/yerel ayara göre virgüllü girdiyi kabul edip değeri **boş string** olarak geri
+  verebilir; kullanıcının yazdığı tutar sessizce kaybolurdu. API sözleşmesi zaten string bekler
+  (invariant #10), alanın yazılanı birebir taşıması gerekir. `inputMode` mobilde sayısal klavyeyi
+  yine de açar.
+- **Tarihin varsayılanı sunucudan prop olarak gelir**, istemcide `new Date()` ile
+  hesaplanmaz. İki nedeni var: istemcide hesaplanan değer sunucu render'ıyla uyuşmazsa (sunucu
+  ile tarayıcının saat dilimi farklıysa, gece yarısı civarında) **hydration uyuşmazlığı** doğar;
+  ve "şimdi"nin kaynağı bu üründe zaten sunucudur (`@default(now())`), ikinci bir zaman kaynağı
+  iki farklı "bugün" üretirdi.
+- **Liste tarihleri `YYYY-MM-DD` olarak, `toLocaleDateString()` KULLANILMADAN yazılır.**
+  Yerelleştirme çıktıyı sunucunun saat dilimine ve locale'ine bağlardı; aynı kayıt geliştirme ve
+  CI ortamında farklı görünebilirdi. **Bilinen sınır:** kullanıcı başına saat dilimi yönetimi bu
+  üründe hiç yok ve ayrı bir issue gerektirir.
+- **Tutarlar ham string olarak gösterilir**, `Intl.NumberFormat` ile değil — hesap ekranındaki
+  (#47) aynı karar ve aynı gerekçe (invariant #10).
+- **Hesap yoksa form yerine yönlendirme gösterilir.** İşlem hesapsız kaydedilemez (`accountId`
+  zorunlu); boş bir hesap seçicisi göstermek kullanıcıyı kesin bir hataya sürüklerdi.
+- **Kategorisi silinmiş işlem listede "Kategorisiz" yazar** (boş hücre değil) — #53'ün
+  `onDelete: SetNull` kararının arayüzdeki karşılığı.
+- **Başarılı kayıttan sonra tutar ve açıklama temizlenir; hesap, tür ve tarih korunur.**
+  Kullanıcı genellikle aynı günün fişlerini aynı hesaba arka arkaya girer.
+- **Kapsam:** liste + kayıt. Güncelleme/silme API'si (#53) hazırdır ama arayüzü bilerek bu
+  issue'da yapılmadı — hesap ve kategori ekranlarında da aynı sınır var; **üçü tek bir
+  "düzenle/sil" issue'sunda birlikte** ele alınmalıdır. Arama/filtreleme #56'dır.
+
+E2E kanıtı: `e2e/transactions-ui.spec.ts` — her sonuç bağımsız bir okumayla doğrulanır ve bu
+ekrana özgü ek iddia ayrıca kontrol edilir: bir işlem kaydetmek yalnızca satır eklemez,
+**hesabın bakiyesini** değiştirir. Başarılı kayıtta bakiyenin doğru yönde değiştiği, geçersiz
+girdide ise ne kaydın ne bakiyenin değiştiği `GET /api/tenants/:id/accounts` ile kanıtlanır.
+MEMBER için formun hiç render edilmediği ve baypas edilirse `403` alınıp bakiyenin sabit kaldığı
+da test edilir.
+
+Bir tuzak notlandı: gönder düğmesi tam adıyla (`"İşlem kaydet"`) aranır, büyük/küçük harf
+duyarsız bir regex ile değil — JavaScript'te `"İ".toLowerCase()` sonucu `"i"` değil birleşik
+noktalı `"i̇"`dir, dolayısıyla `/işlem kaydet/i` metni hiç eşleştirmez ve test, düğme ekranda
+dururken zaman aşımına düşer.

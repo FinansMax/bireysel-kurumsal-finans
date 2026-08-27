@@ -1039,10 +1039,10 @@ alanların değiştiği kaydedilir.
 
 ### Bilinen sınırlar
 
-- **Liste sayfalanmaz ve filtrelenmez.** Filtreleme/arama #56'nın konusudur; buraya yapay bir
-  limit koymak o issue'nun tasarımını önden bağlardı. Sıralama yine de deterministiktir (önce
-  `occurredAt`, eşitlikte `createdAt`) — aksi hâlde sayfalama eklendiğinde satır atlayan bir
-  liste doğardı.
+- **Liste sayfalanmaz.** Filtreleme/arama #56 ile geldi (aşağıya bakın), ama **sayfalama
+  gelmedi**: #56'nın kapsamında yoktu ve ayrı bir issue gerektiriyor. Sıralama yine de
+  deterministiktir (önce `occurredAt`, eşitlikte `createdAt`) — aksi hâlde sayfalama
+  eklendiğinde satır atlayan bir liste doğardı.
 - **Hesaplar arası transfer yoktur.** Bugün bir transfer, iki ayrı işlem olarak girilir; tek
   kayıtta iki hesabı etkileyen bir "transfer" türü ayrı bir modelleme kararıdır.
 - **Tekrarlayan işlemler ve toplu import** issue'da açıkça kapsam dışıdır (Epic 10).
@@ -1109,3 +1109,83 @@ Bir tuzak notlandı: gönder düğmesi tam adıyla (`"İşlem kaydet"`) aranır,
 duyarsız bir regex ile değil — JavaScript'te `"İ".toLowerCase()` sonucu `"i"` değil birleşik
 noktalı `"i̇"`dir, dolayısıyla `/işlem kaydet/i` metni hiç eşleştirmez ve test, düğme ekranda
 dururken zaman aşımına düşer.
+
+### İşlem filtreleme ve arama (Issue #56)
+
+`GET /api/tenants/[tenantId]/transactions?from=&to=&accountId=&categoryId=&q=` ve
+`/transactions` ekranındaki filtre formu. Filtreler `AND` ile birleşir; verilmeyen alan
+filtrelemez.
+
+#### Filtre durumu URL'de, React state'inde değil
+
+Filtre formu bir **client component değildir** — düz bir `<form method="get">` alanları URL'e
+yazar ve sunucu bileşenini yeni `searchParams` ile yeniden çalıştırır. Kazandırdıkları:
+sonuç paylaşılabilir ve yer imine eklenebilir, tarayıcı geri tuşu doğru çalışır, hiç istemci
+JavaScript'i gerekmez. Alternatif (`useState` + `router.push`) aynı sonucu daha fazla kodla ve
+hydration'a bağımlı olarak verirdi. Filtreleme bir okuma işlemidir; `GET` yan etkisiz kalır
+(invariant #4).
+
+#### Ayrıştırıcı API ile ekran arasında ORTAK
+
+`src/lib/finance/transaction-filters.ts` hem route hem sayfa tarafından kullanılır ve HTTP
+bilmez (parametreyi nasıl okuyacağını çağıran söyler). İki ayrı kopya yazmak, iki ayrı davranış
+demek olurdu: bir gün API'nin reddettiği bir değeri ekran kabul eder ve **aynı URL iki farklı
+sonuç** verirdi.
+
+#### `to` kullanıcı için dahildir, sorguda değil
+
+"15 Mart'a kadar" 15 Mart'ı da kapsar. Ama `occurredAt` bir `DateTime`tir: `lte: 2026-03-15T00:00:00Z`
+yazmak o gün saat 10:00'da kaydedilmiş bir işlemi **dışarıda bırakırdı** ve kullanıcının gördüğü
+listeyle filtre sonucu sessizce ayrışırdı. Üst sınır bu yüzden **ertesi günün başlangıcına `lt`**
+olarak uygulanır. Hem integration hem E2E'de bu sınır ayrıca test edilir.
+
+#### `from`/`to` yalnızca `YYYY-MM-DD`, tarih-saat kabul edilmez
+
+Aralık filtresi takvimsel bir kavramdır; saat kabul etmek `to` için "o ana kadar mı, o günün
+sonuna kadar mı" belirsizliğini doğurur, yani aynı parametreye iki anlam yüklerdi. Takvim
+kontrolü yine elle yapılır (`"2026-02-31"` JavaScript'te hata değil, sessiz bir taşımadır).
+
+#### Geçersiz filtre `400`, ama bilinmeyen id hata değil
+
+`Category`nin `?type` kararıyla (#49) aynı çizgi — **fakat sınırı bilinçli olarak farklı**:
+geçersiz bir filtreyi yok saymanın tehlikesi, listeyi **sessizce genişletmesidir**. Bu yüzden
+bozuk tarih, ters aralık (`from > to`), çok uzun `q` ve **tekrarlanan parametre**
+(`?q=a&q=b` — ilk değeri sessizce seçmek kullanıcının istemediği listeyi doğruymuş gibi
+gösterirdi) `400` alır.
+
+Biçimsel olarak geçerli ama **tanınmayan** bir `accountId`/`categoryId` ise hata değildir:
+listeyi daraltır, genişletmez. Arama zaten tenant içinde yapıldığı için yabancı bir id hiçbir
+satırla eşleşmez ve boş sonuç hiçbir şey sızdırmaz.
+
+Ekranda geçersiz filtre, **liste hiç gösterilmeden** bir hata mesajına düşer. Filtreyi yok
+sayıp tüm listeyi göstermek, filtrenin uygulandığını sanan kullanıcıya yanlış bir veri kümesini
+doğruymuş gibi sunmak olurdu.
+
+#### İki boş durum ayrı cümlelerdir
+
+"Henüz işlem yok" ile "bu filtreyle eşleşen işlem yok" farklı şeylerdir; ikincisinde kullanıcıya
+"ilkini kaydedin" demek, elindeki kayıtları yok saymak olurdu.
+
+#### Erişilebilirlik: iki form aynı sayfada
+
+Kayıt ve filtre formları `"Hesap"`, `"Kategori"` gibi **aynı etiketleri paylaşıyor**. İkisine de
+`aria-label` verildi (`"Yeni işlem"` / `"İşlem filtreleri"`): ekran okuyucu kullanıcısı hangi
+formda olduğunu ayırt edebilsin diye. E2E testleri de alanları bu adla kapsamlandırır — aksi
+hâlde `getByLabel("Tarih")` filtre formundaki "Başlangıç tarihi"ne de alt dize olarak uyar ve
+locator iki öğeye birden eşleşir.
+
+#### Bilinen sınırlar
+
+- **`description` üzerinde index yoktur**; `q` araması tarama yapar. Tenant başına işlem sayısı
+  büyüdüğünde bir trigram index gerekecek — bugün eklemek, ölçülmemiş bir maliyeti şemaya
+  yazmak olurdu.
+- **Sayfalama hâlâ yok** ve bu issue'nun kapsamında değildi. Filtreleme onu daha az acil yapar,
+  ortadan kaldırmaz.
+- **Tutara veya türe göre filtre yok** (issue'da istenmedi). Kategori filtresi dolaylı olarak
+  tür ayrımı sağlar.
+- **"Kategorisiz" işlemleri filtreleme yolu yok**: bunun için `categoryId` parametresine
+  `none` gibi sihirli bir değer gerekirdi ve id alanına anlam yüklemek ayrı bir tasarım kararı.
+
+E2E kanıtı: `e2e/transactions-ui.spec.ts` — her filtre ayrı ayrı, birlikte ve URL'e yazıldığı
+doğrulanır; sonuç ayrıca API'den bağımsız olarak okunur. Geçersiz filtrede listenin hiç
+gösterilmediği ve düzeltilince geri geldiği (duyarlılık) ayrıca test edilir.

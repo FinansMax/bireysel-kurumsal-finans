@@ -166,4 +166,15 @@ test.describe("Tenant scoping pattern koruması — transaction.ts", () => {
   test("create sırasında tenantId açıkça yazılıyor (client input'tan türetilmiyor)", () => {
     expect(TRANSACTION_SOURCE).toMatch(/data:\s*\{\s*tenantId/);
   });
+
+  test("liste filtreleri tenant filtresinin YERİNE geçmiyor", () => {
+    // `Category`nin `?type` filtresindeki aynı risk, burada beş katı: `listTransactions()`
+    // tarih aralığı, hesap, kategori ve serbest metin filtresi alır (#56). Birinin bu
+    // filtreleri `where`'e DOĞRUDAN yazıp tenant koşulunu düşürmesi, listeyi tüm tenant'lara
+    // açardı.
+    expect(TRANSACTION_SOURCE).not.toMatch(/where:\s*\{\s*\.\.\.\(filters/);
+
+    // Doğru desen: filtreler daima `tenantScoped()`in İÇİNE verilir.
+    expect(TRANSACTION_SOURCE).toMatch(/tenantScoped\(tenantId,\s*\{[\s\S]{0,240}\.\.\.\(filters/);
+  });
 });

@@ -1004,3 +1004,197 @@ test.describe("Eşzamanlılık — bakiye asla bozulmuyor", () => {
     expect(await balanceOf(accountId)).toBe(row.amount.negated().toFixed(4));
   });
 });
+
+test.describe("listTransactions() — filtreler (Issue #56)", () => {
+  /** Tek tenant + tek hesap üzerinde, tarihleri ve açıklamaları bilinen bir veri kümesi. */
+  async function seed() {
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+    const accountA = await createAccount(tenantId);
+    const accountB = await createAccount(tenantId);
+    const marketId = await createCategory(tenantId, "EXPENSE");
+    const maasId = await createCategory(tenantId, "INCOME");
+
+    await createTransaction(tenantId, actorId, {
+      accountId: accountA,
+      categoryId: marketId,
+      type: "EXPENSE",
+      amount: "10",
+      description: "Ocak kirasi",
+      occurredAt: "2026-01-10",
+    });
+    await createTransaction(tenantId, actorId, {
+      accountId: accountA,
+      categoryId: maasId,
+      type: "INCOME",
+      amount: "20",
+      description: "Subat maasi",
+      occurredAt: "2026-02-20",
+    });
+    await createTransaction(tenantId, actorId, {
+      accountId: accountB,
+      type: "EXPENSE",
+      amount: "30",
+      description: "Mart yakiti",
+      occurredAt: "2026-03-30",
+    });
+
+    return { tenantId, actorId, accountA, accountB, marketId, maasId };
+  }
+
+  function descriptions(rows: Array<{ description: string | null }>): string[] {
+    return rows.map((row) => row.description ?? "");
+  }
+
+  test("filtresiz çağrı hepsini döndürüyor (diğer testlerin kontrol grubu)", async () => {
+    const { tenantId } = await seed();
+    expect(await listTransactions(tenantId)).toHaveLength(3);
+  });
+
+  test("from: verilen günden İTİBAREN", async () => {
+    const { tenantId } = await seed();
+
+    const rows = await listTransactions(tenantId, { from: new Date("2026-02-20T00:00:00Z") });
+    expect(descriptions(rows).sort()).toEqual(["Mart yakiti", "Subat maasi"]);
+  });
+
+  test("to: verilen GÜNÜN SONUNA kadar — o gün saat 10:00'daki kayıt DAHİL", async () => {
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+    const accountId = await createAccount(tenantId);
+
+    // Bu testin varlık sebebi: `lte: 2026-03-15T00:00:00Z` yazılsaydı bu kayıt DIŞARIDA
+    // kalırdı ve kullanıcının gördüğü listeyle filtre sonucu sessizce ayrışırdı.
+    await createTransaction(tenantId, actorId, {
+      accountId,
+      type: "EXPENSE",
+      amount: "1",
+      description: "Sinirdaki kayit",
+      occurredAt: "2026-03-15T10:00:00.000Z",
+    });
+    await createTransaction(tenantId, actorId, {
+      accountId,
+      type: "EXPENSE",
+      amount: "1",
+      description: "Ertesi gun",
+      occurredAt: "2026-03-16T00:00:00.000Z",
+    });
+
+    const rows = await listTransactions(tenantId, { to: new Date("2026-03-15T00:00:00Z") });
+
+    expect(descriptions(rows)).toEqual(["Sinirdaki kayit"]);
+  });
+
+  test("from + to birlikte aralık kuruyor (iki uç da dahil)", async () => {
+    const { tenantId } = await seed();
+
+    const rows = await listTransactions(tenantId, {
+      from: new Date("2026-01-10T00:00:00Z"),
+      to: new Date("2026-02-20T00:00:00Z"),
+    });
+
+    expect(descriptions(rows).sort()).toEqual(["Ocak kirasi", "Subat maasi"]);
+  });
+
+  test("accountId: yalnızca o hesabın işlemleri", async () => {
+    const { tenantId, accountB } = await seed();
+
+    const rows = await listTransactions(tenantId, { accountId: accountB });
+    expect(descriptions(rows)).toEqual(["Mart yakiti"]);
+  });
+
+  test("categoryId: yalnızca o kategorinin işlemleri", async () => {
+    const { tenantId, maasId } = await seed();
+
+    const rows = await listTransactions(tenantId, { categoryId: maasId });
+    expect(descriptions(rows)).toEqual(["Subat maasi"]);
+  });
+
+  test("q: açıklamada geçen metin, büyük/küçük harf DUYARSIZ", async () => {
+    const { tenantId } = await seed();
+
+    expect(descriptions(await listTransactions(tenantId, { q: "kira" }))).toEqual(["Ocak kirasi"]);
+    // Duyarsızlık kanıtı: aynı sonuç büyük harfle de gelmeli.
+    expect(descriptions(await listTransactions(tenantId, { q: "KIRA" }))).toEqual(["Ocak kirasi"]);
+  });
+
+  test("q: eşleşme yoksa boş liste (tüm liste DEĞİL)", async () => {
+    const { tenantId } = await seed();
+
+    // Filtrenin sessizce yok sayılması hâlinde burada 3 satır dönerdi.
+    expect(await listTransactions(tenantId, { q: "hicbiryerde-gecmeyen" })).toHaveLength(0);
+  });
+
+  test("açıklaması null olan kayıt q filtresine takılmıyor (çökme de yok)", async () => {
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+    const accountId = await createAccount(tenantId);
+
+    await createTransaction(tenantId, actorId, {
+      accountId,
+      type: "EXPENSE",
+      amount: "1",
+    });
+
+    expect(await listTransactions(tenantId, { q: "herhangi" })).toHaveLength(0);
+    expect(await listTransactions(tenantId)).toHaveLength(1);
+  });
+
+  test("filtreler BİRLİKTE daraltıyor (VE mantığı)", async () => {
+    const { tenantId, accountA, marketId } = await seed();
+
+    const rows = await listTransactions(tenantId, {
+      accountId: accountA,
+      categoryId: marketId,
+      from: new Date("2026-01-01T00:00:00Z"),
+      to: new Date("2026-01-31T00:00:00Z"),
+      q: "kira",
+    });
+    expect(descriptions(rows)).toEqual(["Ocak kirasi"]);
+
+    // Duyarlılık: tek bir kısıt bile eşleşmezse sonuç boşalır.
+    expect(
+      await listTransactions(tenantId, { accountId: accountA, categoryId: marketId, q: "maas" }),
+    ).toHaveLength(0);
+  });
+
+  test("HİÇBİR filtre tenant scope'unun yerine geçmiyor", async () => {
+    const { tenantId: tenantA } = await seed();
+    const tenantB = await createTenant();
+    const actorId = await createActor();
+    const foreignAccount = await createAccount(tenantB);
+    const foreignCategory = await createCategory(tenantB, "EXPENSE");
+
+    await createTransaction(tenantB, actorId, {
+      accountId: foreignAccount,
+      categoryId: foreignCategory,
+      type: "EXPENSE",
+      amount: "99",
+      description: "Ocak kirasi",
+      occurredAt: "2026-01-10",
+    });
+
+    // Yabancı tenant'ın kaydı, AYNI açıklama/tarihle bile A'nın sonuçlarına giremez.
+    for (const filters of [
+      { q: "Ocak kirasi" },
+      { from: new Date("2026-01-01T00:00:00Z") },
+      { to: new Date("2026-12-31T00:00:00Z") },
+      // Yabancı id'ler: hata değil, yalnızca boş sonuç (arama zaten tenant içinde yapılır).
+      { accountId: foreignAccount },
+      { categoryId: foreignCategory },
+    ]) {
+      const rows = await listTransactions(tenantA, filters);
+      expect(JSON.stringify(rows)).not.toContain(tenantB);
+      expect(rows.every((row) => row.amount !== "99")).toBe(true);
+    }
+
+    expect(await listTransactions(tenantA, { accountId: foreignAccount })).toHaveLength(0);
+  });
+
+  test("filtrelenmiş sonuç da tarihe göre sıralı kalıyor", async () => {
+    const { tenantId, accountA } = await seed();
+
+    const rows = await listTransactions(tenantId, { accountId: accountA });
+    expect(descriptions(rows)).toEqual(["Subat maasi", "Ocak kirasi"]);
+  });
+});

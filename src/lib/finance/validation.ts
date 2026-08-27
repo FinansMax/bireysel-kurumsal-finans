@@ -173,3 +173,60 @@ export function parseOccurredAt(value: unknown): Date | null {
   const parsed = new Date(value.trim());
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
+
+export const MAX_SEARCH_QUERY_LENGTH = 100;
+
+/**
+ * İşlem listesi filtrelerindeki serbest metin (Issue #56).
+ *
+ * Boş/yalnızca-boşluk metin "filtre yok" demektir ve `null` döner — boş bir `?q=` ile hiç
+ * gönderilmemiş `q` arasında davranış farkı olmamalıdır. Geçersizse (string değil veya çok
+ * uzun) `undefined` döner; çağıran bunu 400'e çevirir.
+ *
+ * SQL enjeksiyonu bu katmanın derdi DEĞİLDİR: metin Prisma'nın `contains` filtresine
+ * parametre olarak geçer, sorguya string olarak gömülmez (ham SQL bu kod tabanında yasak).
+ * Uzunluk sınırı güvenlik değil maliyet içindir: `description` üzerinde index yoktur, çok
+ * uzun bir desen boşuna tarama maliyeti üretir.
+ */
+export function parseSearchQuery(value: unknown): string | null | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return trimmed.length <= MAX_SEARCH_QUERY_LENGTH ? trimmed : undefined;
+}
+
+/**
+ * Tarih aralığı sınırı: YALNIZCA `YYYY-MM-DD`.
+ *
+ * `parseOccurredAt()`ten farklı olarak tam ISO tarih-saat KABUL EDİLMEZ. Gerekçe: aralık
+ * filtresi takvimsel bir kavramdır ve `to` için "o ana kadar mı, o günün sonuna kadar mı"
+ * sorusu ancak gün hassasiyetinde tek anlamlı olur. Saat kabul etmek, aynı parametreye iki
+ * farklı anlam yüklerdi.
+ *
+ * Takvim kontrolü yine elle yapılır — `new Date("2026-02-31")` hata vermez, sessizce 3 Mart'a
+ * taşır (bkz. `parseOccurredAt()`).
+ */
+const FILTER_DATE_PATTERN = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
+
+export function parseFilterDate(value: unknown): Date | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const match = FILTER_DATE_PATTERN.exec(value.trim());
+  if (!match) {
+    return null;
+  }
+
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  if (!isRealCalendarDate(year, month, day)) {
+    return null;
+  }
+
+  return new Date(Date.UTC(year, month - 1, day));
+}

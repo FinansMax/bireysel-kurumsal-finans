@@ -3,14 +3,31 @@ import { NextResponse } from "next/server";
 import { requirePermission } from "@/lib/authz/authorize";
 import { PERMISSIONS } from "@/lib/authz/permissions";
 import { createTransaction, listTransactions } from "@/lib/finance/transaction";
+import { parseTransactionFilters } from "@/lib/finance/transaction-filters";
 import { isValidId } from "@/lib/tenants/validation";
 
 type RouteParams = { params: Promise<{ tenantId: string }> };
 
-export async function GET(_request: Request, { params }: RouteParams) {
+export async function GET(request: Request, { params }: RouteParams) {
   const { tenantId } = await params;
   if (!isValidId(tenantId)) {
     return NextResponse.json({ error: "Invalid tenant id" }, { status: 400 });
+  }
+
+  // `?from=&to=&accountId=&categoryId=&q=` (Issue #56). Ucuz şekil kontrolü authz'den ÖNCE
+  // (route sırası, bkz. CLAUDE.md §5). Ayrıştırıcı `/transactions` ekranıyla ORTAKTIR —
+  // aynı URL'in API'de ve ekranda farklı sonuç vermemesi için (bkz. transaction-filters.ts).
+  //
+  // `getAll()` KULLANILIR, `get()` DEĞİL: `get()` tekrarlanan bir parametrede sessizce ilk
+  // değeri döndürür ve ayrıştırıcının "tekrar hatadır" kontrolü hiç tetiklenmezdi.
+  const search = new URL(request.url).searchParams;
+  const parsed = parseTransactionFilters((key) => {
+    const all = search.getAll(key);
+    if (all.length === 0) return null;
+    return all.length === 1 ? all[0] : all;
+  });
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
   const { context, response } = await requirePermission(PERMISSIONS.VIEW_TRANSACTIONS, tenantId);
@@ -19,8 +36,9 @@ export async function GET(_request: Request, { params }: RouteParams) {
   }
 
   // Sorgu scope'unun kaynağı `context.tenant.id`dir (requirePermission'ın DB'den canlı
-  // doğruladığı aktif tenant) — URL parametresi DEĞİL (Issue #13).
-  const transactions = await listTransactions(context.tenant.id);
+  // doğruladığı aktif tenant) — URL parametresi DEĞİL (Issue #13). Filtreler bu scope'un
+  // ÜZERİNE eklenir.
+  const transactions = await listTransactions(context.tenant.id, parsed.filters);
   return NextResponse.json({ transactions });
 }
 

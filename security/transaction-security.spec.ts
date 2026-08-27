@@ -503,3 +503,183 @@ test.describe("Transaction API — client input spoofing", () => {
     }
   });
 });
+
+test.describe("Transaction API — filtreler (Issue #56)", () => {
+  async function seedRow(
+    tenantId: string,
+    accountId: string,
+    description: string,
+    occurredAt: string,
+  ) {
+    return prisma.transaction.create({
+      data: { tenantId, accountId, type: "EXPENSE", amount: "10", description, occurredAt },
+      select: { id: true },
+    });
+  }
+
+  test("filtreler tenant scope'unu BAYPAS ETMİYOR (yabancı kayıt hiçbir filtreyle sızmıyor)", async ({
+    request,
+  }) => {
+    const tenant = await createTenant("TxFilterOwn");
+    const foreignTenant = await createTenant("TxFilterForeign");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    const ownAccount = await createAccountRow(tenant.id);
+    const foreignAccount = await createAccountRow(foreignTenant.id);
+
+    await seedRow(tenant.id, ownAccount.id, "Benim kiram", "2026-01-10T00:00:00.000Z");
+    // Yabancı kayıt BİLEREK aynı açıklama ve aynı tarihte: filtre eşleşmesi tenant
+    // filtresini düşürüyorsa buradan sızar.
+    await seedRow(foreignTenant.id, foreignAccount.id, "Benim kiram", "2026-01-10T00:00:00.000Z");
+
+    try {
+      const queries = [
+        "?q=Benim kiram",
+        "?from=2026-01-01",
+        "?to=2026-12-31",
+        "?from=2026-01-01&to=2026-12-31&q=kiram",
+        `?accountId=${foreignAccount.id}`,
+      ];
+
+      for (const query of queries) {
+        const response = await request.get(`/api/tenants/${tenant.id}/transactions${query}`, {
+          headers: { cookie: owner.cookie },
+        });
+        expect(response.status(), `sorgu: ${query}`).toBe(200);
+
+        const body = await response.text();
+        expect(body, `sorgu: ${query}`).not.toContain(foreignTenant.id);
+        expect(body, `sorgu: ${query}`).not.toContain(foreignAccount.id);
+      }
+
+      // Yabancı hesap id'siyle filtreleme hata değil, BOŞ sonuç verir: arama zaten tenant
+      // içinde yapıldığı için o id hiçbir satırla eşleşmez.
+      const foreignFiltered = await request.get(
+        `/api/tenants/${tenant.id}/transactions?accountId=${foreignAccount.id}`,
+        { headers: { cookie: owner.cookie } },
+      );
+      expect(((await foreignFiltered.json()) as { transactions: unknown[] }).transactions).toEqual(
+        [],
+      );
+
+      // Duyarlılık kanıtı: kendi kaydı aynı filtreyle GÖRÜNÜYOR — yukarıdaki boşluklar
+      // filtrenin çalışmamasından değil, izolasyondan geliyor.
+      const own = await request.get(`/api/tenants/${tenant.id}/transactions?q=kiram`, {
+        headers: { cookie: owner.cookie },
+      });
+      expect(((await own.json()) as { transactions: unknown[] }).transactions).toHaveLength(1);
+    } finally {
+      await prisma.tenant.deleteMany({ where: { id: { in: [tenant.id, foreignTenant.id] } } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("geçersiz filtre SESSİZCE YOK SAYILMIYOR (400) — liste genişlemiyor", async ({
+    request,
+  }) => {
+    const tenant = await createTenant("TxBadFilter");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    const account = await createAccountRow(tenant.id);
+    await seedRow(tenant.id, account.id, "Gorunmemeli", "2026-01-10T00:00:00.000Z");
+
+    try {
+      const invalid = [
+        "?from=dun",
+        "?from=15.03.2026",
+        // Takvimde olmayan gün: JavaScript bunu sessizce 3 Mart'a taşır, doğrulama engeller.
+        "?from=2026-02-31",
+        "?to=2026-13-01",
+        // Tarih-saat kabul edilmez: aralık filtresi gün hassasiyetindedir.
+        "?from=2026-01-01T10:00:00Z",
+        // Ters aralık: daima boş sonuç verirdi; sorun veride değil filtrededir.
+        "?from=2026-04-01&to=2026-03-01",
+        `?q=${"A".repeat(101)}`,
+        // Tekrarlanan parametre: ilk değeri sessizce seçmek, kullanıcının istemediği bir
+        // listeyi doğruymuş gibi göstermek olurdu.
+        "?q=a&q=b",
+        "?accountId=a&accountId=b",
+      ];
+
+      for (const query of invalid) {
+        const response = await request.get(`/api/tenants/${tenant.id}/transactions${query}`, {
+          headers: { cookie: owner.cookie },
+        });
+        expect(response.status(), `sorgu: ${query}`).toBe(400);
+        expect(
+          Object.keys((await response.json()) as Record<string, unknown>),
+          `sorgu: ${query}`,
+        ).toEqual(["error"]);
+      }
+
+      // Duyarlılık kanıtı: aynı endpoint geçerli filtreyle 200 ve kaydı döndürüyor.
+      const valid = await request.get(
+        `/api/tenants/${tenant.id}/transactions?from=2026-01-01&to=2026-01-31`,
+        { headers: { cookie: owner.cookie } },
+      );
+      expect(valid.status()).toBe(200);
+      expect(((await valid.json()) as { transactions: unknown[] }).transactions).toHaveLength(1);
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("boş filtre değerleri 'filtre yok' demektir (400 değil)", async ({ request }) => {
+    const tenant = await createTenant("TxEmptyFilter");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    const account = await createAccountRow(tenant.id);
+    await seedRow(tenant.id, account.id, "Gorunmeli", "2026-01-10T00:00:00.000Z");
+
+    try {
+      // Form boş alanları böyle gönderir; bunu hata saymak arayüzü kullanılmaz yapardı.
+      const response = await request.get(
+        `/api/tenants/${tenant.id}/transactions?from=&to=&accountId=&categoryId=&q=`,
+        { headers: { cookie: owner.cookie } },
+      );
+      expect(response.status()).toBe(200);
+      expect(((await response.json()) as { transactions: unknown[] }).transactions).toHaveLength(1);
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("MEMBER de filtreleyebiliyor (filtreleme bir OKUMA işlemidir)", async ({ request }) => {
+    const tenant = await createTenant("TxFilterMember");
+    const member = await createUserWithMembership(MembershipRole.MEMBER, tenant.id);
+    const account = await createAccountRow(tenant.id);
+    await seedRow(tenant.id, account.id, "Ortak kira", "2026-01-10T00:00:00.000Z");
+
+    try {
+      const response = await request.get(`/api/tenants/${tenant.id}/transactions?q=kira`, {
+        headers: { cookie: member.cookie },
+      });
+      expect(response.status()).toBe(200);
+      expect(((await response.json()) as { transactions: unknown[] }).transactions).toHaveLength(1);
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: member.userId } });
+    }
+  });
+
+  test("filtreleme GET'tir ve yan etkisizdir (kayıt sayısı ve bakiye değişmiyor)", async ({
+    request,
+  }) => {
+    const tenant = await createTenant("TxFilterSideEffect");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    const account = await createAccountRow(tenant.id);
+    await seedRow(tenant.id, account.id, "Sabit", "2026-01-10T00:00:00.000Z");
+
+    try {
+      const before = await prisma.transaction.count({ where: { tenantId: tenant.id } });
+      await request.get(`/api/tenants/${tenant.id}/transactions?q=Sabit&from=2026-01-01`, {
+        headers: { cookie: owner.cookie },
+      });
+      expect(await prisma.transaction.count({ where: { tenantId: tenant.id } })).toBe(before);
+      // Bakiye seed edilen satırdan etkilenmez: satır Prisma ile doğrudan yazıldı.
+      expect(await balanceOf(account.id)).toBe("1000.0000");
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+});

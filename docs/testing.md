@@ -158,6 +158,17 @@ benzersiz olmayan test verisi, ortak rate-limit bucket'ı, sabit `waitForTimeout
 görünebilir. Bu yüzden yerel `retries: 0` bilinçlidir — kararsızlığı görünür tutar. Bir PR'da
 e2e'yi değerlendirirken CI'nın yeşilliği tek başına kanıt sayılmamalıdır.
 
+**CI retry'i tam olarak neyi örter (Issue #129):** ilk denemede düşüp ikinci veya üçüncü
+denemede geçen bir test, job'ı yeşil bırakır ve özet satırında **"flaky"** olarak görünür —
+"passed" ile aynı renkte. Örtülen şey bir testin yanlış olması değil, suite'in
+KARARSIZLIĞIDIR: aynı commit yerelde kırmızı, CI'da yeşildir.
+
+`retries: 2` bilerek korunuyor (kaldırmak, kalan her tekil kararsızlıkta CI'ı kırmızıya
+çevirip PR akışını durdururdu), ama **flaky sayısı sıfırdan büyükse bu bir hata raporudur,
+gürültü değildir.** CI çıktısında `N flaky` gördüğünüzde: hangi test olduğunu bulun, tek
+başına ve tam suite içinde tekrar koşun, sebebi aşağıdaki bölümlerden biriyle eşleştirin.
+Retry sayısını artırarak veya `test.skip` ile geçmeyin.
+
 ### Sunucu round-trip'i bekleyen assertion'lara açık süre verin
 
 Bir formu gönderdikten sonra listede beliren satırı (veya hata kutusunu) bekleyen assertion,
@@ -178,6 +189,44 @@ aynı kalır, yalnızca bilinen bir yavaş adıma süre tanınır. Kaydın sunuc
 zaten bağımsız bir API okumasıyla, bu beklemeden ayrı olarak doğrulanmalıdır (kural #2:
 kontrol grubu). Süreyi bir iddiayı kurtarmak için değil, yalnızca round-trip beklemek için
 kullanın.
+
+### `ECONNRESET`: keep-alive yarışı (Issue #129)
+
+Tam suite koşusunda rastgele testler şu hatayla düşüyordu:
+
+```
+Error: apiRequestContext.get: read ECONNRESET
+```
+
+Aynı test tek başına daima geçiyordu. Bu bir uygulama hatası değil, bir **istemci-sunucu
+bağlantı yarışıdır**: Playwright'ın `request` context'i (Node tarafı — tarayıcı değil)
+soketleri keep-alive ile yeniden kullanır; `next dev`in altındaki Node HTTP sunucusu ise
+boşta kalan bağlantıyı `keepAliveTimeout` dolunca kapatır. İstemci tam o anda kapanmakta olan
+soketi yeniden kullanırsa istek ECONNRESET ile ölür. Sunucu doğru davranıyor; istemci ölü bir
+sokete yazıyor.
+
+Çare, iki Playwright config'inde de `use.extraHTTPHeaders` ile verilen `Connection: close`
+başlığıdır: her istek kendi bağlantısını açıp kapatır, yeniden kullanılacak boşta soket kalmaz.
+Tarayıcı isteklerini etkilemez (Chromium `Connection`'ı yasaklı başlık sayıp yok sayar) —
+hatalar da zaten yalnızca API isteklerindeydi.
+
+**Ölçüm** (yerel, `--retries=0`, tam suite, 127 test):
+
+| Yapılandırma | Koşu başına hata |
+| --- | --- |
+| Düzeltmesiz (kontrol, 6 koşu) | 0, 1, 6, 18, 19, 27 |
+| `--workers=4` (3 koşu) | 0, 1, 0 |
+| `Connection: close` (6 koşu) | 0, 0, 0, 0, 0, 0 |
+
+Hata sayısı istek hacmiyle birlikte artıyor: #135'in sayfalama testleri (50+ kayıt seed'i)
+eklendikten sonra kötü koşular 27 teste kadar çıktı. Bu yüzden worker sayısını düşürmek
+**yeterli değildi** — olasılığı azaltıyor, sebebi ortadan kaldırmıyor.
+
+**Reddedilen alternatif — `webServer`ı `npm run build && npm run start` ile koşturmak.**
+Soğuk route derlemesini gerçekten ortadan kaldırırdı, ama uygulama prod modunda farklı
+davranıyor (ör. `NODE_ENV=production` ile `secure` cookie'ler) ve suite prod sunucusuna karşı
+koşu başına ~30 testle toplu düştü. Bu, kararsızlık düzeltmesinin yanına sığmayacak ayrı bir
+araştırma; e2e'yi prod build'e taşımak istenirse önce bu farkların tek tek çözülmesi gerekir.
 
 ### Yerelde bozuk bir dev sunucusu tüm suite'i zehirler
 

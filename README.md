@@ -800,8 +800,8 @@ aktif tenant'tır.
 - **Oluşturma formu yalnızca `MANAGE_ACCOUNTS` iznine sahip role render edilir** — bu bir
   güvenlik kontrolü değil, MEMBER'a kesin 403 alacağı bir form göstermeme tercihidir; asıl
   kontrol route'taki `requirePermission()`'dır.
-- **Kapsam:** liste + oluşturma. Güncelleme/silme API'si (#46) hazırdır ama arayüzü bilerek bu
-  issue'da yapılmadı; ayrı bir issue gerektirir.
+- **Kapsam:** liste + oluşturma. Güncelleme/silme arayüzü bu issue'da bilerek yapılmadı;
+  #130'da eklendi (bkz. "Düzenleme ve silme arayüzü").
 
 E2E kanıtı: `e2e/accounts-ui.spec.ts` — her sonuç `GET /api/tenants/:id/accounts` ile
 doğrulanır (kayıt gerçekten oluştu mu, bakiye string ve hassasiyeti korunmuş mu, hata
@@ -895,9 +895,8 @@ kaynak aktif tenant'tır; form servis fonksiyonunu değil `POST /api/.../categor
 - **Oluşturma formu yalnızca `MANAGE_CATEGORIES` iznine sahip role render edilir** — bu bir
   güvenlik kontrolü değil, MEMBER'a kesin 403 alacağı bir form göstermeme tercihidir; asıl
   kontrol route'taki `requirePermission()`'dır.
-- **Kapsam:** liste + oluşturma. Güncelleme/silme API'si (#49) hazırdır ama arayüzü bilerek bu
-  issue'da yapılmadı — hesap ekranında da aynı sınır var; ikisi tek bir "düzenle/sil"
-  issue'sunda birlikte ele alınmalıdır.
+- **Kapsam:** liste + oluşturma. Güncelleme/silme arayüzü bu issue'da bilerek yapılmadı;
+  hesap ve işlem ekranlarıyla birlikte #130'da eklendi.
 
 E2E kanıtı: `e2e/categories-ui.spec.ts` — her sonuç `GET /api/tenants/:id/categories` ile
 doğrulanır. Aynı ismin gelir ve gider tarafında ayrı ayrı kullanılabildiği (yani #49'un
@@ -1094,9 +1093,8 @@ zaten formun açılır menüleri için okunuyorlar. Üçü `Promise.all` ile par
   `onDelete: SetNull` kararının arayüzdeki karşılığı.
 - **Başarılı kayıttan sonra tutar ve açıklama temizlenir; hesap, tür ve tarih korunur.**
   Kullanıcı genellikle aynı günün fişlerini aynı hesaba arka arkaya girer.
-- **Kapsam:** liste + kayıt. Güncelleme/silme API'si (#53) hazırdır ama arayüzü bilerek bu
-  issue'da yapılmadı — hesap ve kategori ekranlarında da aynı sınır var; **üçü tek bir
-  "düzenle/sil" issue'sunda birlikte** ele alınmalıdır. Arama/filtreleme #56'dır.
+- **Kapsam:** liste + kayıt. Güncelleme/silme arayüzü bu issue'da bilerek yapılmadı; üç ekran
+  birlikte #130'da ele alındı. Arama/filtreleme #56'dır.
 
 E2E kanıtı: `e2e/transactions-ui.spec.ts` — her sonuç bağımsız bir okumayla doğrulanır ve bu
 ekrana özgü ek iddia ayrıca kontrol edilir: bir işlem kaydetmek yalnızca satır eklemez,
@@ -1189,3 +1187,100 @@ locator iki öğeye birden eşleşir.
 E2E kanıtı: `e2e/transactions-ui.spec.ts` — her filtre ayrı ayrı, birlikte ve URL'e yazıldığı
 doğrulanır; sonuç ayrıca API'den bağımsız olarak okunur. Geçersiz filtrede listenin hiç
 gösterilmediği ve düzeltilince geri geldiği (duyarlılık) ayrıca test edilir.
+
+## Düzenleme ve silme arayüzü (Issue #130)
+
+Hesap, kategori ve işlem ekranlarına düzenleme ve silme eklendi. Bu issue **yalnızca arayüzdür**:
+üç modelin de `PATCH`/`DELETE` route'ları (#46, #49, #53) zaten vardı ve dokunulmadı. Bu yüzden
+yeni bir yetkilendirme ya da izolasyon kararı yok; aşağıdakiler bu üç API'nin davranışını
+kullanıcıya nasıl gösterdiğimizin kararlarıdır.
+
+### Düzenleme durumu URL'de: `?edit=<id>`
+
+"Hangi kaydı düzenliyorum" bilgisi React state'inde değil URL'de tutulur — #56'nın filtre
+kararıyla aynı gerekçe: tarayıcının geri tuşu ve sayfa yenileme kendiliğinden doğru çalışır,
+düzenleme ekranının linki paylaşılabilir. Alternatif (satır içi açılan bir modal) her yenilemede
+durumu kaybederdi.
+
+**Düzenlenecek kayıt ayrı bir sorguyla ÇEKİLMEZ, listeden seçilir.** Liste zaten aktif tenant
+ile scope'lanmış geldiği için, URL'e başka bir tenant'ın kaydının id'sini yazmak hiçbir şey
+açmaz: eşleşme bulunamaz ve normal liste görünür. Bu, arayüzde ikinci bir "id ile getir"
+sorgusu yazma ihtiyacını — ve onunla birlikte gelen tenant-scope hatası yapma riskini —
+tümüyle ortadan kaldırır. Yan etkisi işlem ekranında görünür: aktif filtrenin dışında kalan bir
+kayıt düzenlenemez. Kabul edildi, çünkü o kayıt zaten ekranda değildir.
+
+### Oluşturma ve düzenleme AYNI form bileşenidir
+
+`CreateAccountForm` → `AccountForm` (aynısı kategori ve işlem için). Ayrı bir `EditXForm`
+yazmak, alanları ve doğrulama mesajlarını neredeyse birebir kopyalamak olurdu; ayrışan tek şey
+hedef URL, HTTP verb'ü, düğme metni ve başarı sonrası davranıştır. Formlar birbirinden hâlâ
+ayrıdır (üç model, üç farklı alan kümesi) — paylaşılan tek şey silme davranışıdır
+(`src/components/delete-with-confirm.tsx`), çünkü o üçünde de birebir aynıdır.
+
+React'e `key` verilmesi zorunludur: bir kaydı düzenlerken listeden başkasına geçildiğinde
+bileşen yeniden kurulmalı, aksi hâlde önceki kaydın değerleri state'te kalır ve kullanıcı yanlış
+kaydın verisini görür.
+
+### Düzenleme formunda hesap BAKİYESİ yoktur
+
+#53'ten beri `Account.balance` işlemlerden türetilir. Düzenleme formunda elle bakiye alanı
+açmak, kullanıcıyı "bakiye = işlemlerin etkisi" invariant'ını sessizce bozmaya davet ederdi;
+bakiyeyi değiştirmenin doğru yolu bir işlem kaydetmektir. Açılışta alanın olması çelişki değil:
+orada bakiye türetilen değil **başlangıç noktasıdır**.
+
+**Bilinen sınır:** API `PATCH /accounts/:id` hâlâ `balance` alanını kabul ediyor. Arayüz onu
+göndermez, ama bu bir kapı değil perdedir — invariant'ı gerçekten korumak için alanın route
+seviyesinde reddedilmesi gerekir ve bu, API sözleşmesini değiştirdiği için ayrı bir issue'dur.
+
+### Onay `window.confirm()` DEĞİL, satır içi iki adım
+
+Tarayıcının diyaloğu stillenemez, ekran okuyucuda bağlam taşımaz ve en önemlisi silmenin
+**sonucunu** anlatacak yer bırakmaz. Üç ekranda sonuç birbirinden farklıdır ve kullanıcı bunu
+onaylamadan **önce** görmelidir:
+
+| Ekran | Onayda söylenen | Dayandığı karar |
+| --- | --- | --- |
+| Hesap | "Bu işlem geri alınamaz." + 409 gelirse ne yapılacağı | #53: işlemi olan hesap silinemez, cascade reddedildi |
+| Kategori | "Bu kategoriyi kullanan işlemler silinmez, 'Kategorisiz' kalır." | #53: `onDelete: SetNull` |
+| İşlem | "<hesap> bakiyesi bu işlemin etkisi geri alınarak güncellenecek." | #53: silme, bakiye etkisini geri alır |
+
+Hesabın 409'u kullanıcıya ham hâliyle değil, **ne yapması gerektiği** söylenerek gösterilir
+("önce işlemleri silin veya başka bir hesaba taşıyın"). Kategoride 409 yoktur — orada engel
+olmadığı için uyarı metni tek korumadır.
+
+### Silme bir düğmedir, link değil; `DELETE` verb'ü kullanılır
+
+Silme state değiştirir; `GET` yan etkisiz kalmalıdır (invariant #4). Bir link, tarayıcı
+ön-getirmesi veya bir crawler tarafından tetiklenebilirdi. HTML formları yalnızca `GET`/`POST`
+gönderebildiği için silme, en küçük yaprakta bir client component'tir. Düzenleme ise gerçekten
+bir linktir: yalnızca URL'e durum yazar, yan etkisi yoktur.
+
+Hata durumunda onay paneli **açık kalır** — kapatmak, hatanın listedeki hangi satıra ait
+olduğunu belirsizleştirirdi.
+
+### Erişilebilir ad, görünen metinden uzundur
+
+Listede onlarca "Sil" ve "Düzenle" düğmesi olur. Görünen metin kısadır (`aria-hidden`), yanında
+`sr-only` bir ad taşınır ("Kasa hesabını sil"): ekran okuyucu kullanıcısı hangi satırda olduğunu
+bilmeden silme onayına giremez.
+
+### Yetki
+
+Düzenle/sil aksiyonları yalnızca ilgili `MANAGE_*` iznine sahip role render edilir. Formlarda
+olduğu gibi bu bir güvenlik kontrolü **değildir** — asıl kontrol route'taki
+`requirePermission()`'dır; buradaki amaç MEMBER'a kesin `403` alacağı bir düğme göstermemektir.
+E2E testleri her üç ekranda hem aksiyonların render edilmediğini hem de arayüz baypas edilip
+endpoint doğrudan çağrıldığında `403` alındığını (işlem ekranında ayrıca bakiyenin sabit
+kaldığını) doğrular — kontrol grubu ve duyarlılık kanıtı.
+
+### 404 mesajı ayrım yapmaz
+
+"Kayıt silinmiş" ile "başka tenant'ın kaydı" backend'de aynı `404`'ü döner (enumeration engeli).
+Arayüz mesajı da ayrım yapmaz: "Bu kayıt artık mevcut değil. Sayfayı yenileyin." Mesajı
+zenginleştirmek, backend'in kapattığı sızıntıyı arayüzden geri açardı.
+
+E2E kanıtı: `e2e/accounts-ui.spec.ts`, `e2e/categories-ui.spec.ts`, `e2e/transactions-ui.spec.ts`
+— her sonuç ilgili `GET` API'siyle bağımsız olarak doğrulanır. Ekrana özgü iddialar ayrıca
+test edilir: düzenleme formunda bakiye alanının bulunmadığı, kullanımdaki kategori silinince
+işlemin **silinmeyip** kategorisiz kaldığı, işlem tutarı değişince bakiyenin düzeltildiği ve
+düzenleme/vazgeçme akışının mevcut filtreleri koruduğu.

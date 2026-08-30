@@ -196,6 +196,10 @@ function formAlert(page: Page) {
  * paralel koşarken bu adım 5 saniyeyi aşabiliyor ve test, uygulama doğru çalıştığı hâlde
  * kırmızıya düşüyordu.
  *
+ * `exact: true` ZORUNLU (Issue #130): satır aksiyonlarının erişilebilir adı kaydın adını
+ * içerir ("Vadesiz TL hesabını düzenle"), dolayısıyla varsayılan ALT DİZE eşlemesi hem ad
+ * hücresine hem aksiyon hücresine uyar ve locator strict mode ihlaliyle düşer.
+ *
  * Bu bir GEVŞETME DEĞİLDİR: iddia aynı (satır listede görünmeli), yalnızca bilinen bir yavaş
  * adıma daha fazla süre tanınıyor. Kaydın sunucuda gerçekten oluştuğu zaten `apiTransactions()`
  * ile bu beklemeden BAĞIMSIZ olarak doğrulanıyor.
@@ -203,7 +207,7 @@ function formAlert(page: Page) {
 const ROW_TIMEOUT_MS = 15_000;
 
 function expectRow(page: Page, name: string) {
-  return expect(page.getByRole("cell", { name })).toBeVisible({ timeout: ROW_TIMEOUT_MS });
+  return expect(page.getByRole("cell", { name, exact: true })).toBeVisible({ timeout: ROW_TIMEOUT_MS });
 }
 
 test.describe("/transactions — kaydetme ve listeleme", () => {
@@ -241,7 +245,7 @@ test.describe("/transactions — kaydetme ve listeleme", () => {
     expect(await apiBalance(page, tenantId, accountId)).toBe("749.25");
 
     // Tarih listede `YYYY-MM-DD` olarak, girildiği gibi görünür.
-    await expect(page.getByRole("cell", { name: "2026-03-15" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "2026-03-15", exact: true })).toBeVisible();
   });
 
   test("gelir işlemi bakiyeyi artırıyor", async ({ page }) => {
@@ -402,7 +406,7 @@ test.describe("/transactions — yetki ve kurulum durumu", () => {
     await page.goto("/transactions");
 
     // İzin matrisi MEMBER'a VIEW_TRANSACTIONS verir: kayıtları okumak günlük iştir.
-    await expect(page.getByRole("cell", { name: "Ortak harcama" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "Ortak harcama", exact: true })).toBeVisible();
 
     // Ama yönetim formu HİÇ render edilmez (MANAGE_TRANSACTIONS yok).
     await expect(createForm(page)).toHaveCount(0);
@@ -472,7 +476,7 @@ test.describe("/transactions — filtreleme (Issue #56)", () => {
   }
 
   function row(page: Page, name: string) {
-    return page.getByRole("cell", { name });
+    return page.getByRole("cell", { name, exact: true });
   }
 
   test("tarih aralığı listeyi daraltıyor ve filtre URL'e yazılıyor", async ({ page }) => {
@@ -608,5 +612,280 @@ test.describe("/transactions — filtreleme (Issue #56)", () => {
     // izlenimi verirdi.
     await expect(filterForm(page).getByLabel("Başlangıç tarihi")).toHaveValue("2026-01-01");
     await expect(filterForm(page).getByLabel("Açıklamada ara")).toHaveValue("kira");
+  });
+});
+
+test.describe("/transactions — düzenleme ve silme (Issue #130)", () => {
+  /**
+   * Düzenleme formu ERİŞİLEBİLİR ADIYLA bulunur; kapsamlandırmadan alan sorguları hem kayıt
+   * hem düzenleme formuna uyar ve ayrıca bir yarış üretir (bkz. `categories-ui.spec.ts`).
+   */
+  function editForm(page: Page) {
+    return page.getByRole("form", { name: "İşlemi düzenle" });
+  }
+
+  /**
+   * Kaydeder ve KAYDIN İNDİĞİNİ bekler.
+   *
+   * Yalnızca tıklayıp listedeki satırı beklemek YETMEZ: düzenlenen alan satırın metnini
+   * değiştirmiyorsa (ör. yalnızca tutar ya da kategori değiştiyse) satır zaten oradadır ve
+   * assertion anında geçer — sonra API okunur, henüz güncellenmemiş veri görülür ve test
+   * uygulama doğru çalışırken kırmızıya düşer.
+   *
+   * Form başarıda `?edit=` parametresini düşürerek listeye döner; o navigasyonu beklemek,
+   * sunucunun isteği işlediğinin kesin işaretidir.
+   */
+  async function saveEditAndWait(page: Page) {
+    await editForm(page).getByRole("button", { name: "Değişiklikleri kaydet" }).click();
+    await page.waitForURL((url) => !url.search.includes("edit="));
+  }
+
+  function editLinkFor(page: Page, description: string) {
+    return page.getByRole("row").filter({ hasText: description }).getByRole("link");
+  }
+
+  /**
+   * Düzenlemeye geçer ve GEÇİŞİN BİTTİĞİNİ bekler.
+   *
+   * `waitForURL` olmadan bir yarış oluşuyor: form DOM'a girer girmez alanlar doldurulabiliyor,
+   * ama soft-navigation'ın RSC yükü hemen ardından gelip formu `key` değişimiyle yeniden
+   * kuruyor ve girilen değerler siliniyor. Sonuç: kaydedilen istek ESKİ değerleri taşıyor ve
+   * test "düzenleme uygulanmadı" diye düşüyordu — üstelik uygulama doğru çalışırken.
+   */
+  async function startEditing(page: Page, description: string) {
+    await editLinkFor(page, description).click();
+    await page.waitForURL(/edit=/);
+    await expect(editForm(page)).toBeVisible();
+  }
+
+  function deleteButtonFor(page: Page, description: string) {
+    return page.getByRole("row").filter({ hasText: description }).getByRole("button");
+  }
+
+  async function seedOne(page: Page, prefix: string, amount: string, balance: string) {
+    await signUpAndSignIn(page, prefix);
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Kasa", balance);
+
+    const response = await page.request.post(`/api/tenants/${tenantId}/transactions`, {
+      data: {
+        accountId,
+        type: "EXPENSE",
+        amount,
+        description: "Duzenlenecek",
+        occurredAt: "2026-03-10",
+      },
+    });
+    expect(response.status()).toBe(201);
+
+    return { tenantId, accountId };
+  }
+
+  test("işlem düzenleniyor: form dolu geliyor ve TUTAR değişince BAKİYE düzeltiliyor", async ({
+    page,
+  }) => {
+    const { tenantId, accountId } = await seedOne(page, "tx-edit", "100", "1000");
+
+    await page.goto("/transactions");
+    expect(await apiBalance(page, tenantId, accountId)).toBe("900");
+
+    await startEditing(page, "Duzenlenecek");
+
+    // Form MEVCUT değerlerle dolu gelmeli.
+    await expect(editForm(page).getByLabel("Tutar")).toHaveValue("100");
+    await expect(editForm(page).getByLabel("Tarih")).toHaveValue("2026-03-10");
+    await expect(editForm(page).getByLabel("Açıklama")).toHaveValue("Duzenlenecek");
+
+    await editForm(page).getByLabel("Tutar").fill("250");
+    await saveEditAndWait(page);
+
+    // Tutar hücresi para birimiyle birlikte yazılır ("250 TRY").
+    await expectRow(page, "250 TRY");
+
+    // ASIL İDDİA: bakiye eski etkiyi geri alıp yenisini uygulamış olmalı (1000 - 250).
+    expect(await apiBalance(page, tenantId, accountId)).toBe("750");
+    await expect(page).toHaveURL(/\/transactions$/);
+  });
+
+  test("tür değiştirilince bakiye iki kat kayıyor", async ({ page }) => {
+    const { tenantId, accountId } = await seedOne(page, "tx-edit-type", "100", "1000");
+
+    await page.goto("/transactions");
+    await startEditing(page, "Duzenlenecek");
+    await editForm(page).getByLabel("Tür").selectOption("INCOME");
+    await saveEditAndWait(page);
+
+    await expectRow(page, "Gelir");
+    // 900 (gider uygulanmış) → geri al (+100) → gelir uygula (+100) = 1100.
+    expect(await apiBalance(page, tenantId, accountId)).toBe("1100");
+  });
+
+  test("tür değiştirilince kategori OTOMATİK temizleniyor (uyumsuzluk hiç oluşmuyor)", async ({
+    page,
+  }) => {
+    await signUpAndSignIn(page, "tx-edit-mismatch");
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Kasa", "1000");
+    const categoryId = await createCategory(page, tenantId, "Market", "EXPENSE");
+
+    const created = await page.request.post(`/api/tenants/${tenantId}/transactions`, {
+      data: { accountId, categoryId, type: "EXPENSE", amount: "50", description: "Kategorili" },
+    });
+    expect(created.status()).toBe(201);
+
+    await page.goto("/transactions");
+    await startEditing(page, "Kategorili");
+
+    // #53'e göre gider işlemine gelir kategorisi bağlanamaz (`400`). Ama ARAYÜZ bu hatayı
+    // hiç ürettirmez: tür değişince kategori seçimi otomatik temizlenir (#54'teki karar),
+    // çünkü aksi halde seçim listede görünmeyen bir kategoriye takılı kalırdı.
+    await editForm(page).getByLabel("Tür").selectOption("INCOME");
+    await expect(editForm(page).getByLabel("Kategori")).toHaveValue("");
+
+    await saveEditAndWait(page);
+
+    // Kayıt GEÇER ve kategorisiz kalır — kullanıcı bir hata duvarına çarpmaz.
+    await expectRow(page, "Kategorisiz");
+    const transactions = await apiTransactions(page, tenantId);
+    expect(transactions[0].categoryId).toBeNull();
+    expect(transactions[0].type).toBe("INCOME");
+
+    // Bakiye tür değişimine göre düzeltilmiş olmalı: 950 → geri al (+50) → gelir (+50).
+    expect(await apiBalance(page, tenantId, accountId)).toBe("1050");
+  });
+
+  test("kategori 'Kategorisiz'e çekilebiliyor (PATCH'te null gönderilir)", async ({ page }) => {
+    await signUpAndSignIn(page, "tx-edit-clearcat");
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Kasa", "1000");
+    const categoryId = await createCategory(page, tenantId, "Market", "EXPENSE");
+
+    const created = await page.request.post(`/api/tenants/${tenantId}/transactions`, {
+      data: { accountId, categoryId, type: "EXPENSE", amount: "50", description: "Kategorili" },
+    });
+    expect(created.status()).toBe(201);
+
+    await page.goto("/transactions");
+    await startEditing(page, "Kategorili");
+    await editForm(page).getByLabel("Kategori").selectOption("");
+    await saveEditAndWait(page);
+
+    await expectRow(page, "Kategorisiz");
+
+    // `undefined` gönderilseydi PATCH bu alana hiç dokunmaz ve kategori olduğu gibi kalırdı;
+    // kullanıcı kaydettiği hâlde değişmediğini görürdü.
+    const transactions = await apiTransactions(page, tenantId);
+    expect(transactions).toHaveLength(1);
+    expect(transactions[0].categoryId).toBeNull();
+  });
+
+  test("işlem siliniyor: onay BAKİYE etkisini söylüyor ve silince bakiye geri alınıyor", async ({
+    page,
+  }) => {
+    const { tenantId, accountId } = await seedOne(page, "tx-delete", "250", "1000");
+
+    await page.goto("/transactions");
+    expect(await apiBalance(page, tenantId, accountId)).toBe("750");
+
+    await deleteButtonFor(page, "Duzenlenecek").click();
+
+    // Diğer iki ekranda silmenin parasal sonucu yok; burada var ve kullanıcı onaylamadan
+    // ÖNCE görmeli.
+    await expect(page.getByText('"Kasa" hesabının bakiyesi bu işlemin etkisi geri alınarak')).toBeVisible();
+    expect(await apiTransactions(page, tenantId)).toHaveLength(1);
+
+    await page.getByRole("button", { name: "Evet, sil" }).click();
+
+    await expect(page.getByRole("cell", { name: "Duzenlenecek", exact: true })).toHaveCount(0, {
+      timeout: ROW_TIMEOUT_MS,
+    });
+    expect(await apiTransactions(page, tenantId)).toHaveLength(0);
+    // Bakiye başlangıç değerine dönmeli.
+    expect(await apiBalance(page, tenantId, accountId)).toBe("1000");
+  });
+
+  test("düzenleme ve vazgeçme MEVCUT FİLTRELERİ koruyor", async ({ page }) => {
+    await signUpAndSignIn(page, "tx-edit-filters");
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Kasa", "1000");
+
+    for (const description of ["Kira odemesi", "Market alisverisi"]) {
+      const response = await page.request.post(`/api/tenants/${tenantId}/transactions`, {
+        data: { accountId, type: "EXPENSE", amount: "10", description, occurredAt: "2026-03-10" },
+      });
+      expect(response.status()).toBe(201);
+    }
+
+    await page.goto("/transactions?q=Kira");
+    await expect(page.getByRole("cell", { name: "Market alisverisi", exact: true })).toHaveCount(0);
+
+    await startEditing(page, "Kira odemesi");
+
+    // Düzenleme linki filtreyi korumalı: "Vazgeç" kullanıcıyı baktığı listeye döndürmeli,
+    // tam listeye düşürmemeli.
+    await expect(page).toHaveURL(/q=Kira/);
+    await expect(page).toHaveURL(/edit=/);
+
+    await editForm(page).getByRole("link", { name: "Vazgeç" }).or(
+      page.getByRole("link", { name: "Vazgeç" }),
+    ).first().click();
+
+    await expect(page).toHaveURL(/q=Kira/);
+    await expect(page).not.toHaveURL(/edit=/);
+    await expect(page.getByRole("cell", { name: "Market alisverisi", exact: true })).toHaveCount(0);
+  });
+
+  test("MEMBER düzenle/sil aksiyonlarını GÖRMÜYOR ve baypas edilirse 403 alıyor", async ({
+    page,
+  }) => {
+    const viewerId = await signUpAndSignIn(page, "tx-actions-viewer");
+
+    const tenant = await prisma.tenant.create({
+      data: { name: "Baska Alan", slug: `tx-actions-${randomUUID()}` },
+      select: { id: true },
+    });
+    createdTenantIds.push(tenant.id);
+
+    const account = await prisma.account.create({
+      data: { tenantId: tenant.id, name: "Ortak Kasa", type: "CASH", currency: "TRY" },
+      select: { id: true },
+    });
+    const transaction = await prisma.transaction.create({
+      data: {
+        tenantId: tenant.id,
+        accountId: account.id,
+        type: "EXPENSE",
+        amount: "75",
+        description: "Ortak harcama",
+      },
+      select: { id: true },
+    });
+    await prisma.membership.create({
+      data: { userId: viewerId, tenantId: tenant.id, role: "MEMBER" },
+    });
+
+    const activated = await page.request.post("/api/tenants/active", {
+      data: { tenantId: tenant.id },
+    });
+    expect(activated.status()).toBe(200);
+
+    await page.goto("/transactions");
+
+    await expect(page.getByRole("cell", { name: "Ortak harcama", exact: true })).toBeVisible();
+    await expect(editLinkFor(page, "Ortak harcama")).toHaveCount(0);
+    await expect(deleteButtonFor(page, "Ortak harcama")).toHaveCount(0);
+
+    const patch = await page.request.patch(
+      `/api/tenants/${tenant.id}/transactions/${transaction.id}`,
+      { data: { amount: "999" } },
+    );
+    expect(patch.status()).toBe(403);
+
+    const remove = await page.request.delete(
+      `/api/tenants/${tenant.id}/transactions/${transaction.id}`,
+    );
+    expect(remove.status()).toBe(403);
+
+    expect(await apiBalance(page, tenant.id, account.id)).toBe("0");
   });
 });

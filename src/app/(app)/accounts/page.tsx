@@ -6,7 +6,9 @@ import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { listAccounts } from "@/lib/finance/account";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 
-import { CreateAccountForm } from "./create-account-form";
+import { DeleteWithConfirm } from "@/components/delete-with-confirm";
+
+import { AccountForm } from "./account-form";
 
 export const metadata: Metadata = {
   title: "Hesaplar",
@@ -23,10 +25,18 @@ const TYPE_LABELS: Record<string, string> = {
  * `/members` ile aynı desen: URL'de `tenantId` YOKTUR — hangi tenant'ın hesapları sorusunun
  * tek kaynağı aktif tenant'tır (bkz. `src/app/(app)/members/page.tsx`'teki gerekçe).
  *
- * KAPSAM: liste + oluşturma (issue #47'nin kapsamı). Güncelleme/silme API'si (#46) hazırdır
- * ama arayüzü bu issue'da BİLEREK yapılmadı; ayrı bir issue'da eklenmelidir.
+ * KAPSAM: liste + oluşturma + düzenleme/silme (#47, #130).
+ *
+ * DÜZENLEME DURUMU URL'DE: `?edit=<id>` verildiğinde liste yerine dolu bir düzenleme formu
+ * gösterilir. Filtre formundaki (#56) aynı gerekçe — durum React state'inde değil URL'de
+ * olduğu için tarayıcı geri tuşu ve sayfa yenileme doğru çalışır.
  */
-export default async function AccountsPage() {
+export default async function AccountsPage({
+  searchParams,
+}: {
+  // Next.js 16'da `searchParams` bir Promise'tir.
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const user = await requirePageUser();
   const active = await resolveActiveTenantForUser(user.id);
 
@@ -60,6 +70,14 @@ export default async function AccountsPage() {
   const accounts = await listAccounts(tenant.id);
   const canManage = hasPermission(role, PERMISSIONS.MANAGE_ACCOUNTS);
 
+  // Düzenlenecek kayıt LİSTEDEN seçilir, ayrı bir sorguyla değil: liste zaten aktif tenant
+  // ile scope'lanmış olarak geldiği için, URL'e yabancı bir id yazmak hiçbir şey açmaz —
+  // eşleşme bulunamaz ve normal liste gösterilir.
+  const params = await searchParams;
+  const editId = typeof params.edit === "string" ? params.edit : null;
+  const editingAccount =
+    canManage && editId ? (accounts.find((account) => account.id === editId) ?? null) : null;
+
   return (
     <section className="space-y-8">
       <div className="space-y-2">
@@ -82,7 +100,12 @@ export default async function AccountsPage() {
               <tr>
                 <th scope="col" className="py-2 pr-4 font-medium">Hesap</th>
                 <th scope="col" className="py-2 pr-4 font-medium">Tür</th>
-                <th scope="col" className="py-2 font-medium">Bakiye</th>
+                <th scope="col" className="py-2 pr-4 font-medium">Bakiye</th>
+                {canManage && (
+                  <th scope="col" className="py-2 font-medium">
+                    <span className="sr-only">İşlemler</span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -99,9 +122,39 @@ export default async function AccountsPage() {
                       için yasak olan kayan nokta dönüşümünü (invariant #10) arayüz katmanından
                       geri getirirdi. Yerelleştirilmiş gösterim, string üzerinde çalışan ayrı
                       bir yardımcı ile ele alınmalıdır — bu issue'nun kapsamı değil. */}
-                  <td className="py-3 tabular-nums text-zinc-900 dark:text-zinc-100">
+                  <td className="py-3 pr-4 tabular-nums text-zinc-900 dark:text-zinc-100">
                     {account.balance} {account.currency}
                   </td>
+                  {canManage && (
+                    <td className="py-3 align-top">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                        {/* Düzenleme bir LİNK: form durumunu URL'e yazar, yan etkisi yoktur. */}
+                        <Link
+                          href={`/accounts?edit=${account.id}`}
+                          className="text-sm text-zinc-700 underline underline-offset-4 dark:text-zinc-300"
+                        >
+                          <span aria-hidden="true">Düzenle</span>
+                          <span className="sr-only">{account.name} hesabını düzenle</span>
+                        </Link>
+
+                        <DeleteWithConfirm
+                          endpoint={`/api/tenants/${tenant.id}/accounts/${account.id}`}
+                          itemLabel={`${account.name} hesabını sil`}
+                          confirmQuestion={`"${account.name}" hesabını silmek istiyor musunuz?`}
+                          consequence="Bu işlem geri alınamaz."
+                          messages={{
+                            forbidden: "Bu çalışma alanında hesap silme yetkiniz yok.",
+                            notFound: "Bu hesap artık mevcut değil. Sayfayı yenileyin.",
+                            // #53'ün kararı: işlemi olan hesap silinemez, cascade REDDEDİLDİ.
+                            // Kullanıcıya ham 409 yerine ne yapması gerektiği söylenir.
+                            conflict:
+                              "Bu hesabın işlemleri var. Önce işlemleri silin veya başka bir hesaba taşıyın.",
+                            fallback: "Hesap silinemedi. Lütfen daha sonra tekrar deneyin.",
+                          }}
+                        />
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -109,11 +162,29 @@ export default async function AccountsPage() {
         </div>
       )}
 
-      {/* Oluşturma formu yalnızca yetkili role render edilir. Bu bir güvenlik kontrolü
-          DEĞİLDİR — asıl kontrol `requirePermission(MANAGE_ACCOUNTS)`'tır (kanıt:
+      {/* Formlar yalnızca yetkili role render edilir. Bu bir güvenlik kontrolü DEĞİLDİR —
+          asıl kontrol `requirePermission(MANAGE_ACCOUNTS)`'tır (kanıt:
           `security/account-security.spec.ts`); buradaki amaç, MEMBER'a kesin 403 alacağı bir
-          form göstermemektir. */}
-      {canManage && <CreateAccountForm tenantId={tenant.id} />}
+          form göstermemektir.
+
+          Düzenleme ve oluşturma AYNI ANDA gösterilmez: iki dolu form, kullanıcının hangisini
+          kaydettiğini belirsizleştirirdi. `key` prop'u zorunlu — bir kaydı düzenlerken
+          başkasına geçildiğinde React bileşeni yeniden kurmalı, aksi halde eski kaydın
+          değerleri state'te kalırdı. */}
+      {canManage &&
+        (editingAccount ? (
+          <div className="space-y-3">
+            <AccountForm key={editingAccount.id} tenantId={tenant.id} account={editingAccount} />
+            <Link
+              href="/accounts"
+              className="text-sm text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
+            >
+              Vazgeç
+            </Link>
+          </div>
+        ) : (
+          <AccountForm tenantId={tenant.id} />
+        ))}
     </section>
   );
 }

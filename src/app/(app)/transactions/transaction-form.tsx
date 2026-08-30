@@ -6,7 +6,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { FormError, SubmitButton, TextField } from "@/components/auth-form";
 
 /**
- * Yeni işlem kaydetme formu (Issue #54).
+ * İşlem kaydetme ve düzenleme formu (Issue #54 + #130).
  *
  * Mevcut `POST /api/tenants/:tenantId/transactions`'a gerçek HTTP isteği atar;
  * `createTransaction()` servisi doğrudan çağrılMAZ — yetkilendirme
@@ -21,17 +21,35 @@ import { FormError, SubmitButton, TextField } from "@/components/auth-form";
 type AccountOption = { id: string; name: string; currency: string };
 type CategoryOption = { id: string; name: string; type: string };
 
+export type EditableTransaction = {
+  id: string;
+  accountId: string;
+  categoryId: string | null;
+  type: string;
+  amount: string;
+  description: string | null;
+  /** `YYYY-MM-DD` — tarih alanının beklediği biçim. */
+  occurredAt: string;
+};
+
 const TRANSACTION_TYPES = [
   { value: "EXPENSE", label: "Gider" },
   { value: "INCOME", label: "Gelir" },
 ] as const;
 
-function messageForStatus(status: number): string {
+function messageForStatus(status: number, editing: boolean): string {
   switch (status) {
     case 400:
-      return "Bilgileri kontrol edin: tutar 0'dan büyük olmalı ve en fazla 4 ondalık basamak içerebilir (ör. 1250.50).";
+      // Düzenlemede 400'ün İKİNCİ bir sebebi var: tür değiştirilip mevcut kategori yanlış
+      // tarafta bırakılmış olabilir (#53). Kullanıcı bunu formda göremediği için mesaj
+      // açıkça söyler; aksi halde "tutar hatalı" sanıp doğru alanı aramaya devam ederdi.
+      return editing
+        ? "Bilgileri kontrol edin: tutar 0'dan büyük olmalı (ör. 1250.50). Türü değiştirdiyseniz kategoriyi de yeni türe uygun bir kategoriyle değiştirin veya 'Kategorisiz' seçin."
+        : "Bilgileri kontrol edin: tutar 0'dan büyük olmalı ve en fazla 4 ondalık basamak içerebilir (ör. 1250.50).";
     case 403:
-      return "Bu çalışma alanında işlem kaydetme yetkiniz yok.";
+      return editing
+        ? "Bu çalışma alanında işlem düzenleme yetkiniz yok."
+        : "Bu çalışma alanında işlem kaydetme yetkiniz yok.";
     case 404:
       // Seçilenler sayfa açıldığından beri silinmiş olabilir. Kullanıcıya "hesap mı kategori
       // mi" diye sormak yerine tek eylem önerilir: sayfayı yenile.
@@ -40,15 +58,18 @@ function messageForStatus(status: number): string {
       // Geçici yazma çakışması (#122); iş kuralı ihlali DEĞİLDİR, doğru mesaj "tekrar deneyin".
       return "Kayıt şu anda tamamlanamadı. Lütfen birkaç saniye sonra tekrar deneyin.";
     default:
-      return "İşlem kaydedilemedi. Lütfen daha sonra tekrar deneyin.";
+      return editing
+        ? "İşlem güncellenemedi. Lütfen daha sonra tekrar deneyin."
+        : "İşlem kaydedilemedi. Lütfen daha sonra tekrar deneyin.";
   }
 }
 
-export function CreateTransactionForm({
+export function TransactionForm({
   tenantId,
   accounts,
   categories,
   today,
+  transaction,
 }: {
   tenantId: string;
   accounts: AccountOption[];
@@ -64,19 +85,22 @@ export function CreateTransactionForm({
    * yok ve ayrı bir issue'nun konusu (bkz. README).
    */
   today: string;
+  /** Verilirse düzenleme modu. */
+  transaction?: EditableTransaction;
 }) {
   const router = useRouter();
+  const editing = transaction !== undefined;
 
   // Hesap seçicisi boş bırakılmaz: tek hesabı olan kullanıcı (en yaygın durum) hiç seçim
   // yapmak zorunda kalmaz. Bu bileşen yalnızca en az bir hesap varken render edilir.
-  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  const [accountId, setAccountId] = useState(transaction?.accountId ?? accounts[0]?.id ?? "");
   // Varsayılan "Gider": kayıtların ezici çoğunluğu gider tarafındadır (kategori formundaki
   // aynı karar).
-  const [type, setType] = useState<string>("EXPENSE");
-  const [amount, setAmount] = useState("");
-  const [categoryId, setCategoryId] = useState("");
-  const [description, setDescription] = useState("");
-  const [occurredAt, setOccurredAt] = useState(today);
+  const [type, setType] = useState<string>(transaction?.type ?? "EXPENSE");
+  const [amount, setAmount] = useState(transaction?.amount ?? "");
+  const [categoryId, setCategoryId] = useState(transaction?.categoryId ?? "");
+  const [description, setDescription] = useState(transaction?.description ?? "");
+  const [occurredAt, setOccurredAt] = useState(transaction?.occurredAt ?? today);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -111,24 +135,46 @@ export function CreateTransactionForm({
     setPending(true);
 
     try {
-      const response = await fetch(`/api/tenants/${tenantId}/transactions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accountId,
-          type,
-          amount,
-          // Boş alanlar GÖNDERİLMEZ (`undefined`): boş string göndermek kategori için
-          // "geçersiz id", tarih için "geçersiz tarih" dalını tetiklerdi. Gönderilmediğinde
-          // backend kategoriyi boş bırakır, tarihi ise `@default(now())` ile doldurur.
-          categoryId: categoryId === "" ? undefined : categoryId,
-          description: description.trim() === "" ? undefined : description,
-          occurredAt: occurredAt === "" ? undefined : occurredAt,
-        }),
-      });
+      const response = await fetch(
+        editing
+          ? `/api/tenants/${tenantId}/transactions/${transaction.id}`
+          : `/api/tenants/${tenantId}/transactions`,
+        {
+          method: editing ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accountId,
+            type,
+            amount,
+            // OLUŞTURMADA boş alanlar GÖNDERİLMEZ (`undefined`): boş string kategori için
+            // "geçersiz id", tarih için "geçersiz tarih" dalını tetiklerdi. Gönderilmediğinde
+            // backend kategoriyi boş bırakır, tarihi `@default(now())` ile doldurur.
+            //
+            // DÜZENLEMEDE kategori için `null` GÖNDERİLİR, `undefined` DEĞİL: PATCH kısmi
+            // güncellemedir ve `undefined` "bu alana dokunma" demektir. Kullanıcı kategoriyi
+            // "Kategorisiz"e çektiğinde alan atlanırsa eski kategori olduğu gibi kalır ve
+            // kullanıcı kaydettiği hâlde değişmediğini görürdü. `null` ise "kaldır" demektir
+            // (bkz. `updateTransaction()`). Açıklamada da aynı ayrım: boş metin "notu sil"
+            // demektir ve backend boş/boşluk-only değeri zaten `null`a indirger.
+            categoryId: categoryId === "" ? (editing ? null : undefined) : categoryId,
+            description: description.trim() === "" ? (editing ? "" : undefined) : description,
+            occurredAt: occurredAt === "" ? undefined : occurredAt,
+          }),
+        },
+      );
 
       if (!response.ok) {
-        setError(messageForStatus(response.status));
+        setError(messageForStatus(response.status, editing));
+        return;
+      }
+
+      if (editing) {
+        // Düzenleme bitince listeye dönülür; `?edit=` URL'de kalırsa kullanıcı kaydettiği
+        // hâlde hâlâ formda duruyormuş gibi görünürdü. Filtreler BİLEREK korunmaz: kaydedilen
+        // değişiklik satırı mevcut filtrenin dışına taşımış olabilir ve kullanıcı kaydının
+        // "kaybolduğunu" sanardı — tam listeye dönmek olan biteni görünür kılar.
+        router.push("/transactions");
+        router.refresh();
         return;
       }
 
@@ -141,7 +187,7 @@ export function CreateTransactionForm({
       // çalıştırır (aktif tenant değişmediği için tam sayfa yüklemeye gerek yok).
       router.refresh();
     } catch {
-      setError(messageForStatus(0));
+      setError(messageForStatus(0, editing));
     } finally {
       setPending(false);
     }
@@ -152,13 +198,20 @@ export function CreateTransactionForm({
 
   return (
     <div className="max-w-sm space-y-4 border-t border-zinc-200 pt-6 dark:border-zinc-800">
-      <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Yeni işlem</h2>
+      <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+        {editing ? "İşlemi düzenle" : "Yeni işlem"}
+      </h2>
 
       {/* `aria-label`: sayfada İKİ form var (filtre ve kayıt) ve ikisinde de "Hesap",
           "Kategori" gibi aynı etiketler geçiyor. Erişilebilir ad olmadan ekran okuyucu
           kullanıcısı hangi formda olduğunu ayırt edemez; E2E testleri de alanları bu adla
           kapsamlandırır (bkz. transactions-ui.spec.ts). */}
-      <form onSubmit={handleSubmit} className="space-y-4" aria-label="Yeni işlem" noValidate>
+      <form
+        onSubmit={handleSubmit}
+        className="space-y-4"
+        aria-label={editing ? "İşlemi düzenle" : "Yeni işlem"}
+        noValidate
+      >
         <div className="space-y-1.5">
           <label
             htmlFor="transaction-account"
@@ -294,7 +347,7 @@ export function CreateTransactionForm({
         <FormError message={error} />
 
         <SubmitButton pending={pending}>
-          {pending ? "Kaydediliyor…" : "İşlem kaydet"}
+          {pending ? "Kaydediliyor…" : editing ? "Değişiklikleri kaydet" : "İşlem kaydet"}
         </SubmitButton>
       </form>
     </div>

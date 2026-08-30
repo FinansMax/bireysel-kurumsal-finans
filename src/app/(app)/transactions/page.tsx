@@ -9,7 +9,9 @@ import { listTransactions } from "@/lib/finance/transaction";
 import { parseTransactionFilters } from "@/lib/finance/transaction-filters";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 
-import { CreateTransactionForm } from "./create-transaction-form";
+import { DeleteWithConfirm } from "@/components/delete-with-confirm";
+
+import { TransactionForm } from "./transaction-form";
 import { TransactionFiltersForm, type ActiveFilterValues } from "./transaction-filters-form";
 
 export const metadata: Metadata = {
@@ -26,7 +28,7 @@ const TYPE_LABELS: Record<string, string> = {
  *
  * `toISOString().slice(0, 10)` KULLANILMAZ: o UTC'ye çevirir ve UTC+3 bir sunucuda gece
  * yarısından sonra "dün"ü varsayılan yapardı. Değerin istemcide değil burada üretilmesinin
- * gerekçesi `CreateTransactionForm`'un `today` prop'unda yazılıdır.
+ * gerekçesi `TransactionForm`'un `today` prop'unda yazılıdır.
  */
 function serverTodayIsoDate(): string {
   const now = new Date();
@@ -62,9 +64,9 @@ function singleParam(value: string | string[] | undefined): string {
  * state'inde değil — sonuç paylaşılabilir ve geri tuşu doğru çalışır. Ayrıştırıcı API route'u
  * ile ORTAKTIR (`transaction-filters.ts`), böylece aynı URL iki yerde aynı sonucu verir.
  *
- * KAPSAM: liste + oluşturma + filtreleme. Güncelleme/silme API'si (#53) hazırdır ama arayüzü
- * bilerek yapılmadı — hesap ve kategori ekranlarında da aynı sınır var; üçü tek bir
- * "düzenle/sil" issue'sunda (#130) birlikte ele alınmalıdır.
+ * KAPSAM: liste + oluşturma + filtreleme + düzenleme/silme (#54, #56, #130). Düzenleme
+ * durumu `?edit=<id>` ile URL'dedir ve MEVCUT FİLTRELERİ korur — kullanıcı "Vazgeç"
+ * dediğinde baktığı filtrelenmiş listeye dönmelidir.
  */
 export default async function TransactionsPage({
   searchParams,
@@ -124,6 +126,16 @@ export default async function TransactionsPage({
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
   const categoriesById = new Map(categories.map((category) => [category.id, category]));
 
+  // Düzenlenecek kayıt LİSTEDEN seçilir, ayrı bir sorguyla değil: liste zaten aktif tenant
+  // ile scope'lanmış geldiği için URL'e yabancı bir id yazmak hiçbir şey açmaz. Filtre
+  // aktifken filtrenin dışında kalan bir kayıt da düzenlenemez — bu kabul edilebilir: o kayıt
+  // zaten ekranda görünmüyordur.
+  const editId = typeof rawParams.edit === "string" ? rawParams.edit : null;
+  const editingTransaction =
+    canManage && editId
+      ? (transactions.find((transaction) => transaction.id === editId) ?? null)
+      : null;
+
   /** Formun geri yazacağı ham değerler — kullanıcının yazdığı gibi, çözümlenmiş hâli değil. */
   const filterValues: ActiveFilterValues = {
     from: singleParam(rawParams.from),
@@ -133,6 +145,17 @@ export default async function TransactionsPage({
     q: singleParam(rawParams.q),
   };
   const hasActiveFilters = Object.values(filterValues).some((value) => value !== "");
+
+  /** Mevcut filtreleri koruyarak `edit` parametresini ayarlar/kaldırır. */
+  function hrefWithEdit(id: string | null): string {
+    const next = new URLSearchParams();
+    for (const [key, value] of Object.entries(filterValues)) {
+      if (value !== "") next.set(key, value);
+    }
+    if (id) next.set("edit", id);
+    const query = next.toString();
+    return query === "" ? "/transactions" : `/transactions?${query}`;
+  }
 
   return (
     <section className="space-y-8">
@@ -185,7 +208,12 @@ export default async function TransactionsPage({
                 <th scope="col" className="py-2 pr-4 font-medium">Hesap</th>
                 <th scope="col" className="py-2 pr-4 font-medium">Kategori</th>
                 <th scope="col" className="py-2 pr-4 font-medium">Tür</th>
-                <th scope="col" className="py-2 font-medium">Tutar</th>
+                <th scope="col" className="py-2 pr-4 font-medium">Tutar</th>
+                {canManage && (
+                  <th scope="col" className="py-2 font-medium">
+                    <span className="sr-only">İşlemler</span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -227,9 +255,40 @@ export default async function TransactionsPage({
                         biçimlendirme değeri önce `Number`'a çevirmeyi gerektirir ve bu, para
                         için yasak olan kayan nokta dönüşümünü (invariant #10) arayüz
                         katmanından geri getirirdi — hesap ekranındaki (#47) aynı karar. */}
-                    <td className="py-3 tabular-nums text-zinc-900 dark:text-zinc-100">
+                    <td className="py-3 pr-4 tabular-nums text-zinc-900 dark:text-zinc-100">
                       {transaction.amount} {account?.currency ?? ""}
                     </td>
+                    {canManage && (
+                      <td className="py-3 align-top">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                          <Link
+                            href={hrefWithEdit(transaction.id)}
+                            className="text-sm text-zinc-700 underline underline-offset-4 dark:text-zinc-300"
+                          >
+                            <span aria-hidden="true">Düzenle</span>
+                            <span className="sr-only">
+                              {transaction.occurredAt.toISOString().slice(0, 10)} tarihli{" "}
+                              {transaction.amount} tutarlı işlemi düzenle
+                            </span>
+                          </Link>
+
+                          <DeleteWithConfirm
+                            endpoint={`/api/tenants/${tenant.id}/transactions/${transaction.id}`}
+                            itemLabel={`${transaction.occurredAt.toISOString().slice(0, 10)} tarihli ${transaction.amount} tutarlı işlemi sil`}
+                            confirmQuestion={`${transaction.amount} tutarlı bu işlemi silmek istiyor musunuz?`}
+                            /* Silme, hesabın BAKİYESİNİ değiştirir (#53: etki geri alınır).
+                               Kullanıcı bunu onaylamadan ÖNCE görmelidir — diğer iki ekranda
+                               silmenin parasal sonucu yoktur, burada vardır. */
+                            consequence={`"${account?.name ?? "Hesap"}" hesabının bakiyesi bu işlemin etkisi geri alınarak güncellenecek. Bu işlem geri alınamaz.`}
+                            messages={{
+                              forbidden: "Bu çalışma alanında işlem silme yetkiniz yok.",
+                              notFound: "Bu işlem artık mevcut değil. Sayfayı yenileyin.",
+                              fallback: "İşlem silinemedi. Lütfen daha sonra tekrar deneyin.",
+                            }}
+                          />
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -253,20 +312,50 @@ export default async function TransactionsPage({
             </Link>
           </p>
         ) : (
-          <CreateTransactionForm
-            tenantId={tenant.id}
-            accounts={accounts.map((account) => ({
-              id: account.id,
-              name: account.name,
-              currency: account.currency,
-            }))}
-            categories={categories.map((category) => ({
-              id: category.id,
-              name: category.name,
-              type: category.type,
-            }))}
-            today={serverTodayIsoDate()}
-          />
+          <div className="space-y-3">
+            <TransactionForm
+              // `key`: bir kaydı düzenlerken başkasına geçildiğinde React bileşeni yeniden
+              // kurmalı, aksi halde eski kaydın değerleri state'te kalırdı.
+              key={editingTransaction?.id ?? "new"}
+              tenantId={tenant.id}
+              accounts={accounts.map((account) => ({
+                id: account.id,
+                name: account.name,
+                currency: account.currency,
+              }))}
+              categories={categories.map((category) => ({
+                id: category.id,
+                name: category.name,
+                type: category.type,
+              }))}
+              today={serverTodayIsoDate()}
+              transaction={
+                editingTransaction
+                  ? {
+                      id: editingTransaction.id,
+                      accountId: editingTransaction.accountId,
+                      categoryId: editingTransaction.categoryId,
+                      type: editingTransaction.type,
+                      amount: editingTransaction.amount,
+                      description: editingTransaction.description,
+                      // Tarih alanı `YYYY-MM-DD` bekler; listedeki gösterimle AYNI dönüşüm
+                      // kullanılır ki kullanıcı formda başka bir gün görmesin.
+                      occurredAt: editingTransaction.occurredAt.toISOString().slice(0, 10),
+                    }
+                  : undefined
+              }
+            />
+            {editingTransaction && (
+              // "Vazgeç" MEVCUT FİLTRELERE döner: kullanıcı düzenlemeye filtrelenmiş bir
+              // listeden geldiyse, vazgeçince tam listeye düşmek onu bağlamından koparırdı.
+              <Link
+                href={hrefWithEdit(null)}
+                className="text-sm text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
+              >
+                Vazgeç
+              </Link>
+            )}
+          </div>
         ))}
     </section>
   );

@@ -683,3 +683,191 @@ test.describe("Transaction API — filtreler (Issue #56)", () => {
     }
   });
 });
+
+/**
+ * Sayfalama imlecinin saldırgan bakışı (Issue #135).
+ *
+ * İmleç base64'tür ve base64 ŞİFRELEME DEĞİLDİR — kurcalanabilir. Buradaki soru "kurcalanabilir
+ * mi" değil, "kurcalanınca ne oluyor": imleç yalnızca sıralamada nereden devam edileceğini
+ * söyler; hangi tenant'ın okunacağını `requirePermission()` context'i söyler. Bu testler o
+ * ayrımın gerçekten kodda olduğunu, yorumda kalmadığını kanıtlar.
+ */
+test.describe("Transaction API — sayfalama (Issue #135)", () => {
+  /** İmleç, servisle AYNI biçimde kurulur; testin kendi kodlaması sözleşmeden sapmasın. */
+  function encodeCursor(occurredAt: Date, createdAt: Date, id: string): string {
+    return Buffer.from(
+      [occurredAt.toISOString(), createdAt.toISOString(), id].join("|"),
+      "utf8",
+    ).toString("base64url");
+  }
+
+  async function seedRows(tenantId: string, accountId: string, count: number, label: string) {
+    await prisma.transaction.createMany({
+      data: Array.from({ length: count }, (_, index) => ({
+        tenantId,
+        accountId,
+        type: "EXPENSE" as const,
+        amount: "10",
+        description: `${label}-${String(index).padStart(3, "0")}`,
+        occurredAt: new Date(Date.UTC(2026, 0, 1 + index)),
+      })),
+    });
+  }
+
+  test("YABANCI kaydın imleci başka tenant'ın verisini AÇMIYOR", async ({ request }) => {
+    const tenant = await createTenant("TxPageOwn");
+    const foreignTenant = await createTenant("TxPageForeign");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    const ownAccount = await createAccountRow(tenant.id);
+    const foreignAccount = await createAccountRow(foreignTenant.id);
+
+    await seedRows(tenant.id, ownAccount.id, 3, "benim");
+    await seedRows(foreignTenant.id, foreignAccount.id, 3, "yabanci");
+
+    try {
+      // Saldırganın elindeki en güçlü malzeme: yabancı tenant'ın GERÇEK bir satırından
+      // kurulmuş, biçimsel olarak kusursuz bir imleç.
+      const foreignRow = await prisma.transaction.findFirstOrThrow({
+        where: { tenantId: foreignTenant.id },
+        select: { id: true, occurredAt: true, createdAt: true },
+      });
+      const forged = encodeCursor(foreignRow.occurredAt, foreignRow.createdAt, foreignRow.id);
+
+      const response = await request.get(
+        `/api/tenants/${tenant.id}/transactions?after=${encodeURIComponent(forged)}`,
+        { headers: { cookie: owner.cookie } },
+      );
+
+      // İstek REDDEDİLMEZ (imleç geçerli biçimdedir) ama hiçbir yabancı veri dönmez: imleç
+      // pencereyi kaydırır, scope'a dokunmaz.
+      expect(response.status()).toBe(200);
+      const body = await response.text();
+      expect(body).not.toContain(foreignTenant.id);
+      expect(body).not.toContain(foreignAccount.id);
+      expect(body).not.toContain("yabanci-");
+
+      // Duyarlılık kanıtı: imleçsiz aynı istek KENDİ kayıtlarını gösteriyor — yukarıdaki
+      // boşluk, listenin hiç çalışmamasından değil izolasyondan geliyor.
+      const own = await request.get(`/api/tenants/${tenant.id}/transactions`, {
+        headers: { cookie: owner.cookie },
+      });
+      expect(((await own.json()) as { transactions: unknown[] }).transactions).toHaveLength(3);
+    } finally {
+      await prisma.tenant.deleteMany({ where: { id: { in: [tenant.id, foreignTenant.id] } } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("BOZUK imleç 400 döner: sessizce ilk sayfaya DÜŞMEZ", async ({ request }) => {
+    const tenant = await createTenant("TxPageBroken");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    const account = await createAccountRow(tenant.id);
+    await seedRows(tenant.id, account.id, 3, "kayit");
+
+    try {
+      for (const broken of ["not-base64!!", "Zm9v", "a|b|c"]) {
+        const response = await request.get(
+          `/api/tenants/${tenant.id}/transactions?after=${encodeURIComponent(broken)}`,
+          { headers: { cookie: owner.cookie } },
+        );
+        // Geçersiz imleci yok sayıp ilk sayfayı döndürmek, kullanıcıya "sonraki sayfa" dediği
+        // hâlde aynı sayfayı göstermek ve onu listenin sonu sandırmak olurdu (#56'nın geçersiz
+        // filtre kararıyla aynı gerekçe).
+        expect(response.status(), `imleç: ${broken}`).toBe(400);
+        // Hata metni iç durumu anlatmaz: hangi alanın neden bozuk olduğu ayrıştırılmaz.
+        const body = await response.text();
+        expect(body).not.toContain("occurredAt");
+        expect(body).not.toContain("base64");
+      }
+
+      // Duyarlılık: aynı endpoint imleçsiz 200 dönüyor.
+      const ok = await request.get(`/api/tenants/${tenant.id}/transactions`, {
+        headers: { cookie: owner.cookie },
+      });
+      expect(ok.status()).toBe(200);
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("tekrarlanan ?after HATADIR (ilk değer sessizce seçilmiyor)", async ({ request }) => {
+    const tenant = await createTenant("TxPageRepeat");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    const account = await createAccountRow(tenant.id);
+    await seedRows(tenant.id, account.id, 2, "kayit");
+
+    try {
+      const row = await prisma.transaction.findFirstOrThrow({
+        where: { tenantId: tenant.id },
+        select: { id: true, occurredAt: true, createdAt: true },
+      });
+      const valid = encodeURIComponent(encodeCursor(row.occurredAt, row.createdAt, row.id));
+
+      const response = await request.get(
+        `/api/tenants/${tenant.id}/transactions?after=${valid}&after=${valid}`,
+        { headers: { cookie: owner.cookie } },
+      );
+      expect(response.status()).toBe(400);
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("sayfa boyutu istemciden BÜYÜTÜLEMİYOR (?limit yok sayılır)", async ({ request }) => {
+    const tenant = await createTenant("TxPageLimit");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    const account = await createAccountRow(tenant.id);
+    await seedRows(tenant.id, account.id, 60, "kayit");
+
+    try {
+      // Sayfa boyutu bir sabittir; `?limit=` diye bir parametre YOKTUR. Bu test, birinin onu
+      // "zararsız" diye eklemesi hâlinde kırmızıya döner — sınırsız sayfa boyutu, tek bir
+      // istekle tüm tabloyu çektirmenin yoludur.
+      for (const query of ["?limit=1000", "?pageSize=1000", "?take=1000"]) {
+        const response = await request.get(
+          `/api/tenants/${tenant.id}/transactions${query}`,
+          { headers: { cookie: owner.cookie } },
+        );
+        expect(response.status(), `sorgu: ${query}`).toBe(200);
+        const body = (await response.json()) as { transactions: unknown[] };
+        expect(body.transactions.length, `sorgu: ${query}`).toBeLessThanOrEqual(50);
+      }
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("MEMBER da sayfalayabiliyor ama yalnızca kendi tenant'ını (yetki değişmiyor)", async ({
+    request,
+  }) => {
+    const tenant = await createTenant("TxPageMember");
+    const member = await createUserWithMembership(MembershipRole.MEMBER, tenant.id);
+    const account = await createAccountRow(tenant.id);
+    await seedRows(tenant.id, account.id, 55, "kayit");
+
+    try {
+      const first = await request.get(`/api/tenants/${tenant.id}/transactions`, {
+        headers: { cookie: member.cookie },
+      });
+      expect(first.status()).toBe(200);
+      const firstBody = (await first.json()) as { transactions: unknown[]; nextCursor: string };
+      expect(firstBody.transactions).toHaveLength(50);
+      expect(firstBody.nextCursor).not.toBeNull();
+
+      // Sayfalama bir OKUMA yeteneğidir; MEMBER'ın `VIEW_TRANSACTIONS` izni vardır ve imleç bu
+      // izni ne genişletir ne daraltır.
+      const second = await request.get(
+        `/api/tenants/${tenant.id}/transactions?after=${encodeURIComponent(firstBody.nextCursor)}`,
+        { headers: { cookie: member.cookie } },
+      );
+      expect(second.status()).toBe(200);
+      expect(((await second.json()) as { transactions: unknown[] }).transactions).toHaveLength(5);
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: member.userId } });
+    }
+  });
+});

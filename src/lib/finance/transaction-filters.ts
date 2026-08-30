@@ -1,6 +1,7 @@
 import { isValidId } from "@/lib/tenants/validation";
 
 import type { TransactionFilters } from "./transaction";
+import { parseTransactionCursor, type TransactionCursor } from "./transaction-cursor";
 import { parseFilterDate, MAX_SEARCH_QUERY_LENGTH, parseSearchQuery } from "./validation";
 
 /**
@@ -16,7 +17,7 @@ import { parseFilterDate, MAX_SEARCH_QUERY_LENGTH, parseSearchQuery } from "./va
  */
 
 export type ParsedTransactionFilters =
-  | { ok: true; filters: TransactionFilters }
+  | { ok: true; filters: TransactionFilters; after: TransactionCursor | null }
   | { ok: false; error: string };
 
 export const FILTER_ERRORS = {
@@ -26,6 +27,7 @@ export const FILTER_ERRORS = {
   ACCOUNT_ID: "Invalid accountId",
   CATEGORY_ID: "Invalid categoryId",
   REPEATED: "Each filter may be provided at most once",
+  CURSOR: "Invalid after cursor",
 } as const;
 
 /** Ham parametre değeri: yok, tek değer, ya da tekrarlanmış (`?q=a&q=b`). */
@@ -106,5 +108,24 @@ export function parseTransactionFilters(
     }
   }
 
-  return { ok: true, filters };
+  // Sayfalama imleci (Issue #135). Bir FİLTRE değildir — listeyi daraltmaz, nereden devam
+  // edileceğini söyler — ama aynı sorgu dizesinde taşınır ve burada ayrıştırılır: tekrarlanan
+  // parametre kontrolü ve "API ile ekran aynı URL'i aynı okur" garantisi ondan da geçmeli.
+  //
+  // GEÇERSİZ İMLEÇ SESSİZCE YOK SAYILMAZ: ilk sayfaya düşmek, kullanıcıya "sonraki sayfa"
+  // dediği hâlde yeniden ilk sayfayı gösterirdi ve o bunu listenin sonu sanardı. Filtrelerdeki
+  // aynı karar (#56: geçersiz filtre 400'dür, tam liste değil).
+  const rawAfter = single(get("after"));
+  if ("error" in rawAfter) {
+    return { ok: false, error: rawAfter.error };
+  }
+  let after: TransactionCursor | null = null;
+  if (rawAfter.value !== null) {
+    after = parseTransactionCursor(rawAfter.value);
+    if (!after) {
+      return { ok: false, error: FILTER_ERRORS.CURSOR };
+    }
+  }
+
+  return { ok: true, filters, after };
 }

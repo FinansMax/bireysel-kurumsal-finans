@@ -1177,8 +1177,8 @@ locator iki öğeye birden eşleşir.
 - **`description` üzerinde index yoktur**; `q` araması tarama yapar. Tenant başına işlem sayısı
   büyüdüğünde bir trigram index gerekecek — bugün eklemek, ölçülmemiş bir maliyeti şemaya
   yazmak olurdu.
-- **Sayfalama hâlâ yok** ve bu issue'nun kapsamında değildi. Filtreleme onu daha az acil yapar,
-  ortadan kaldırmaz.
+- **Sayfalama bu issue'nun kapsamında değildi**; #135'te keyset imleciyle eklendi (bkz.
+  "İşlem listesi sayfalama").
 - **Tutara veya türe göre filtre yok** (issue'da istenmedi). Kategori filtresi dolaylı olarak
   tür ayrımı sağlar.
 - **"Kategorisiz" işlemleri filtreleme yolu yok**: bunun için `categoryId` parametresine
@@ -1284,3 +1284,125 @@ E2E kanıtı: `e2e/accounts-ui.spec.ts`, `e2e/categories-ui.spec.ts`, `e2e/trans
 test edilir: düzenleme formunda bakiye alanının bulunmadığı, kullanımdaki kategori silinince
 işlemin **silinmeyip** kategorisiz kaldığı, işlem tutarı değişince bakiyenin düzeltildiği ve
 düzenleme/vazgeçme akışının mevcut filtreleri koruduğu.
+
+### İşlem listesi sayfalama (Issue #135)
+
+`GET /api/tenants/[tenantId]/transactions?after=<imleç>` ve `/transactions` ekranındaki
+"Sonraki sayfa" bağlantısı. Liste artık sabit boyutlu sayfalar hâlinde döner.
+
+#### Keyset (cursor), `OFFSET` DEĞİL
+
+Offset iki yerden birden bozulur ve ikisi de bu üründe teoriktik değil:
+
+1. **Derin sayfa yavaşlar.** `OFFSET 10000`, Postgres'e atlanacak on bin satırı yine de
+   ürettirir. İşlem sayısı zamanla yalnızca artar; maliyet sayfa derinliğiyle doğrusal büyür.
+2. **Araya kayıt girince satır kayar.** Liste `occurredAt DESC` sıralıdır ve yeni kayıtlar tam
+   da listenin BAŞINA düşer. Kullanıcı birinci sayfayı okurken bir işlem kaydedilirse ikinci
+   sayfanın ilk satırı, birinci sayfada zaten gördüğü satır olur.
+
+Keyset imleci son satırın sıralama anahtarını taşır ve sorgu "bu anahtardan sonrakiler" diye
+devam eder. Okunan pencere mutlak bir konuma değil somut bir satıra dayandığı için araya kayıt
+girmesi sonucu etkilemez. Kanıt: `integration/transaction.spec.ts` — iki sayfa arasında yeni
+bir kayıt açılır ve sayfaların HİÇ kesişmediği, birlikte tüm eski kayıtları kapsadığı
+doğrulanır.
+
+#### Sıralama anahtarı üç alandır: `(occurredAt, createdAt, id)`
+
+#53'te sıralama bilerek deterministik yapılmıştı (`occurredAt`, eşitlikte `createdAt`), ama bu
+keyset için **yeterli değil**: ikisi de eşit olabilir (aynı milisaniyede iki kayıt, ör. toplu
+içe aktarma) ve sıralama anahtarı kesin bir toplam sıra vermezse iki sayfanın sınırındaki satır
+ya atlanır ya tekrarlanır. Bu yüzden en sona `id` eklendi.
+
+`orderBy` ile imlecin karşılaştırma koşulu **birlikte değişmesi gereken tek bir karardır**;
+ikisi de kod içinde birbirine atıfla işaretlendi.
+
+Prisma'nın `cursor` seçeneği kullanılmadı: o benzersiz **tek** bir alan üzerinden çalışır ve çok
+sütunlu bir anahtarı ifade edemez. Ham SQL de yasak (CLAUDE.md §5), bu yüzden koşul
+`OR`/`AND` ile üç dallı olarak elle kuruldu.
+
+**Testin kanıtladığı ve kanıtlamadığı şey** — dürüstlük adına ayrı yazıldı: keyset koşulundaki
+üçüncü dal (`id` karşılaştırması) silinirse ilgili test kırmızıya döner (ölçüldü). `orderBy`dan
+`id` düşürülürse test **yeşil kalır**, çünkü Postgres bu boyuttaki eşitlikleri kararlı bir
+sırayla döndürüyor. `id` yine de `orderBy`da olmak zorundadır: ORDER BY kesin bir toplam sıra
+vermezse plan değiştiğinde (index seçimi, paralel tarama, tablo büyümesi) eşitlerin sırası kayar.
+Bu, testle değil ancak SQL semantiğiyle güvenceye alınabilecek bir invariant'tır.
+
+#### İmleç opaktır ama bir güvenlik sınırı DEĞİLDİR
+
+İmleç, `occurredAt|createdAt|id` üçlüsünün base64url kodlamasıdır. Opaklığın amacı istemcilerin
+onu ayrıştırıp alanlarına bağımlı hâle gelmesini önlemektir — sıralama anahtarını değiştirmek
+aksi hâlde breaking change olurdu.
+
+Base64 şifreleme değildir ve imleç kurcalanabilir. **Buna gerek yoktur:** imleç yalnızca
+"nereden devam edileceğini" söyler, hangi tenant'ın okunacağını DEĞİL. O sorunun tek kaynağı
+`requirePermission()` context'idir ve sorgu her hâlükârda `tenantScoped()` içinden geçer.
+Kurcalanmış bir imleç kullanıcıya yalnızca KENDİ tenant'ının listesinde başka bir pencere
+gösterebilir — filtreyi elle değiştirmekten farksızdır.
+
+`security/transaction-security.spec.ts` bunu saldırganın en güçlü malzemesiyle kanıtlar:
+**başka bir tenant'ın gerçek satırından** kurulmuş, biçimsel olarak kusursuz bir imleç. İstek
+`200` döner (imleç geçerlidir) ama yabancı hiçbir veri gelmez; duyarlılık kanıtı olarak aynı
+kullanıcının imleçsiz isteği kendi kayıtlarını gösterir.
+
+İmlecin çözümlenmesi **çift yönlü** doğrulanır: ISO tarih, yeniden yazıldığında girdinin birebir
+aynısı olmalıdır. `new Date()` fazlasıyla hoşgörülüdür ("2026-13-45"i sessizce başka bir güne
+taşır); tek yönlü kontrol, kurcalanmış bir imleci geçerli sayıp kullanıcıya sessizce yanlış bir
+pencere gösterirdi.
+
+#### Geçersiz imleç sessizce yok sayılmaz — `400`
+
+#56'nın geçersiz filtre kararıyla aynı gerekçe: bozuk imleci yok sayıp ilk sayfayı döndürmek,
+"sonraki sayfa" diyen kullanıcıya aynı listeyi vermek ve onu **listenin sonu sandırmak** olurdu.
+Ekranda da liste hiç gösterilmez; kullanıcıya "ilk sayfaya dönün" bağlantısı verilir.
+
+Hata metni iç durumu anlatmaz (hangi alanın neden bozuk olduğu ayrıştırılmaz) ve tekrarlanan
+`?after=a&after=b` de `400`'dür — filtrelerdeki "tekrar hatadır" kuralı imleç için de geçerli.
+
+#### Sayfa boyutu sabittir; toplam sayı yoktur
+
+- **`?limit=` YOKTUR.** Ayarlanabilir bir boyut, bir doğrulama yolu ve bir üst sınır testi daha
+  demektir ve bugün hiçbir çağıran istemiyor. Sabit `50`. Güvenlik testi, birinin onu
+  "zararsız" diye eklemesi hâlinde kırmızıya döner — sınırsız sayfa boyutu, tek bir istekle tüm
+  tabloyu çektirmenin yoludur.
+- **`total` YOKTUR.** Her istekte ikinci bir `COUNT(*)` taraması demek olurdu ve bu tarama,
+  filtre `description` üzerindeyse (index'siz) listenin kendisi kadar pahalıdır. Bedeli kabul
+  edildi: arayüzde **sayfa numarası ve "son sayfa" gösterilemez**.
+
+#### Arayüz: "Sonraki sayfa" bir link, durum URL'de
+
+Her sayfanın kendi adresi vardır (`?after=`); adres paylaşılabilir ve **tarayıcı geri tuşu
+önceki sayfaya döner**. Ayrı bir "Önceki sayfa" bağlantısı bu yüzden **yoktur**: geri tuşunun
+zaten yaptığı işi, imleç yığınını URL'de taşıyarak tekrarlamak olurdu.
+
+"Daha fazla yükle" deseni reddedildi: listeyi client state'e taşır, sayfa yenilenince başa döner
+ve paylaşılan link ilk sayfayı gösterirdi — #56'nın "durum URL'de" çizgisinden sapardı.
+
+İki etkileşim ayrıca çözüldü:
+
+- **Filtre değişince `after` düşer.** Filtre formu düz bir `<form method="get">` olduğu için
+  yalnızca kendi alanlarını gönderir; imleç kendiliğinden kaybolur. Bu doğru davranıştır — yeni
+  bir filtre, eski listenin ortasından değil başından okunmalıdır.
+- **Düzenleme bağlantısı `after`ı KORUR.** Düzenlenecek kayıt listeden seçilir (#130); imleç
+  düşseydi liste ilk sayfaya döner, kayıt o listede bulunamaz ve form hiç açılmazdı.
+
+Üçüncü bir boş liste hâli doğdu: imleç geçerli ama arkasında kayıt kalmamış (o sayfadaki
+kayıtlar silinmiş ya da bağlantı eski). Ne "henüz işlem yok" ne "filtreyle eşleşen yok" doğru
+olurdu; ekran bunu ayrı bir cümleyle söyler ve ilk sayfaya dönüş verir.
+
+#### Bilinen sınırlar
+
+- **Sayfa numarası, "son sayfa" ve toplam kayıt sayısı yok** (yukarıdaki `total` kararının
+  doğrudan sonucu).
+- **"Önceki sayfa" bağlantısı yok**; geri tuşu bu işi görür ama listenin ortasından bir sayfa
+  geriye derin link verilemez.
+- **`(tenantId, occurredAt)` index'i genişletilmedi.** Keyset sıralaması
+  `(occurredAt, createdAt, id)` üzerinden yapılıyor; index yalnızca ilk sütunu karşılıyor,
+  eşitlikler bellekte sıralanıyor. Bugünkü veri boyutunda ölçülmüş bir sorun yok ve index'i
+  genişletmek her yazıma maliyet ekler — `description` trigram index'iyle aynı karar (#56).
+- **`q` filtresi hâlâ index'siz tarama yapar**; sayfalama bunu daha az acil yapar, ortadan
+  kaldırmaz.
+
+E2E kanıtı: `e2e/transactions-ui.spec.ts` — 50 altı kayıtta bağlantının hiç görünmediği
+(kontrol grubu), ikinci sayfada satırların tekrarlamadığı, son sayfada bağlantının kaybolduğu,
+geri tuşunun ilk sayfaya döndüğü, sayfa geçişinin filtreleri koruduğu, filtre değişince imlecin
+düştüğü ve ikinci sayfadaki bir kaydın düzenlenebildiği doğrulanır.

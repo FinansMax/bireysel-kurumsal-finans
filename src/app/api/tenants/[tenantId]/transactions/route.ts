@@ -14,7 +14,8 @@ export async function GET(request: Request, { params }: RouteParams) {
     return NextResponse.json({ error: "Invalid tenant id" }, { status: 400 });
   }
 
-  // `?from=&to=&accountId=&categoryId=&q=` (Issue #56). Ucuz şekil kontrolü authz'den ÖNCE
+  // `?from=&to=&accountId=&categoryId=&q=` (Issue #56) ve `?after=` (Issue #135). Ucuz şekil
+  // kontrolü authz'den ÖNCE
   // (route sırası, bkz. CLAUDE.md §5). Ayrıştırıcı `/transactions` ekranıyla ORTAKTIR —
   // aynı URL'in API'de ve ekranda farklı sonuç vermemesi için (bkz. transaction-filters.ts).
   //
@@ -38,8 +39,20 @@ export async function GET(request: Request, { params }: RouteParams) {
   // Sorgu scope'unun kaynağı `context.tenant.id`dir (requirePermission'ın DB'den canlı
   // doğruladığı aktif tenant) — URL parametresi DEĞİL (Issue #13). Filtreler bu scope'un
   // ÜZERİNE eklenir.
-  const transactions = await listTransactions(context.tenant.id, parsed.filters);
-  return NextResponse.json({ transactions });
+  //
+  // İMLEÇ DE SCOPE'A DOKUNMAZ (Issue #135): `after` yalnızca "sıralamada nereden devam
+  // edileceğini" söyler; hangi tenant'ın okunacağı sorusunun cevabı yine `context.tenant.id`.
+  // Kurcalanmış bir imleç bu yüzden başka bir tenant'ın verisini açamaz.
+  const { transactions, nextCursor } = await listTransactions(
+    context.tenant.id,
+    parsed.filters,
+    parsed.after,
+  );
+
+  // `nextCursor` daima döner (yoksa `null`): istemcinin "başka sayfa var mı" sorusunu alanın
+  // VARLIĞINA göre değil DEĞERİNE göre cevaplaması gerekir — eksik alan, eski istemcilerde
+  // sessizce "undefined" olarak okunup son sayfa sanılırdı.
+  return NextResponse.json({ transactions, nextCursor });
 }
 
 export async function POST(request: Request, { params }: RouteParams) {

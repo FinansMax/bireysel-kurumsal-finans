@@ -6,7 +6,7 @@ import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { listAccounts } from "@/lib/finance/account";
 import { listCategories } from "@/lib/finance/category";
 import { listTransactions } from "@/lib/finance/transaction";
-import { parseTransactionFilters } from "@/lib/finance/transaction-filters";
+import { FILTER_ERRORS, parseTransactionFilters } from "@/lib/finance/transaction-filters";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 
 import { DeleteWithConfirm } from "@/components/delete-with-confirm";
@@ -64,9 +64,14 @@ function singleParam(value: string | string[] | undefined): string {
  * state'inde değil — sonuç paylaşılabilir ve geri tuşu doğru çalışır. Ayrıştırıcı API route'u
  * ile ORTAKTIR (`transaction-filters.ts`), böylece aynı URL iki yerde aynı sonucu verir.
  *
- * KAPSAM: liste + oluşturma + filtreleme + düzenleme/silme (#54, #56, #130). Düzenleme
- * durumu `?edit=<id>` ile URL'dedir ve MEVCUT FİLTRELERİ korur — kullanıcı "Vazgeç"
- * dediğinde baktığı filtrelenmiş listeye dönmelidir.
+ * SAYFALAMA (#135): liste keyset imleciyle sayfalanır (`?after=`). Filtre formu düz bir
+ * `<form method="get">` olduğu için kendi alanlarından başkasını göndermez — yani FİLTRE
+ * DEĞİŞTİĞİNDE `after` KENDİLİĞİNDEN DÜŞER. Bu doğru davranıştır: yeni bir filtre, eski
+ * listenin ortasından değil başından okunmalıdır.
+ *
+ * KAPSAM: liste + oluşturma + filtreleme + düzenleme/silme + sayfalama (#54, #56, #130, #135).
+ * Düzenleme durumu `?edit=<id>` ile URL'dedir ve MEVCUT FİLTRELERİ (ve sayfayı) korur —
+ * kullanıcı "Vazgeç" dediğinde baktığı listeye dönmelidir.
  */
 export default async function TransactionsPage({
   searchParams,
@@ -118,10 +123,11 @@ export default async function TransactionsPage({
 
   // Geçersiz filtrede liste HİÇ ÇEKİLMEZ ve gösterilmez. Filtreyi sessizce yok sayıp tüm
   // listeyi göstermek, filtrenin uygulandığını sanan kullanıcıya yanlış bir veri kümesini
-  // doğruymuş gibi sunmak olurdu (#49'un `?type` kararındaki aynı gerekçe).
-  const transactions = parsedFilters.ok
-    ? await listTransactions(tenant.id, parsedFilters.filters)
-    : [];
+  // doğruymuş gibi sunmak olurdu (#49'un `?type` kararındaki aynı gerekçe). Aynısı geçersiz
+  // sayfalama imleci için de geçerlidir (#135): ayrıştırıcı onu da reddeder.
+  const { transactions, nextCursor } = parsedFilters.ok
+    ? await listTransactions(tenant.id, parsedFilters.filters, parsedFilters.after)
+    : { transactions: [], nextCursor: null };
 
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
   const categoriesById = new Map(categories.map((category) => [category.id, category]));
@@ -146,13 +152,30 @@ export default async function TransactionsPage({
   };
   const hasActiveFilters = Object.values(filterValues).some((value) => value !== "");
 
-  /** Mevcut filtreleri koruyarak `edit` parametresini ayarlar/kaldırır. */
-  function hrefWithEdit(id: string | null): string {
+  /** Kullanıcının şu an baktığı sayfanın imleci (yoksa boş string = ilk sayfa). */
+  const currentAfter = singleParam(rawParams.after);
+
+  /**
+   * Ekranın URL'ini kurar. FİLTRELER DAİMA KORUNUR (#56); `after` ve `edit` çağrıya göre
+   * ayarlanır ya da düşürülür.
+   *
+   * `after`ın varsayılanı MEVCUT SAYFADIR: kullanıcı ikinci sayfadaki bir kaydı düzenlemeye
+   * bastığında imleç düşseydi liste ilk sayfaya dönerdi ve düzenlenecek kayıt o listede
+   * bulunmadığı için form hiç açılmazdı (kayıt listeden seçilir, bkz. aşağıdaki not).
+   *
+   * `edit`in varsayılanı ise DÜŞÜRMEKTİR: "sonraki sayfa" bağlantısı açık bir düzenleme
+   * formunu yanında taşımamalı — o kayıt yeni sayfada zaten görünmüyor olacak.
+   */
+  function transactionsHref({
+    after = currentAfter,
+    edit = null,
+  }: { after?: string; edit?: string | null } = {}): string {
     const next = new URLSearchParams();
     for (const [key, value] of Object.entries(filterValues)) {
       if (value !== "") next.set(key, value);
     }
-    if (id) next.set("edit", id);
+    if (after !== "") next.set("after", after);
+    if (edit) next.set("edit", edit);
     const query = next.toString();
     return query === "" ? "/transactions" : `/transactions?${query}`;
   }
@@ -183,9 +206,35 @@ export default async function TransactionsPage({
           role="alert"
           className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
         >
-          Filtre geçersiz olduğu için liste gösterilmiyor. Tarihleri{" "}
-          <span className="font-medium">GG.AA.YYYY</span> biçiminde seçin ve başlangıcın
-          bitişten sonra olmadığından emin olun.
+          {/* Sayfalama imleci bozuksa (Issue #135) kullanıcıya TARİH biçimini anlatmak
+              yanıltıcı olurdu: onun düzeltebileceği bir filtre yok, elindeki bağlantı bozuk.
+              Bu yüzden iki durum ayrı cümle alır ve imleç hâlinde çıkış yolu gösterilir. */}
+          {parsedFilters.error === FILTER_ERRORS.CURSOR ? (
+            <>
+              Sayfa bağlantısı geçersiz olduğu için liste gösterilmiyor.{" "}
+              <Link href={transactionsHref({ after: "" })} className="underline underline-offset-4">
+                İlk sayfaya dönün.
+              </Link>
+            </>
+          ) : (
+            <>
+              Filtre geçersiz olduğu için liste gösterilmiyor. Tarihleri{" "}
+              <span className="font-medium">GG.AA.YYYY</span> biçiminde seçin ve başlangıcın
+              bitişten sonra olmadığından emin olun.
+            </>
+          )}
+        </p>
+      ) : transactions.length === 0 && currentAfter !== "" ? (
+        /* ÜÇÜNCÜ boş liste hâli (Issue #135): imleç geçerli ama arkasında kayıt kalmamış.
+           Bu, kullanıcı "sonraki sayfa"ya bastıktan sonra o sayfadaki kayıtların silinmesiyle
+           (ya da eski bir bağlantıyla) oluşur. Diğer iki mesajı vermek yanlış olurdu: ne
+           "henüz işlem yok" doğrudur (kayıtlar var, sadece bu pencerede değil) ne de "filtreyle
+           eşleşen yok" (sorun filtrede değil, sayfada). */
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          Bu sayfada gösterilecek işlem kalmamış.{" "}
+          <Link href={transactionsHref({ after: "" })} className="underline underline-offset-4">
+            İlk sayfaya dönün.
+          </Link>
         </p>
       ) : transactions.length === 0 ? (
         /* Boş liste iki FARKLI şey anlatabilir ve ikisini aynı cümleyle geçmek yanıltıcı
@@ -262,7 +311,7 @@ export default async function TransactionsPage({
                       <td className="py-3 align-top">
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                           <Link
-                            href={hrefWithEdit(transaction.id)}
+                            href={transactionsHref({ edit: transaction.id })}
                             className="text-sm text-zinc-700 underline underline-offset-4 dark:text-zinc-300"
                           >
                             <span aria-hidden="true">Düzenle</span>
@@ -294,6 +343,25 @@ export default async function TransactionsPage({
               })}
             </tbody>
           </table>
+
+          {/* Sayfalama (Issue #135). "Sonraki sayfa" bir LİNKtir ve durum URL'dedir: her sayfa
+              kendi adresine sahiptir, geri tuşu önceki sayfaya döner ve adres paylaşılabilir —
+              filtrelerdeki (#56) aynı karar. Bu yüzden ayrı bir "Önceki" bağlantısı YOKTUR;
+              onu eklemek, geri tuşunun zaten yaptığı işi imleç yığınını URL'de taşıyarak
+              tekrarlamak olurdu.
+
+              SAYFA NUMARASI DA YOK: keyset sayfalama toplam sayıyı bilmez ve öğrenmek her
+              istekte ikinci bir tarama gerektirirdi (bkz. `TransactionPage`). */}
+          {nextCursor && (
+            <nav aria-label="Sayfalama" className="pt-4">
+              <Link
+                href={transactionsHref({ after: nextCursor })}
+                className="text-sm text-zinc-700 underline underline-offset-4 dark:text-zinc-300"
+              >
+                Sonraki sayfa
+              </Link>
+            </nav>
+          )}
         </div>
       )}
 
@@ -349,7 +417,7 @@ export default async function TransactionsPage({
               // "Vazgeç" MEVCUT FİLTRELERE döner: kullanıcı düzenlemeye filtrelenmiş bir
               // listeden geldiyse, vazgeçince tam listeye düşmek onu bağlamından koparırdı.
               <Link
-                href={hrefWithEdit(null)}
+                href={transactionsHref()}
                 className="text-sm text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
               >
                 Vazgeç

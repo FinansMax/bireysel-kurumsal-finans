@@ -7,8 +7,15 @@ import {
   createTransaction,
   deleteTransaction,
   listTransactions,
+  TRANSACTIONS_PAGE_SIZE,
   updateTransaction,
+  type TransactionFilters,
+  type TransactionView,
 } from "../src/lib/finance/transaction";
+import {
+  encodeTransactionCursor,
+  parseTransactionCursor,
+} from "../src/lib/finance/transaction-cursor";
 
 /**
  * `Transaction` iş kuralları — gerçek DB'ye karşı, HTTP olmadan (Issue #53).
@@ -21,6 +28,21 @@ import {
  * Bu suite'in ana iddiası tek cümledir: `Account.balance`, o hesabın işlemlerinin toplamına
  * HER ZAMAN eşit kalır — oluşturma, güncelleme, silme ve başarısız denemelerden sonra da.
  */
+
+/**
+ * Yalnızca satırlarla ilgilenen testler için kısayol (Issue #135).
+ *
+ * `listTransactions()` sayfalama eklendikten sonra `{ transactions, nextCursor }` döner.
+ * Filtre ve sıralama testlerinin konusu imleç DEĞİLDİR; her birinde `.transactions` yazmak
+ * onları imleç sözleşmesine gereksizce bağlardı. Sayfalamanın kendisi aşağıdaki ayrı
+ * describe'da, TAM dönüş değeriyle test edilir.
+ */
+async function listRows(
+  tenantId: string,
+  filters?: TransactionFilters,
+): Promise<TransactionView[]> {
+  return (await listTransactions(tenantId, filters)).transactions;
+}
 
 const createdTenantIds: string[] = [];
 const createdUserIds: string[] = [];
@@ -462,7 +484,7 @@ test.describe("listTransactions()", () => {
       description: "B islemi",
     });
 
-    const listA = await listTransactions(tenantA);
+    const listA = await listRows(tenantA);
     expect(listA).toHaveLength(1);
     expect(listA[0].description).toBe("A islemi");
     expect(JSON.stringify(listA)).not.toContain("B islemi");
@@ -495,7 +517,7 @@ test.describe("listTransactions()", () => {
       occurredAt: "2025-12-31",
     });
 
-    const list = await listTransactions(tenantId);
+    const list = await listRows(tenantId);
     expect(list.map((transaction) => transaction.description)).toEqual([
       "en yeni",
       "orta",
@@ -510,7 +532,7 @@ test.describe("listTransactions()", () => {
 
     await createTransaction(tenantId, actorId, { accountId, type: "INCOME", amount: "12.5" });
 
-    const [transaction] = await listTransactions(tenantId);
+    const [transaction] = await listRows(tenantId);
     expect(typeof transaction.amount).toBe("string");
   });
 });
@@ -1048,13 +1070,13 @@ test.describe("listTransactions() — filtreler (Issue #56)", () => {
 
   test("filtresiz çağrı hepsini döndürüyor (diğer testlerin kontrol grubu)", async () => {
     const { tenantId } = await seed();
-    expect(await listTransactions(tenantId)).toHaveLength(3);
+    expect(await listRows(tenantId)).toHaveLength(3);
   });
 
   test("from: verilen günden İTİBAREN", async () => {
     const { tenantId } = await seed();
 
-    const rows = await listTransactions(tenantId, { from: new Date("2026-02-20T00:00:00Z") });
+    const rows = await listRows(tenantId, { from: new Date("2026-02-20T00:00:00Z") });
     expect(descriptions(rows).sort()).toEqual(["Mart yakiti", "Subat maasi"]);
   });
 
@@ -1080,7 +1102,7 @@ test.describe("listTransactions() — filtreler (Issue #56)", () => {
       occurredAt: "2026-03-16T00:00:00.000Z",
     });
 
-    const rows = await listTransactions(tenantId, { to: new Date("2026-03-15T00:00:00Z") });
+    const rows = await listRows(tenantId, { to: new Date("2026-03-15T00:00:00Z") });
 
     expect(descriptions(rows)).toEqual(["Sinirdaki kayit"]);
   });
@@ -1088,7 +1110,7 @@ test.describe("listTransactions() — filtreler (Issue #56)", () => {
   test("from + to birlikte aralık kuruyor (iki uç da dahil)", async () => {
     const { tenantId } = await seed();
 
-    const rows = await listTransactions(tenantId, {
+    const rows = await listRows(tenantId, {
       from: new Date("2026-01-10T00:00:00Z"),
       to: new Date("2026-02-20T00:00:00Z"),
     });
@@ -1099,30 +1121,30 @@ test.describe("listTransactions() — filtreler (Issue #56)", () => {
   test("accountId: yalnızca o hesabın işlemleri", async () => {
     const { tenantId, accountB } = await seed();
 
-    const rows = await listTransactions(tenantId, { accountId: accountB });
+    const rows = await listRows(tenantId, { accountId: accountB });
     expect(descriptions(rows)).toEqual(["Mart yakiti"]);
   });
 
   test("categoryId: yalnızca o kategorinin işlemleri", async () => {
     const { tenantId, maasId } = await seed();
 
-    const rows = await listTransactions(tenantId, { categoryId: maasId });
+    const rows = await listRows(tenantId, { categoryId: maasId });
     expect(descriptions(rows)).toEqual(["Subat maasi"]);
   });
 
   test("q: açıklamada geçen metin, büyük/küçük harf DUYARSIZ", async () => {
     const { tenantId } = await seed();
 
-    expect(descriptions(await listTransactions(tenantId, { q: "kira" }))).toEqual(["Ocak kirasi"]);
+    expect(descriptions(await listRows(tenantId, { q: "kira" }))).toEqual(["Ocak kirasi"]);
     // Duyarsızlık kanıtı: aynı sonuç büyük harfle de gelmeli.
-    expect(descriptions(await listTransactions(tenantId, { q: "KIRA" }))).toEqual(["Ocak kirasi"]);
+    expect(descriptions(await listRows(tenantId, { q: "KIRA" }))).toEqual(["Ocak kirasi"]);
   });
 
   test("q: eşleşme yoksa boş liste (tüm liste DEĞİL)", async () => {
     const { tenantId } = await seed();
 
     // Filtrenin sessizce yok sayılması hâlinde burada 3 satır dönerdi.
-    expect(await listTransactions(tenantId, { q: "hicbiryerde-gecmeyen" })).toHaveLength(0);
+    expect(await listRows(tenantId, { q: "hicbiryerde-gecmeyen" })).toHaveLength(0);
   });
 
   test("açıklaması null olan kayıt q filtresine takılmıyor (çökme de yok)", async () => {
@@ -1136,14 +1158,14 @@ test.describe("listTransactions() — filtreler (Issue #56)", () => {
       amount: "1",
     });
 
-    expect(await listTransactions(tenantId, { q: "herhangi" })).toHaveLength(0);
-    expect(await listTransactions(tenantId)).toHaveLength(1);
+    expect(await listRows(tenantId, { q: "herhangi" })).toHaveLength(0);
+    expect(await listRows(tenantId)).toHaveLength(1);
   });
 
   test("filtreler BİRLİKTE daraltıyor (VE mantığı)", async () => {
     const { tenantId, accountA, marketId } = await seed();
 
-    const rows = await listTransactions(tenantId, {
+    const rows = await listRows(tenantId, {
       accountId: accountA,
       categoryId: marketId,
       from: new Date("2026-01-01T00:00:00Z"),
@@ -1154,7 +1176,7 @@ test.describe("listTransactions() — filtreler (Issue #56)", () => {
 
     // Duyarlılık: tek bir kısıt bile eşleşmezse sonuç boşalır.
     expect(
-      await listTransactions(tenantId, { accountId: accountA, categoryId: marketId, q: "maas" }),
+      await listRows(tenantId, { accountId: accountA, categoryId: marketId, q: "maas" }),
     ).toHaveLength(0);
   });
 
@@ -1183,18 +1205,305 @@ test.describe("listTransactions() — filtreler (Issue #56)", () => {
       { accountId: foreignAccount },
       { categoryId: foreignCategory },
     ]) {
-      const rows = await listTransactions(tenantA, filters);
+      const rows = await listRows(tenantA, filters);
       expect(JSON.stringify(rows)).not.toContain(tenantB);
       expect(rows.every((row) => row.amount !== "99")).toBe(true);
     }
 
-    expect(await listTransactions(tenantA, { accountId: foreignAccount })).toHaveLength(0);
+    expect(await listRows(tenantA, { accountId: foreignAccount })).toHaveLength(0);
   });
 
   test("filtrelenmiş sonuç da tarihe göre sıralı kalıyor", async () => {
     const { tenantId, accountA } = await seed();
 
-    const rows = await listTransactions(tenantId, { accountId: accountA });
+    const rows = await listRows(tenantId, { accountId: accountA });
     expect(descriptions(rows)).toEqual(["Subat maasi", "Ocak kirasi"]);
+  });
+});
+
+/**
+ * Keyset sayfalama (Issue #135).
+ *
+ * Bu suite'in ana iddiası tek cümledir: liste kaç sayfada okunursa okunsun, HER KAYIT tam
+ * olarak BİR KEZ görünür — araya yeni kayıt girse de, sıralama anahtarı eşit olsa da.
+ *
+ * Kayıtlar burada `createTransaction()` yerine DOĞRUDAN Prisma ile açılır: bu testlerin konusu
+ * bakiye değil sıralama/pencere davranışıdır ve `occurredAt` ile `createdAt`in EŞİT olduğu
+ * kenar durumu servis üzerinden kurulamaz (o `now()` yazar). Bakiye doğruluğu yukarıdaki
+ * suite'lerin işidir.
+ */
+test.describe("listTransactions() — sayfalama (Issue #135)", () => {
+  /**
+   * `count` adet işlem açar. Varsayılan olarak her kaydın `occurredAt`i FARKLIDIR (gerçek
+   * hayattaki normal durum); `sameKey` verilirse hepsi aynı `occurredAt` VE aynı `createdAt`
+   * ile açılır — sıralamanın yalnızca `id` ile ayrıldığı en zor durum.
+   */
+  async function seedTransactions(
+    tenantId: string,
+    accountId: string,
+    count: number,
+    options: { sameKey?: boolean; label?: string } = {},
+  ): Promise<void> {
+    const label = options.label ?? "kayit";
+    const fixed = new Date("2026-01-01T00:00:00.000Z");
+
+    await prisma.transaction.createMany({
+      data: Array.from({ length: count }, (_, index) => ({
+        tenantId,
+        accountId,
+        type: "INCOME" as const,
+        amount: "1",
+        description: `${label}-${String(index).padStart(3, "0")}`,
+        occurredAt: options.sameKey ? fixed : new Date(Date.UTC(2026, 0, 1 + index)),
+        createdAt: options.sameKey ? fixed : new Date(Date.UTC(2026, 0, 1 + index)),
+      })),
+    });
+  }
+
+  /** Tüm sayfaları imleci izleyerek okur; sayfa sayısını da döndürür. */
+  async function readAllPages(
+    tenantId: string,
+    filters: TransactionFilters = {},
+  ): Promise<{ rows: TransactionView[]; pageCount: number }> {
+    const rows: TransactionView[] = [];
+    let after = parseTransactionCursor(null);
+    let pageCount = 0;
+
+    // Sonsuz döngü sigortası: bozuk bir imleç mantığı testi asmak yerine kırmızıya döndürmeli.
+    while (pageCount < 50) {
+      const page = await listTransactions(tenantId, filters, after);
+      rows.push(...page.transactions);
+      pageCount += 1;
+      if (!page.nextCursor) {
+        return { rows, pageCount };
+      }
+      after = parseTransactionCursor(page.nextCursor);
+      expect(after).not.toBeNull();
+    }
+
+    throw new Error("Sayfalama bitmedi: imleç ilerlemiyor olabilir");
+  }
+
+  test("tek sayfaya sığan liste: nextCursor null (kontrol grubu)", async () => {
+    const tenantId = await createTenant();
+    const accountId = await createAccount(tenantId);
+    await seedTransactions(tenantId, accountId, 3);
+
+    const page = await listTransactions(tenantId);
+    expect(page.transactions).toHaveLength(3);
+    // Bu iddia duyarlılık kanıtıdır: aşağıdaki testlerin `nextCursor` beklentisi anlamlı
+    // olsun diye, imlecin BOŞUNA üretilmediği önce burada gösterilir.
+    expect(page.nextCursor).toBeNull();
+  });
+
+  test("sayfa boyutu aşılmıyor ve fazlası varsa nextCursor dönüyor", async () => {
+    const tenantId = await createTenant();
+    const accountId = await createAccount(tenantId);
+    await seedTransactions(tenantId, accountId, TRANSACTIONS_PAGE_SIZE + 5);
+
+    const page = await listTransactions(tenantId);
+    expect(page.transactions).toHaveLength(TRANSACTIONS_PAGE_SIZE);
+    expect(page.nextCursor).not.toBeNull();
+  });
+
+  test("tüm sayfalar okunduğunda HER kayıt tam olarak bir kez görünüyor", async () => {
+    const tenantId = await createTenant();
+    const accountId = await createAccount(tenantId);
+    const total = TRANSACTIONS_PAGE_SIZE * 2 + 7;
+    await seedTransactions(tenantId, accountId, total);
+
+    const { rows, pageCount } = await readAllPages(tenantId);
+
+    expect(rows).toHaveLength(total);
+    expect(new Set(rows.map((row) => row.id)).size).toBe(total);
+    // Sayfa sayısı da doğrulanır: tek bir sayfada dönmüş olsaydı yukarıdaki iki iddia da
+    // geçerdi ve test sayfalamayı hiç sınamamış olurdu.
+    expect(pageCount).toBe(3);
+  });
+
+  test("sayfalar arası sıralama korunuyor (birleşim tek bir azalan dizi)", async () => {
+    const tenantId = await createTenant();
+    const accountId = await createAccount(tenantId);
+    await seedTransactions(tenantId, accountId, TRANSACTIONS_PAGE_SIZE + 10);
+
+    const { rows } = await readAllPages(tenantId);
+
+    for (let index = 1; index < rows.length; index += 1) {
+      const previous = rows[index - 1];
+      const current = rows[index];
+      const isDescending =
+        previous.occurredAt.getTime() > current.occurredAt.getTime() ||
+        (previous.occurredAt.getTime() === current.occurredAt.getTime() &&
+          (previous.createdAt.getTime() > current.createdAt.getTime() ||
+            (previous.createdAt.getTime() === current.createdAt.getTime() &&
+              previous.id > current.id)));
+      expect(isDescending).toBe(true);
+    }
+  });
+
+  test("ARAYA YENİ KAYIT girse bile satır atlanmıyor/tekrarlamıyor", async () => {
+    const tenantId = await createTenant();
+    const accountId = await createAccount(tenantId);
+    await seedTransactions(tenantId, accountId, TRANSACTIONS_PAGE_SIZE + 5, { label: "eski" });
+
+    const first = await listTransactions(tenantId);
+    expect(first.nextCursor).not.toBeNull();
+
+    // Yeni kayıt listenin BAŞINA düşer (en yeni `occurredAt`). Offset sayfalamada bu, ikinci
+    // sayfanın tüm satırlarını bir kaydırır ve birinci sayfanın son satırı tekrar görünürdü.
+    await prisma.transaction.create({
+      data: {
+        tenantId,
+        accountId,
+        type: "INCOME",
+        amount: "1",
+        description: "araya-giren",
+        occurredAt: new Date(Date.UTC(2030, 0, 1)),
+      },
+    });
+
+    const second = await listTransactions(
+      tenantId,
+      {},
+      parseTransactionCursor(first.nextCursor),
+    );
+
+    const firstIds = new Set(first.transactions.map((row) => row.id));
+    const overlap = second.transactions.filter((row) => firstIds.has(row.id));
+    expect(overlap).toHaveLength(0);
+
+    // Araya giren kayıt HİÇ görünmez: imlecin arkasında kalmıştır. Bu doğru davranıştır —
+    // keyset sayfalama, okumaya başlanan andaki pencereyi izler.
+    expect(second.transactions.map((row) => row.description)).not.toContain("araya-giren");
+
+    // Ve asıl kanıt: iki sayfa birlikte, ekleme öncesi var olan TÜM kayıtları kapsar.
+    const seen = [...first.transactions, ...second.transactions].filter(
+      (row) => row.description !== "araya-giren",
+    );
+    expect(new Set(seen.map((row) => row.id)).size).toBe(TRANSACTIONS_PAGE_SIZE + 5);
+  });
+
+  test("occurredAt VE createdAt eşitken sıra id ile kesinleşiyor (atlama/tekrar yok)", async () => {
+    const tenantId = await createTenant();
+    const accountId = await createAccount(tenantId);
+    const total = TRANSACTIONS_PAGE_SIZE + 3;
+    await seedTransactions(tenantId, accountId, total, { sameKey: true });
+
+    const { rows, pageCount } = await readAllPages(tenantId);
+
+    // Anahtarın ilk iki alanı tüm kayıtlarda AYNI; sayfa sınırını yalnızca `id` ayırabilir.
+    //
+    // DUYARLILIK — ÖLÇÜLDÜ: keyset koşulundaki üçüncü `OR` dalı (`id: { lt: ... }`) silinip
+    // bu test koşulduğunda KIRMIZIYA döner (sayfa 2 boş gelir, 53 yerine 50 kayıt okunur).
+    // Yani test, sayfalamanın eşitlik durumundaki asıl mantığını gerçekten sınıyor.
+    //
+    // BU TESTİN SINAMADIĞI ŞEY, dürüstlük adına: `orderBy`dan `id` düşürüldüğünde test yeşil
+    // KALIYOR — Postgres bu boyuttaki eşitlikleri kararlı bir sırayla döndürdüğü için. `id`
+    // yine de `orderBy`da olmak ZORUNDADIR: ORDER BY kesin bir toplam sıra vermezse plan
+    // değiştiğinde (index seçimi, paralel tarama, tablo büyümesi) eşitlerin sırası kayar ve
+    // sayfa sınırındaki satır atlanır. Bu, testle değil ancak SQL semantiğiyle güvenceye
+    // alınabilecek bir invariant'tır.
+    expect(pageCount).toBe(2);
+    expect(rows).toHaveLength(total);
+    expect(new Set(rows.map((row) => row.id)).size).toBe(total);
+  });
+
+  test("FİLTRE ile birlikte sayfalanıyor: filtre her sayfada geçerli kalıyor", async () => {
+    const tenantId = await createTenant();
+    const accountA = await createAccount(tenantId);
+    const accountB = await createAccount(tenantId);
+    await seedTransactions(tenantId, accountA, TRANSACTIONS_PAGE_SIZE + 4, { label: "a" });
+    await seedTransactions(tenantId, accountB, TRANSACTIONS_PAGE_SIZE + 4, { label: "b" });
+
+    const { rows } = await readAllPages(tenantId, { accountId: accountA });
+
+    expect(rows).toHaveLength(TRANSACTIONS_PAGE_SIZE + 4);
+    // Filtrenin imleçle birlikte DÜŞMEDİĞİ kanıtı: tek bir B kaydı bile sızmamalı.
+    expect(rows.every((row) => row.accountId === accountA)).toBe(true);
+  });
+
+  test("TENANT İZOLASYONU sayfalamada da korunuyor: yabancı imleç veri açmıyor", async () => {
+    const tenantA = await createTenant();
+    const tenantB = await createTenant();
+    const accountA = await createAccount(tenantA);
+    const accountB = await createAccount(tenantB);
+    await seedTransactions(tenantA, accountA, 3, { label: "a" });
+    await seedTransactions(tenantB, accountB, TRANSACTIONS_PAGE_SIZE + 5, { label: "b" });
+
+    // B'nin ilk sayfasından alınan imleç, A'nın listesinde kullanılıyor.
+    const pageB = await listTransactions(tenantB);
+    expect(pageB.nextCursor).not.toBeNull();
+
+    const leaked = await listTransactions(tenantA, {}, parseTransactionCursor(pageB.nextCursor));
+
+    // İmleç scope'a DOKUNMAZ: yalnızca pencereyi daraltır. B'nin hiçbir satırı görünmez.
+    expect(leaked.transactions.every((row) => row.accountId === accountA)).toBe(true);
+    expect(JSON.stringify(leaked.transactions)).not.toContain(tenantB);
+  });
+
+  test("elle üretilmiş imleç yalnızca pencereyi kaydırır, scope'u değiştirmez", async () => {
+    const tenantA = await createTenant();
+    const tenantB = await createTenant();
+    const accountA = await createAccount(tenantA);
+    const accountB = await createAccount(tenantB);
+    await seedTransactions(tenantA, accountA, 5, { label: "a" });
+    await seedTransactions(tenantB, accountB, 5, { label: "b" });
+
+    const [foreign] = (await listTransactions(tenantB)).transactions;
+
+    // B'nin GERÇEK bir satırından imleç kurulup A'ya veriliyor — kurcalamanın en güçlü hâli.
+    const forged = encodeTransactionCursor({
+      occurredAt: foreign.occurredAt,
+      createdAt: foreign.createdAt,
+      id: foreign.id,
+    });
+
+    const page = await listTransactions(tenantA, {}, parseTransactionCursor(forged));
+    expect(page.transactions.every((row) => row.accountId === accountA)).toBe(true);
+  });
+
+  test("imleç çift yönlü: kodlanan değer aynen geri çözülüyor", async () => {
+    const tenantId = await createTenant();
+    const accountId = await createAccount(tenantId);
+    await seedTransactions(tenantId, accountId, 1);
+
+    const [row] = (await listTransactions(tenantId)).transactions;
+    const decoded = parseTransactionCursor(
+      encodeTransactionCursor({
+        occurredAt: row.occurredAt,
+        createdAt: row.createdAt,
+        id: row.id,
+      }),
+    );
+
+    expect(decoded).not.toBeNull();
+    expect(decoded?.id).toBe(row.id);
+    expect(decoded?.occurredAt.toISOString()).toBe(row.occurredAt.toISOString());
+    expect(decoded?.createdAt.toISOString()).toBe(row.createdAt.toISOString());
+  });
+
+  test("bozuk imleç null döner (sessizce ilk sayfaya DÜŞMEZ)", async () => {
+    const encode = (raw: string): string => Buffer.from(raw, "utf8").toString("base64url");
+
+    for (const broken of [
+      "",
+      "not-base64!!",
+      // Alan sayısı eksik.
+      encode("2026-01-01T00:00:00.000Z|abc123"),
+      // Tarih takvimde yok — `new Date()` bunu sessizce kaydırırdı, çift yönlü kontrol yakalar.
+      encode("2026-13-45T00:00:00.000Z|2026-01-01T00:00:00.000Z|abc123"),
+      // Kanonik olmayan biçim: aynı anı gösterir ama geri yazıldığında birebir eşleşmez.
+      encode("2026-01-01T00:00:00Z|2026-01-01T00:00:00.000Z|abc123"),
+      // Geçerli tarihler ama id boş.
+      encode("2026-01-01T00:00:00.000Z|2026-01-01T00:00:00.000Z|"),
+    ]) {
+      expect(parseTransactionCursor(broken)).toBeNull();
+    }
+
+    // Duyarlılık: aynı biçimde ama GEÇERLİ bir imleç kabul edilmeli, yoksa yukarıdaki
+    // beklentiler "her şeyi reddeden" bir fonksiyonla da geçerdi.
+    expect(
+      parseTransactionCursor(encode("2026-01-01T00:00:00.000Z|2026-01-02T00:00:00.000Z|abc123")),
+    ).not.toBeNull();
   });
 });

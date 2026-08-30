@@ -889,3 +889,179 @@ test.describe("/transactions — düzenleme ve silme (Issue #130)", () => {
     expect(await apiBalance(page, tenant.id, account.id)).toBe("0");
   });
 });
+
+test.describe("/transactions — sayfalama (Issue #135)", () => {
+  /**
+   * Kayıtlar DOĞRUDAN veritabanına yazılır, arayüzden değil.
+   *
+   * 55 işlemi formla girmek bu testi dakikalarca sürdürürdü ve sınadığı şey (sayfa geçişi)
+   * kayıt akışı DEĞİLDİR — o zaten yukarıdaki describe'larda uçtan uca test ediliyor. Bakiye
+   * de bu testlerin konusu olmadığı için hesap bakiyesi güncellenmiyor.
+   */
+  async function seedTransactions(
+    tenantId: string,
+    accountId: string,
+    count: number,
+    label: string,
+  ) {
+    await prisma.transaction.createMany({
+      data: Array.from({ length: count }, (_, index) => ({
+        tenantId,
+        accountId,
+        type: "EXPENSE" as const,
+        amount: "10",
+        description: `${label}-${String(index).padStart(3, "0")}`,
+        // En yeni tarih index 0'da: liste `occurredAt DESC` sıralı olduğu için ilk sayfada
+        // `label-000`, son sayfada en büyük index görünür. Beklentiler buna dayanıyor.
+        occurredAt: new Date(Date.UTC(2026, 0, 1 + (count - index))),
+      })),
+    });
+  }
+
+  function nextPageLink(page: Page) {
+    return page.getByRole("link", { name: "Sonraki sayfa" });
+  }
+
+  test("50'den AZ kayıtta 'Sonraki sayfa' hiç gösterilmiyor (kontrol grubu)", async ({ page }) => {
+    await signUpAndSignIn(page, "tx-page-few");
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Kasa", "0");
+    await seedTransactions(tenantId, accountId, 10, "az");
+
+    await page.goto("/transactions");
+    await expectRow(page, "az-000");
+    // Bu iddia, aşağıdaki testlerin "link görünüyor" beklentisini anlamlı kılar: link
+    // her koşulda basılmıyor.
+    await expect(nextPageLink(page)).toHaveCount(0);
+  });
+
+  test("50'den fazla kayıtta ikinci sayfaya geçiliyor ve satırlar TEKRARLAMIYOR", async ({
+    page,
+  }) => {
+    await signUpAndSignIn(page, "tx-page-many");
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Kasa", "0");
+    await seedTransactions(tenantId, accountId, 55, "cok");
+
+    await page.goto("/transactions");
+
+    // İlk sayfa: en yeni 50 kayıt. 51. kayıt (`cok-050`) burada OLMAMALI.
+    await expectRow(page, "cok-000");
+    await expect(page.getByRole("cell", { name: "cok-049", exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "cok-050", exact: true })).toHaveCount(0);
+
+    await nextPageLink(page).click();
+
+    // İkinci sayfa: kalan 5 kayıt. Birinci sayfanın satırları TEKRARLAMAMALI — offset
+    // sayfalamada araya kayıt girmese bile bu, sınır satırında tam olarak bozulan şeydir.
+    await expectRow(page, "cok-050");
+    await expect(page.getByRole("cell", { name: "cok-054", exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "cok-049", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("cell", { name: "cok-000", exact: true })).toHaveCount(0);
+
+    // Sayfa durumu URL'DEDİR: adres paylaşılabilir ve geri tuşu çalışır.
+    expect(page.url()).toContain("after=");
+
+    // Son sayfada "Sonraki sayfa" YOKTUR — kullanıcı listenin sonunu görebilmeli.
+    await expect(nextPageLink(page)).toHaveCount(0);
+
+    // Geri tuşu ilk sayfaya döner. Ayrı bir "Önceki sayfa" bağlantısı bu yüzden yok.
+    await page.goBack();
+    await expectRow(page, "cok-000");
+  });
+
+  test("sayfa geçişi MEVCUT FİLTRELERİ koruyor", async ({ page }) => {
+    await signUpAndSignIn(page, "tx-page-filter");
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Kasa", "0");
+    const otherAccountId = await createAccount(page, tenantId, "Banka", "0");
+    await seedTransactions(tenantId, accountId, 55, "kasa");
+    await seedTransactions(tenantId, otherAccountId, 55, "banka");
+
+    await page.goto("/transactions");
+    await filterForm(page).getByLabel("Hesap").selectOption({ label: "Kasa" });
+    await filterForm(page).getByRole("button", { name: "Filtrele" }).click();
+
+    await expectRow(page, "kasa-000");
+    await expect(page.getByRole("cell", { name: "banka-000", exact: true })).toHaveCount(0);
+
+    await nextPageLink(page).click();
+
+    // İkinci sayfada filtre DÜŞMEMELİ: düşseydi "Banka" kayıtları da sızardı ve kullanıcı
+    // filtrelenmiş sandığı bir listede yabancı satırlar görürdü.
+    await expectRow(page, "kasa-050");
+    await expect(page.getByRole("cell", { name: "banka-000", exact: true })).toHaveCount(0);
+    expect(page.url()).toContain("accountId=");
+    expect(page.url()).toContain("after=");
+  });
+
+  test("FİLTRE DEĞİŞİNCE sayfa başa dönüyor (eski imleç taşınmıyor)", async ({ page }) => {
+    await signUpAndSignIn(page, "tx-page-reset");
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Kasa", "0");
+    await seedTransactions(tenantId, accountId, 55, "sifirla");
+
+    await page.goto("/transactions");
+    await nextPageLink(page).click();
+    await expectRow(page, "sifirla-050");
+
+    // Filtre formu düz bir `<form method="get">`tir ve yalnızca KENDİ alanlarını gönderir;
+    // `after` bu yüzden kendiliğinden düşer. Yeni bir filtre, listenin ortasından değil
+    // başından okunmalıdır.
+    await filterForm(page).getByLabel("Açıklamada ara").fill("sifirla");
+    await filterForm(page).getByRole("button", { name: "Filtrele" }).click();
+
+    await expectRow(page, "sifirla-000");
+    expect(page.url()).not.toContain("after=");
+  });
+
+  test("ikinci sayfadaki kayıt DÜZENLENEBİLİYOR (imleç düşmüyor)", async ({ page }) => {
+    await signUpAndSignIn(page, "tx-page-edit");
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Kasa", "0");
+    await seedTransactions(tenantId, accountId, 55, "duzenle");
+
+    await page.goto("/transactions");
+    await nextPageLink(page).click();
+    await expectRow(page, "duzenle-050");
+
+    // Düzenlenecek kayıt LİSTEDEN seçilir (#130). "Düzenle" bağlantısı imleci taşımasaydı
+    // liste ilk sayfaya döner, kayıt o listede bulunamaz ve form hiç açılmazdı.
+    //
+    // Bağlantı SATIR ÜZERİNDEN bulunur, adıyla değil: erişilebilir ad kaydın TARİH ve
+    // TUTARINDAN kurulur ("... tarihli 10 tutarlı işlemi düzenle"), açıklamasından değil —
+    // ve bu testte tüm kayıtların tutarı aynıdır (#130'daki ad kararı).
+    await page
+      .getByRole("row")
+      .filter({ has: page.getByRole("cell", { name: "duzenle-050", exact: true }) })
+      .getByRole("link", { name: /tutarlı işlemi düzenle/ })
+      .click();
+
+    const editForm = page.getByRole("form", { name: "İşlemi düzenle" });
+    await expect(editForm).toBeVisible({ timeout: ROW_TIMEOUT_MS });
+    await expect(editForm.getByLabel("Açıklama")).toHaveValue("duzenle-050");
+  });
+
+  test("GEÇERSİZ imleç: hata gösteriliyor, liste sessizce BAŞA dönmüyor", async ({ page }) => {
+    await signUpAndSignIn(page, "tx-page-broken");
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Kasa", "0");
+    await seedTransactions(tenantId, accountId, 10, "bozuk");
+
+    await page.goto("/transactions?after=kurcalanmis-imlec");
+
+    // Sessizce ilk sayfayı göstermek, kullanıcıya "sonraki sayfa" dediği hâlde aynı listeyi
+    // vermek olurdu; o bunu listenin sonu sanardı (#56'nın geçersiz filtre kararı).
+    //
+    // Hata METNİYLE aranır, `getByRole("alert")` ile DEĞİL: Next.js her sayfaya kendi route
+    // duyurucusunu (`__next-route-announcer__`) `role="alert"` ile ekler ve rol sorgusu iki
+    // öğeye birden eşleşir (yukarıdaki geçersiz filtre testindeki aynı tuzak).
+    await expect(page.getByText("Sayfa bağlantısı geçersiz")).toBeVisible();
+    await expect(page.getByRole("table")).toHaveCount(0);
+    await expect(page.getByRole("cell", { name: "bozuk-000", exact: true })).toHaveCount(0);
+
+    // Duyarlılık: imleç kaldırılınca liste geri geliyor.
+    await page.goto("/transactions");
+    await expectRow(page, "bozuk-000");
+  });
+});

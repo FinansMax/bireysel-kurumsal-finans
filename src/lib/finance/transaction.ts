@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { tenantScoped } from "@/lib/tenancy/scope";
 import { isValidId } from "@/lib/tenants/validation";
 
+import { encodeTransactionCursor, type TransactionCursor } from "./transaction-cursor";
 import {
   isValidCategoryType,
   MAX_TRANSACTION_DESCRIPTION_LENGTH,
@@ -174,22 +175,48 @@ function nextDay(date: Date): Date {
 }
 
 /**
- * İşlemleri listeler: önce gerçekleşme tarihi (yeniden eskiye), eşitlikte kayıt zamanı.
+ * Bir sayfada dönen işlem sayısı (Issue #135).
  *
- * İkinci ölçüt sıralamayı DETERMİNİSTİK yapar — aynı güne girilmiş iki işlemin sırası aksi
- * halde DB'nin keyfine kalırdı.
+ * İstemciden AYARLANAMAZ (`?limit=` yoktur): ayarlanabilir bir boyut, bir doğrulama yolu ve
+ * bir üst sınır testi daha demektir ve bugün hiçbir çağıran bunu istemiyor. Gerekirse sonra
+ * açılır; kapatmak açmaktan zordur.
+ */
+export const TRANSACTIONS_PAGE_SIZE = 50;
+
+/**
+ * Bir sayfa işlem ve varsa bir sonraki sayfanın imleci.
+ *
+ * TOPLAM SAYI (`total`) BİLEREK YOKTUR: her istekte ikinci bir `COUNT(*)` taraması demek
+ * olurdu ve bu tarama, filtre `description` üzerindeyse (index'siz) listenin kendisi kadar
+ * pahalıdır. "Sonraki sayfa" deseni toplam sayıya hiç ihtiyaç duymaz. Bedeli kabul edildi:
+ * arayüzde sayfa numarası ve "son sayfa" gösterilemez.
+ */
+export type TransactionPage = {
+  transactions: TransactionView[];
+  /** `null` = başka sayfa yok. */
+  nextCursor: string | null;
+};
+
+/**
+ * İşlemleri sayfa sayfa listeler: önce gerçekleşme tarihi (yeniden eskiye), eşitlikte kayıt
+ * zamanı, o da eşitse `id`.
+ *
+ * SIRALAMA ÜÇ ÖLÇÜTLÜDÜR ve bu, imleçle (`transaction-cursor.ts`) BİRLİKTE değişmesi gereken
+ * tek bir karardır: keyset sayfalama, sıralama anahtarının KESİN bir toplam sıra vermesine
+ * dayanır. `occurredAt` + `createdAt` çifti buna yetmez (aynı milisaniyede iki kayıt
+ * mümkündür) ve iki sayfanın sınırındaki satır ya atlanır ya tekrarlanırdı; `id` benzersiz
+ * olduğu için sırayı kesinleştirir. Gerekçenin tamamı imleç modülündedir.
  *
  * FİLTRELER `tenantScoped()`İN ÜZERİNE eklenir, onun YERİNE geçmez (aynı kural `Category`nin
  * `?type` filtresinde de var). Tek bir filtrenin tenant koşulunu düşürmesi, listeyi tüm
- * tenant'lara açardı; koruma `integration/tenant-scope-pattern.spec.ts`'tedir.
- *
- * BİLİNEN SINIR: liste hâlâ sayfalanmaz. Sayfalama bu issue'nun kapsamında değildir ve ayrı
- * bir issue gerektirir — filtreleme onu daha az acil yapar ama ortadan kaldırmaz.
+ * tenant'lara açardı; koruma `integration/tenant-scope-pattern.spec.ts`'tedir. İmleç de bu
+ * kuralın istisnası DEĞİLDİR: `after` yalnızca pencereyi daraltır, scope'a dokunmaz.
  */
 export async function listTransactions(
   tenantId: string,
   filters: TransactionFilters = {},
-): Promise<TransactionView[]> {
+  after: TransactionCursor | null = null,
+): Promise<TransactionPage> {
   const occurredAt: Prisma.DateTimeFilter = {};
   if (filters.from) {
     occurredAt.gte = filters.from;
@@ -198,7 +225,10 @@ export async function listTransactions(
     occurredAt.lt = nextDay(filters.to);
   }
 
-  const transactions = await prisma.transaction.findMany({
+  // Sayfa boyutundan BİR FAZLA çekilir: fazladan satırın gelip gelmediği, "başka sayfa var mı"
+  // sorusunun cevabıdır. Alternatif — ayrı bir `count` sorgusu — ikinci bir tarama olurdu ve
+  // yanıtta zaten göstermediğimiz bir bilgi için ödenirdi.
+  const rows = await prisma.transaction.findMany({
     where: tenantScoped(tenantId, {
       ...(filters.from || filters.to ? { occurredAt } : {}),
       ...(filters.accountId ? { accountId: filters.accountId } : {}),
@@ -213,12 +243,39 @@ export async function listTransactions(
       ...(filters.q
         ? { description: { contains: filters.q, mode: Prisma.QueryMode.insensitive } }
         : {}),
+      // Keyset koşulu: "sıralamada bu satırdan SONRA gelenler". Sıralama üç ölçütlü olduğu
+      // için karşılaştırma da üç dallıdır — leksikografik sıranın elle yazılmış hâli.
+      //
+      // Prisma'nın `cursor` seçeneği KULLANILMADI: o, benzersiz TEK bir alan üzerinden çalışır
+      // ve çok sütunlu bir sıralama anahtarını ifade edemez. Ham SQL de yasak (CLAUDE.md §5);
+      // koşul bu yüzden `OR` ile kuruluyor. Filtrelerle çakışma yoktur: bunlar ayrı
+      // anahtarlardır ve Prisma hepsini `AND` ile birleştirir.
+      ...(after
+        ? {
+            OR: [
+              { occurredAt: { lt: after.occurredAt } },
+              { occurredAt: after.occurredAt, createdAt: { lt: after.createdAt } },
+              {
+                occurredAt: after.occurredAt,
+                createdAt: after.createdAt,
+                id: { lt: after.id },
+              },
+            ],
+          }
+        : {}),
     }),
     select: transactionSelect,
-    orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }],
+    orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    take: TRANSACTIONS_PAGE_SIZE + 1,
   });
 
-  return transactions.map(toView);
+  const page = rows.slice(0, TRANSACTIONS_PAGE_SIZE);
+  const hasMore = rows.length > TRANSACTIONS_PAGE_SIZE;
+
+  return {
+    transactions: page.map(toView),
+    nextCursor: hasMore ? encodeTransactionCursor(page[page.length - 1]) : null,
+  };
 }
 
 export type CreateTransactionInput = {

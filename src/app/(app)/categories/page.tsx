@@ -6,7 +6,9 @@ import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { listCategories } from "@/lib/finance/category";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 
-import { CreateCategoryForm } from "./create-category-form";
+import { DeleteWithConfirm } from "@/components/delete-with-confirm";
+
+import { CategoryForm } from "./category-form";
 
 export const metadata: Metadata = {
   title: "Kategoriler",
@@ -23,15 +25,19 @@ const TYPE_LABELS: Record<string, string> = {
  * `/accounts` ile aynı desen: URL'de `tenantId` YOKTUR — hangi tenant'ın kategorileri
  * sorusunun tek kaynağı aktif tenant'tır (bkz. `src/app/(app)/accounts/page.tsx`).
  *
- * KAPSAM: liste + oluşturma (issue #50'nin kapsamı). Güncelleme/silme API'si (#49) hazırdır
- * ama arayüzü bu issue'da BİLEREK yapılmadı — hesap ekranında da aynı sınır var; ikisi tek
- * bir "düzenle/sil" issue'sunda birlikte ele alınmalıdır.
+ * KAPSAM: liste + oluşturma + düzenleme/silme (#50, #130). Düzenleme durumu `?edit=<id>`
+ * ile URL'dedir (hesap ekranındaki aynı desen).
  *
  * API'nin `?type` filtresi burada KULLANILMAZ: o filtre işlem formu içindir (gider işlemine
  * yalnızca gider kategorisi seçilebilmelidir, #53). Bu ekranda kullanıcı kategorilerinin
  * tamamını tek listede görür; liste türe göre sıralı geldiği için zaten gruplu okunur.
  */
-export default async function CategoriesPage() {
+export default async function CategoriesPage({
+  searchParams,
+}: {
+  // Next.js 16'da `searchParams` bir Promise'tir.
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const user = await requirePageUser();
   const active = await resolveActiveTenantForUser(user.id);
 
@@ -65,6 +71,13 @@ export default async function CategoriesPage() {
   const categories = await listCategories(tenant.id);
   const canManage = hasPermission(role, PERMISSIONS.MANAGE_CATEGORIES);
 
+  // Düzenlenecek kayıt LİSTEDEN seçilir: liste zaten aktif tenant ile scope'lanmış geldiği
+  // için URL'e yabancı bir id yazmak hiçbir şey açmaz.
+  const params = await searchParams;
+  const editId = typeof params.edit === "string" ? params.edit : null;
+  const editingCategory =
+    canManage && editId ? (categories.find((category) => category.id === editId) ?? null) : null;
+
   return (
     <section className="space-y-8">
       <div className="space-y-2">
@@ -86,7 +99,12 @@ export default async function CategoriesPage() {
             <thead className="text-xs uppercase text-zinc-500 dark:text-zinc-400">
               <tr>
                 <th scope="col" className="py-2 pr-4 font-medium">Kategori</th>
-                <th scope="col" className="py-2 font-medium">Tür</th>
+                <th scope="col" className="py-2 pr-4 font-medium">Tür</th>
+                {canManage && (
+                  <th scope="col" className="py-2 font-medium">
+                    <span className="sr-only">İşlemler</span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -95,9 +113,38 @@ export default async function CategoriesPage() {
                   <td className="py-3 pr-4 font-medium text-zinc-900 dark:text-zinc-100">
                     {category.name}
                   </td>
-                  <td className="py-3 text-zinc-700 dark:text-zinc-300">
+                  <td className="py-3 pr-4 text-zinc-700 dark:text-zinc-300">
                     {TYPE_LABELS[category.type] ?? category.type}
                   </td>
+                  {canManage && (
+                    <td className="py-3 align-top">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                        <Link
+                          href={`/categories?edit=${category.id}`}
+                          className="text-sm text-zinc-700 underline underline-offset-4 dark:text-zinc-300"
+                        >
+                          <span aria-hidden="true">Düzenle</span>
+                          <span className="sr-only">{category.name} kategorisini düzenle</span>
+                        </Link>
+
+                        <DeleteWithConfirm
+                          endpoint={`/api/tenants/${tenant.id}/categories/${category.id}`}
+                          itemLabel={`${category.name} kategorisini sil`}
+                          confirmQuestion={`"${category.name}" kategorisini silmek istiyor musunuz?`}
+                          /* #53'ün kararı: kategori bir ETİKETTİR, silinince bağlı işlemler
+                             SİLİNMEZ, "Kategorisiz" kalır (`onDelete: SetNull`). Kullanıcı bunu
+                             onaylamadan ÖNCE bilmelidir — hesap silmenin aksine burada engel
+                             yoktur, dolayısıyla uyarı tek koruma. */
+                          consequence="Bu kategoriyi kullanan işlemler silinmez, 'Kategorisiz' olarak kalır. Bu işlem geri alınamaz."
+                          messages={{
+                            forbidden: "Bu çalışma alanında kategori silme yetkiniz yok.",
+                            notFound: "Bu kategori artık mevcut değil. Sayfayı yenileyin.",
+                            fallback: "Kategori silinemedi. Lütfen daha sonra tekrar deneyin.",
+                          }}
+                        />
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -109,7 +156,24 @@ export default async function CategoriesPage() {
           DEĞİLDİR — asıl kontrol `requirePermission(MANAGE_CATEGORIES)`'tır (kanıt:
           `security/category-security.spec.ts`); buradaki amaç, MEMBER'a kesin 403 alacağı bir
           form göstermemektir. */}
-      {canManage && <CreateCategoryForm tenantId={tenant.id} />}
+      {canManage &&
+        (editingCategory ? (
+          <div className="space-y-3">
+            <CategoryForm
+              key={editingCategory.id}
+              tenantId={tenant.id}
+              category={editingCategory}
+            />
+            <Link
+              href="/categories"
+              className="text-sm text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
+            >
+              Vazgeç
+            </Link>
+          </div>
+        ) : (
+          <CategoryForm tenantId={tenant.id} />
+        ))}
     </section>
   );
 }

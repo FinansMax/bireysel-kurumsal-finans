@@ -259,6 +259,35 @@ stateless Auth.js JWT mimarisi korunur.
   `prisma.user.update()` çağrısını YAZMAMALI, aynı fonksiyonu kullanmalıdır; aksi halde
   `credentialsChangedAt` bumplanmaz ve revocation o akış için sessizce devre dışı kalır.
 
+### JWT'deki ad profil güncellemesiyle senkron (Issue #113)
+
+`PATCH /api/users/me` ile ad değiştirildikten sonra iki endpoint AYNI soruya farklı cevap
+veriyordu: `GET /api/users/me` güncel adı (DB'den), `GET /api/auth/me` eski adı (JWT'den).
+`token.name` sign-in anında sabitleniyor ve bir sonraki girişe kadar tazelenmiyordu; kullanıcı
+adını değiştirdikten sonra arayüzde eski adını görmeye devam ediyordu.
+
+- **Düzeltme, mevcut sorgunun `select`'ine bir alan eklemekten ibaret.** `jwt` callback'i zaten
+  her istekte `credentialsChangedAt` için tek bir satır okuyor; aynı sorguya `name` eklendi ve
+  `token.name` güncelleniyor. **Ek DB maliyeti yoktur** — bu, davranışla gösterilemeyecek
+  yapısal bir iddia olduğu için `integration/auth-config.spec.ts` callback gövdesini okuyup tek
+  bir `prisma` çağrısı olduğunu doğrulayan bir kaynak-metni testi taşıyor
+  (`get-side-effect-free-pattern.spec.ts` ile aynı yaklaşım).
+- **Ad, revocation kararından SONRA yazılır.** Sıra kayda değer: `jwt` callback'i session
+  revocation'ın kritik kod yoludur ve `null` dönüşü tüm mekanizmayı taşır. Revoke edilecek bir
+  token'a hiç dokunulmaması, ileride bu bloğa eklenecek her şeyin doğru tarafta kalmasını
+  sağlar. Test bunu ayrıca doğrular: adı değişmiş AMA revoke edilmiş bir token yine `null`
+  döner ve `GET /api/auth/me` yine `401` verir.
+- **Kullanıcı satırı yoksa ad da güncellenmez.** Silinmiş kullanıcının token'ı bugün revoke
+  edilmiyor (#26'nın kayda geçmiş kapsam notu); `token.name`'i `undefined`a çekmek o davranışı
+  sessizce değiştirirdi.
+- **Yeniden giriş gerekmez.** Auth.js `session.user`ı `callbacks.jwt` döndükten SONRA token'dan
+  kurar ve token'ı yeniden imzalar (`node_modules/@auth/core/lib/actions/session.js`), yani
+  güncelleme hem yanıta hem tazelenen cookie'ye yansır.
+
+Kanıt: `integration/auth-config.spec.ts` (callback kararı ve sorgu bütçesi) +
+`security/user-profile-security.spec.ts` (uçtan uca: güncelleme öncesi kontrol grubu, iki
+endpoint'in aynı adı döndürmesi, revocation'ın baypas edilmemesi).
+
 ## Kullanıcı Profili (Issue #31)
 
 Authenticated kullanıcının kendi profilini görüntüleyip güncellemesi
@@ -466,9 +495,10 @@ Bu yönlendirme zaten savunmanın son hattı değildir: veriye erişen her API r
   yönlendirmede kullanmak, doğrulaması unutulduğu anda **open redirect**'e dönüşen bir
   yüzeydir. "Giriş sonrası geldiği sayfaya dön" davranışı bu issue'nun kapsamında değildi;
   eklenirse yalnızca `/` ile başlayan (ve `//` ile başlamayan) yollar kabul edilmelidir.
-- **Kabukta e-posta gösterilir, `session.user.name` değil.** JWT'deki `name` profil
-  güncellemesinden sonra bayat kalıyor (açık hata: Issue #113); e-posta bu endpoint'lerle
-  değiştirilemediği için aynı sorunu taşımaz.
+- **Kabukta e-posta gösterilir, `session.user.name` değil.** Gerekçe #113'te ORTADAN KALKTI:
+  JWT'deki `name` artık her istekte tazeleniyor (bkz. "JWT'deki ad profil güncellemesiyle
+  senkron"). Kabuğu ada geçirmek yine de ayrı bir karardır — adı olmayan kullanıcı için ne
+  gösterileceği bir tasarım sorusudur ve #113'ün kapsamında değildi.
 - **Çıkış düğmesi istemci tarafı `signOut()` kullanır** (login/signup ile aynı gerekçe: sunucu
   tarafı `signOut()` `Auth()`'u doğrudan çağırıp `skipCSRFCheck` geçer, HTTP route'u hiç
   çalışmaz). Ayrıca `callbackUrl` ile **tam sayfa** yönlendirme yapılır: yumuşak bir gezinme,

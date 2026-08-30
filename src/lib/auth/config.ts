@@ -66,6 +66,28 @@ export const authConfig: NextAuthConfig = {
      * KAPSAM NOTU: `token.sub`'a karşılık gelen `User` satırı yoksa (silinmiş kullanıcı) revoke
      * EDİLMEZ — `isSessionRevoked()` `credentialsChangedAt`'i `undefined` alır. Silinmiş kullanıcı
      * ele alımı #26'nın kapsamı dışındadır ve bu davranış önceki implementasyonla birebir aynıdır.
+     *
+     * ---
+     *
+     * AD TAZELEME (Issue #113): `token.name` sign-in anında sabitlenir ve profil güncellemesinden
+     * sonra bayat kalırdı — `GET /api/users/me` güncel adı (DB'den), `GET /api/auth/me` eski adı
+     * (JWT'den) döndürüyordu. Aynı kullanıcı için iki farklı ad, aynı üründe.
+     *
+     * Düzeltme, YUKARIDAKİ SORGUNUN `select`'ine bir alan eklemekten ibarettir: ek DB maliyeti
+     * YOKTUR. Revocation kontrolü zaten her istekte bu satırı okuyor.
+     *
+     * SIRA ÖNEMLİ: ad, revocation kararından SONRA yazılır. Önce yazmak, revoke edilecek bir
+     * token'ı gereksizce mutasyona uğratırdı — `null` dönüldüğünde token zaten atılıyor, ama
+     * "reddedilen bir token'a dokunma" sırası, ileride bu bloğa eklenecek her şeyin doğru tarafta
+     * kalmasını sağlar.
+     *
+     * `dbUser` YOKSA AD DA GÜNCELLENMEZ: silinmiş kullanıcının token'ı bugün revoke edilmiyor
+     * (yukarıdaki kapsam notu) ve `token.name`'i `undefined`a çekmek, o davranışı sessizce
+     * değiştirip kabuğa "adsız" bir kullanıcı gösterirdi. Bu issue o kararı taşımaz.
+     *
+     * Auth.js `session.user`ı `callbacks.jwt` DÖNDÜKTEN SONRA token'dan kurar ve token'ı yeniden
+     * imzalar (bkz. `node_modules/@auth/core/lib/actions/session.js`), yani buradaki güncelleme
+     * hem yanıta hem tazelenen cookie'ye yansır — yeniden giriş gerekmez.
      */
     async jwt({ token, user }) {
       if (user || !token.sub) {
@@ -74,11 +96,15 @@ export const authConfig: NextAuthConfig = {
 
       const dbUser = await prisma.user.findUnique({
         where: { id: token.sub },
-        select: { credentialsChangedAt: true },
+        select: { credentialsChangedAt: true, name: true },
       });
 
       if (isSessionRevoked(token.iat, dbUser?.credentialsChangedAt)) {
         return null;
+      }
+
+      if (dbUser) {
+        token.name = dbUser.name;
       }
 
       return token;

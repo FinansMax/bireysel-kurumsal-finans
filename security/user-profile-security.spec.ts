@@ -247,3 +247,92 @@ test.describe("/api/users/me — PATCH yazma sınırları", () => {
     }
   });
 });
+
+/**
+ * Profil güncellemesi ile oturumun taşıdığı ad arasındaki senkron (Issue #113).
+ *
+ * Bu blok, iki endpoint'in AYNI soruya farklı cevap vermediğini uçtan uca kanıtlar:
+ * `GET /api/users/me` adı DB'den okur, `GET /api/auth/me` oturumun JWT içeriğinden. #113'ten
+ * önce ikincisi bir sonraki girişe kadar bayat kalıyordu ve kullanıcı arayüzde eski adını
+ * görmeye devam ediyordu.
+ *
+ * `jwt` callback'i (`src/lib/auth/config.ts`) session revocation'ın kritik kod yoludur; bu
+ * yüzden burada yalnızca "ad tazelendi mi" değil, revocation'ın hâlâ çalıştığı da doğrulanır.
+ */
+test.describe("/api/auth/me — profil güncellemesiyle senkron (Issue #113)", () => {
+  async function authMeName(request: APIRequestContext, cookie: string) {
+    const response = await request.get("/api/auth/me", { headers: { cookie } });
+    expect(response.status()).toBe(200);
+    return ((await response.json()) as { user: { name: string | null } }).user.name;
+  }
+
+  async function usersMeName(request: APIRequestContext, cookie: string) {
+    const response = await request.get("/api/users/me", { headers: { cookie } });
+    expect(response.status()).toBe(200);
+    return ((await response.json()) as { user: { name: string | null } }).user.name;
+  }
+
+  test("ad güncellendikten sonra YENİDEN GİRİŞ OLMADAN güncel ad dönüyor", async ({ request }) => {
+    const { email, cookie } = await createSignedInUser(request);
+    try {
+      // Kontrol grubu: güncelleme ÖNCESİ ad yok. Bu iddia olmadan aşağıdaki beklenti,
+      // "endpoint her zaman bu adı döndürüyor" ihtimalini dışlayamazdı.
+      expect(await authMeName(request, cookie)).toBeNull();
+
+      const patched = await request.patch("/api/users/me", {
+        data: { name: "Guncellenmis Ad" },
+        headers: { cookie },
+      });
+      expect(patched.status()).toBe(200);
+
+      // AYNI oturum cookie'si ile: yeniden giriş yok.
+      expect(await authMeName(request, cookie)).toBe("Guncellenmis Ad");
+    } finally {
+      await cleanup(email);
+    }
+  });
+
+  test("iki endpoint AYNI adı döndürüyor (kaynak ayrışmıyor)", async ({ request }) => {
+    const { email, cookie } = await createSignedInUser(request);
+    try {
+      for (const name of ["Birinci Ad", "Ikinci Ad"]) {
+        const patched = await request.patch("/api/users/me", {
+          data: { name },
+          headers: { cookie },
+        });
+        expect(patched.status()).toBe(200);
+
+        // #113'ün tam olarak tarif ettiği ayrışma: biri DB'den, diğeri JWT'den okuyor.
+        expect(await usersMeName(request, cookie)).toBe(name);
+        expect(await authMeName(request, cookie)).toBe(name);
+      }
+    } finally {
+      await cleanup(email);
+    }
+  });
+
+  test("ad tazeleme SESSION REVOCATION'ı baypas etmiyor", async ({ request }) => {
+    const { email, cookie } = await createSignedInUser(request);
+    try {
+      const patched = await request.patch("/api/users/me", {
+        data: { name: "Taze Ad" },
+        headers: { cookie },
+      });
+      expect(patched.status()).toBe(200);
+      expect(await authMeName(request, cookie)).toBe("Taze Ad");
+
+      // Kritik credential değişikliği: token bundan ÖNCE üretildiği için reddedilmeli.
+      // `jwt` callback'i adı revocation kararından SONRA yazdığı için bu yol değişmemiş
+      // olmalı — #113'ün tek gerçek riski buydu.
+      await prisma.user.update({
+        where: { email },
+        data: { credentialsChangedAt: new Date(Date.now() + 5_000) },
+      });
+
+      const revoked = await request.get("/api/auth/me", { headers: { cookie } });
+      expect(revoked.status()).toBe(401);
+    } finally {
+      await cleanup(email);
+    }
+  });
+});

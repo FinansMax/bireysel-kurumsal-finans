@@ -1,9 +1,14 @@
 import { expect, test } from "@playwright/test";
 
+/**
+ * `/` artık public bir açılış sayfasıdır (eskiden "Proje altyapısı başarıyla çalışıyor."
+ * yazan bir geliştirme ekranıydı). Bu dosya yalnızca "sayfa ayakta mı" sorusunu sorar;
+ * açılış sayfasının içeriği ve oturuma göre davranışı `landing.spec.ts`'tedir.
+ */
 test("ana sayfa açılıyor", async ({ page }) => {
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Bireysel ve Kurumsal Finans SaaS Platformu" }),
+    page.getByRole("heading", { name: "Finansınızı tek bir yerden yönetin.", level: 1 }),
   ).toBeVisible();
 });
 

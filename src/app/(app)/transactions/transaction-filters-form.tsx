@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { FIELD_CLASS, LABEL_CLASS } from "@/components/auth-form";
 
 /**
  * İşlem listesi filtre formu (Issue #56).
@@ -46,9 +47,10 @@ export function TransactionFiltersForm({
   values: ActiveFilterValues;
   hasActiveFilters: boolean;
 }) {
-  const fieldClassName =
-    "w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 outline-none placeholder:text-zinc-400 focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50";
-  const labelClassName = "block text-sm font-medium text-zinc-900 dark:text-zinc-100";
+  // Alan ve etiket sınıfları PAYLAŞILAN sabitlerden gelir: filtre formunun alanları, kayıt
+  // formunun alanlarıyla birebir aynı görünmeli — ikisi aynı ekranda, alt alta duruyor.
+  const fieldClassName = FIELD_CLASS;
+  const labelClassName = LABEL_CLASS;
 
   return (
     <form
@@ -57,9 +59,9 @@ export function TransactionFiltersForm({
       // Kayıt formuyla aynı etiketleri paylaştığı için erişilebilir ad zorunlu (bkz.
       // create-transaction-form.tsx'teki aynı not).
       aria-label="İşlem filtreleri"
-      className="space-y-4 rounded-md border border-zinc-200 p-4 dark:border-zinc-800"
+      className="space-y-4 rounded-panel border border-line bg-surface p-5 shadow-subtle"
     >
-      <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Filtrele</h2>
+      <h2 className="text-sm font-semibold text-strong">Filtrele</h2>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <div className="space-y-1.5">
@@ -150,7 +152,7 @@ export function TransactionFiltersForm({
       <div className="flex items-center gap-4">
         <button
           type="submit"
-          className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          className="rounded-control bg-brand-600 px-3.5 py-2 text-sm font-medium text-white shadow-raised transition-colors duration-150 ease-out-soft hover:bg-brand-700"
         >
           Filtrele
         </button>
@@ -160,7 +162,7 @@ export function TransactionFiltersForm({
         {hasActiveFilters && (
           <Link
             href="/transactions"
-            className="text-sm text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
+            className="text-sm font-medium text-muted underline-offset-4 hover:text-strong hover:underline"
           >
             Filtreleri temizle
           </Link>

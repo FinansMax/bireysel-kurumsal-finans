@@ -1,49 +1,260 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+ * FinansMax tasarım sistemi.
+ *
+ * Buradaki token'lar TEK kaynaktır: sayfalar ham hex yazmaz, `bg-surface`, `text-ink-600`,
+ * `bg-brand-500` gibi utility'leri kullanır. Amaç, "her sayfada biraz farklı bir gri" hâline
+ * gelen dağılmayı baştan imkânsız kılmak.
+ *
+ * İKİ KATMAN VAR ve ayrımı korumak önemli:
+ *
+ * 1. MARKA RAMPALARI (`@theme`, aşağıda) — sabittir, temaya göre değişmez. `brand-500` açık
+ *    temada da koyu temada da aynı mavidir; değişen, onu hangi zeminde kullandığımızdır.
+ * 2. SEMANTİK YÜZEYLER (`:root` + `@theme inline`) — temaya göre DEĞİŞİR. `surface`, `border`,
+ *    `ink` gibi isimler "hangi renk" değil "ne işe yarıyor" der; koyu tema bunları yeniden
+ *    tanımlar, bileşenler hiç değişmez.
+ */
+
+/* ---------------------------------------------------------------------------------------------
+ * 1. Marka rampaları — temadan bağımsız.
+ * ------------------------------------------------------------------------------------------ */
+@theme {
+  /* Birincil eylem rengi. Klasik "SaaS mavisi"nden bilerek biraz daha doygun ve indigoya
+     kaçık: kurumsal ama jenerik değil. */
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #dfe6ff;
+  --color-brand-200: #c3d0ff;
+  --color-brand-300: #9db1ff;
+  --color-brand-400: #7089ff;
+  --color-brand-500: #4b63f5;
+  --color-brand-600: #3a49e0;
+  --color-brand-700: #2f39b8;
+  --color-brand-800: #293293;
+  --color-brand-900: #262f76;
+  --color-brand-950: #171b45;
+
+  /* Büyüme/olumlu accent. Finansta yeşil "kâr" demektir; mint tarafına çekildi ki
+     "muhasebe yeşili" gibi durmasın. */
+  --color-mint-50: #ecfdf6;
+  --color-mint-100: #d1fae8;
+  --color-mint-200: #a7f3d4;
+  --color-mint-300: #6ee7bb;
+  --color-mint-400: #34d3a0;
+  --color-mint-500: #12b886;
+  --color-mint-600: #05936c;
+  --color-mint-700: #047558;
+  --color-mint-800: #065c47;
+  --color-mint-900: #064c3c;
+  --color-mint-950: #022c23;
+
+  /* İkincil accent — yalnızca vurgu ve dekoratif katmanlarda. Ana eylemlerde KULLANILMAZ;
+     iki birincil renk, hiyerarşiyi yok eder. */
+  --color-iris-100: #ece9fe;
+  --color-iris-200: #dcd6fe;
+  --color-iris-300: #c1b6fc;
+  --color-iris-400: #a08cf8;
+  --color-iris-500: #8362f0;
+  --color-iris-600: #7245e2;
+
+  /* Lacivert/ink rampası — metin, koyu yüzeyler ve sidebar. Nötr griden bilerek biraz mavi:
+     ekranda "ısı"sı olan bir siyah, saf griden daha pahalı durur. */
+  --color-ink-50: #f6f7fb;
+  --color-ink-100: #eceef6;
+  --color-ink-200: #d8dced;
+  --color-ink-300: #b6bdd7;
+  --color-ink-400: #8b95b8;
+  --color-ink-500: #68729b;
+  --color-ink-600: #515a80;
+  --color-ink-700: #414868;
+  --color-ink-800: #2c3350;
+  --color-ink-900: #1c2340;
+  --color-ink-950: #0e1226;
+
+  /* Uyarı/negatif. Kırmızı BİLEREK az doygun: finans tablolarında her gider satırını alarma
+     çeviren bir kırmızı, gerçek hataları görünmez kılar. */
+  --color-danger-50: #fef2f3;
+  --color-danger-100: #fde3e5;
+  --color-danger-200: #fbccd1;
+  --color-danger-300: #f7a3ac;
+  --color-danger-400: #f06e7f;
+  --color-danger-500: #e14259;
+  --color-danger-600: #cc2a45;
+  --color-danger-700: #ab1f38;
+  --color-danger-800: #8f1d33;
+  --color-danger-900: #7a1c30;
+
+  /*
+   * RADIUS HİYERARŞİSİ — her şey `rounded-3xl` değil.
+   *
+   * Kural: öğe ne kadar büyükse yarıçapı o kadar büyük. Bir badge ile bir panel aynı yarıçapı
+   * kullanırsa ikisi de "aynı boyutta" hissettirir ve hiyerarşi kaybolur.
+   */
+  --radius-badge: 0.375rem;
+  --radius-control: 0.5rem;
+  --radius-card: 0.75rem;
+  --radius-panel: 1rem;
+  --radius-showcase: 1.25rem;
+
+  /*
+   * GÖLGELER — renkli, siyah değil. Ink tonunda düşük opaklıkta bir gölge, saf siyah
+   * gölgenin "kirli" görünümü yerine yüzeyle aynı ışığı paylaşır.
+   */
+  --shadow-subtle: 0 1px 2px 0 rgb(14 18 38 / 0.05);
+  --shadow-raised:
+    0 1px 2px -1px rgb(14 18 38 / 0.08), 0 4px 12px -2px rgb(14 18 38 / 0.06);
+  --shadow-float:
+    0 2px 4px -2px rgb(14 18 38 / 0.1), 0 12px 32px -8px rgb(14 18 38 / 0.14);
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /*
+   * Hareket BİLEREK çok az: iki yavaş, sonsuz ve KESİNTİSİZ döngü. Giriş animasyonu
+   * (fade-in/slide-up) kullanılmadı — sunucuda render edilen bir sayfada içeriğin gecikmeli
+   * belirmesi, hızlı bir sayfayı yavaş gösterir. Buradaki hareket yalnızca dekoratif
+   * katmanlardadır ve `prefers-reduced-motion` ile tamamen susar (bkz. base katmanı).
+   */
+  --animate-drift: drift 9s var(--ease-out-soft) infinite;
+  --animate-drift-slow: drift 13s var(--ease-out-soft) infinite;
 }
 
-/*
- * Font yığını AÇIK olarak yazılır; webfont YOKTUR (Issue #131).
- *
- * Önceden `--font-sans: var(--font-geist-sans)` vardı ve o değişkeni `next/font/google` ile
- * indirilen Geist doldururdu. İki maliyeti vardı — build zamanı ağ bağımlılığı ve ziyaretçi
- * başına iki gereksiz woff2 indirmesi — ve karşılığında hiçbir şey vermiyordu: `body` aşağıda
- * `Arial` diyordu, dolayısıyla ekrandaki her metin zaten Arial'la çiziliyordu. Gerekçenin tamamı
- * `layout.tsx`'te.
- *
- * YIĞIN BİLEREK `Arial` İLE BAŞLIYOR: bu issue bir kararsızlık/bağımlılık temizliğidir, görünüm
- * değişikliği değil. Önceki `body` kuralı da `Arial, Helvetica, sans-serif` idi, yani ekrandaki
- * sonuç birebir korunuyor ve değişiklik saf kazanç oluyor (iki indirme + ağ bağımlılığı eksi).
- *
- * BİLİNEN SINIR / SONRAKİ ADIM: modern bir "native" yığın (`-apple-system`, `Segoe UI`, `Roboto`
- * ile başlayan) her platformda kendi arayüz fontunu kullanır ve genellikle daha iyi görünür —
- * ama Windows'ta Arial yerine Segoe UI render eder, yani GERÇEK bir görünüm değişikliğidir ve
- * ayrı bir karardır. Buraya karıştırılmadı.
- */
+/* ---------------------------------------------------------------------------------------------
+ * 2. Semantik yüzeyler — temaya göre değişir.
+ * ------------------------------------------------------------------------------------------ */
+:root {
+  /* Sayfa zemini SAF BEYAZ DEĞİL: çok hafif soğuk-nötr bir kırık beyaz, üzerindeki beyaz
+     kartların "yüzey" olarak okunmasını sağlar. Saf beyaz üzerinde beyaz kart görünmez. */
+  --canvas: #f7f8fb;
+  --surface: #ffffff;
+  --surface-muted: #f2f4f9;
+  --surface-inset: #eef1f7;
+
+  --border-subtle: #e4e8f0;
+  --border-strong: #d2d8e6;
+
+  --text-strong: #0e1226;
+  --text-default: #2c3350;
+  --text-muted: #68729b;
+  --text-faint: #8b95b8;
+
+  /* Koyu yüzey (sidebar, hero) — açık temada da KOYUDUR; marka karakterinin taşıyıcısı. */
+  --shell: #10142c;
+  --shell-raised: #1a2044;
+  --shell-border: #2a3160;
+  --shell-text: #e7eaf6;
+  --shell-text-muted: #a3abd0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #0a0d1c;
+    --surface: #12162e;
+    --surface-muted: #181d39;
+    --surface-inset: #1e2444;
+
+    --border-subtle: #262c50;
+    --border-strong: #333a63;
+
+    --text-strong: #f2f4fb;
+    --text-default: #d5daee;
+    --text-muted: #99a2c6;
+    --text-faint: #7b85ac;
+
+    --shell: #0d1128;
+    --shell-raised: #171c3c;
+    --shell-border: #272e58;
+    --shell-text: #eaedf8;
+    --shell-text-muted: #a3abd0;
+  }
+}
+
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: Arial, Helvetica, sans-serif;
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-inset: var(--surface-inset);
+
+  --color-line: var(--border-subtle);
+  --color-line-strong: var(--border-strong);
+
+  --color-strong: var(--text-strong);
+  --color-body: var(--text-default);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+
+  --color-shell: var(--shell);
+  --color-shell-raised: var(--shell-raised);
+  --color-shell-line: var(--shell-border);
+  --color-shell-text: var(--shell-text);
+  --color-shell-muted: var(--shell-text-muted);
+
+  /*
+   * TİPOGRAFİ — webfont YOK, native sistem yığını.
+   *
+   * #131/#142 `next/font/google`'ı kaldırdı: build zamanında Google'a çıkan bir bağımlılıktı ve
+   * indirilen font hiçbir yerde render edilmiyordu. O karar KORUNUYOR — buraya `next/font`
+   * geri getirilmemeli.
+   *
+   * Ama yığın #142'nin bıraktığı `Arial` ile başlamıyor. #142 Arial'ı bilerek seçti çünkü o
+   * issue bir bağımlılık temizliğiydi ve "görünüm değişmesin" kısıtı vardı; kendi notu da
+   * native yığını "sonraki adım" olarak işaretliyordu. Bu tasarım sistemi tam olarak o adımdır:
+   * her platform kendi arayüz fontunu kullanır (Windows'ta Segoe UI, macOS'ta San Francisco),
+   * `Arial` yığının sonunda son çare olarak kalır.
+   *
+   * Rakamlar için ayrı bir aile tanımlanmaz — sayısal hizalama `tabular-nums` ile yapılır
+   * (bkz. `money.tsx`).
+   *
+   * BİLİNEN SINIR: marka fontu hâlâ yok. İstenirse `next/font/local` + repoya alınmış woff2
+   * ile eklenmeli; `next/font/google`a dönmek build'in ağ bağımlılığını geri getirir.
+   */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial,
+    sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
     monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+body {
+  background: var(--canvas);
+  color: var(--text-default);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * ODAK HALKASI TEK YERDE tanımlanır.
+ *
+ * Tailwind'in varsayılan `outline`'ı bırakılsaydı her bileşende ayrı `focus-visible:`
+ * sınıfları yazmak gerekirdi ve biri unutulduğunda klavye kullanıcısı o öğeyi kaybederdi.
+ * Buradaki kural tüm etkileşimli öğeleri kapsar; bileşenlerin hiçbir şey yapması gerekmez.
+ */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
+    border-radius: var(--radius-control);
+  }
+
+  /* Hareket azaltma tercihi: dekoratif geçişler kapanır. Tercihi yok saymak bir erişilebilirlik
+     hatasıdır, "subtle animasyon" olması onu istisna yapmaz. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  /* Sabit bir liste yerine tema değişkeni: `font-sans` utility'si ile AYNI yığını kullanır,
-     böylece ikisi ayrışamaz. Önceki hâlde tam da bu ayrışma vardı — `body` Arial derken
-     `font-sans` Geist'e çözülüyordu ve indirilen font hiçbir yerde basılmıyordu. */
-  font-family: var(--font-sans);
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -0.5rem, 0);
+  }
 }

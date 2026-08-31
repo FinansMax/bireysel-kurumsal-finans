@@ -464,6 +464,156 @@ yazıyordu). Bu mismatch baştan beri vardı; client-side JS'e ihtiyaç duyan il
 eklenene kadar görünmedi. `next.config.ts`'teki `allowedDevOrigins` yalnızca development'ı
 etkiler, production build'de karşılığı yoktur.
 
+## Tasarım Sistemi
+
+Arayüz tek bir görsel dile bağlıdır ve o dilin kaynağı `src/app/globals.css`'tir. Sayfalar ham
+renk yazmaz; `bg-surface`, `text-muted`, `bg-brand-600`, `rounded-card` gibi token'ları
+kullanır. Amaç, "her ekranda biraz farklı bir gri" hâline gelen dağılmayı baştan imkânsız
+kılmak.
+
+### İki katmanlı token yapısı
+
+Ayrımı korumak önemli, çünkü koyu tema desteğinin tamamı buna dayanıyor:
+
+1. **Marka rampaları** (`@theme`) — temadan BAĞIMSIZ. `brand-500` açık temada da koyu temada da
+   aynı mavidir; değişen, onu hangi zeminde kullandığımızdır.
+2. **Semantik yüzeyler** (`:root` + `@theme inline`) — temaya göre DEĞİŞİR. `surface`, `line`,
+   `muted` gibi isimler "hangi renk" değil "ne işe yarıyor" der. Koyu tema yalnızca bu
+   değişkenleri yeniden tanımlar; **hiçbir bileşen değişmez**.
+
+Bu yüzden koyu temada tek tek `dark:` sınıfı yazmak gerekmiyor — yalnızca marka rampalarının
+tonunu değiştirmek gerektiğinde (`dark:bg-brand-950` gibi) kullanılıyor.
+
+### Palet
+
+| Rol | Aile | Nerede |
+| --- | --- | --- |
+| Birincil eylem | `brand` — doygun, indigoya kaçık mavi | CTA, aktif menü, odak halkası, ikon kapları |
+| Olumlu / gelir | `mint` — yeşil, mint tarafına çekilmiş | gelir tutarları, "gelir" etiketi, güven vurguları |
+| İkincil accent | `iris` — yumuşak menekşe | yalnızca dekoratif katmanlar ve kategori etiketleri |
+| Metin ve koyu yüzey | `ink` — nötr griden bilerek biraz mavi | metin, sidebar, hero güven paneli |
+| Uyarı | `danger` — bilerek AZ doygun kırmızı | silme eylemleri, form hataları |
+
+**Kırmızı bilerek soluk:** finans tablolarında her gider satırını alarma çeviren bir kırmızı,
+gerçek hataları görünmez kılar. Gider tutarları bu yüzden kırmızı DEĞİL, nötr güçlü metin
+rengindedir; yönü işaret (`+`/`-`) taşır.
+
+### Gradyan bütçesi
+
+Gradyan yasak değil ama **sayılıdır** ve yalnızca dört yerde kullanılıyor: marka işareti, hero
+başlığındaki tek kelime, hero/kapanış bölümlerinin ışık lekeleri ve ürün önizlemesinin arka
+katmanı. Kartlara, düğmelere ve bölüm zeminlerine gradyan verilmedi — her yüzey gradyanlı
+olduğunda hiçbiri vurgu olmaz.
+
+### Radius hiyerarşisi
+
+Her şey `rounded-3xl` değil; yarıçap öğenin BOYUTUYLA artar:
+`badge` (0.375rem) → `control` (0.5rem) → `card` (0.75rem) → `panel` (1rem) →
+`showcase` (1.25rem). Bir badge ile bir panel aynı yarıçapı paylaşırsa ikisi de aynı boyutta
+hissettirir ve hiyerarşi kaybolur.
+
+### Odak halkası tek yerde
+
+`globals.css`'teki `:focus-visible` kuralı TÜM etkileşimli öğeleri kapsar. Her bileşende ayrı
+`focus-visible:` sınıfları yazmak, biri unutulduğunda klavye kullanıcısının o öğeyi kaybetmesi
+demekti. Aynı dosyada `prefers-reduced-motion` de global olarak karşılanır.
+
+### Paylaşılan bileşenler
+
+`src/components/ui/` altında ve hepsi SAF SUNUM — veri okumaz, oturum bilmez:
+
+- `icons.tsx` — tek ikon ailesi (24 birim, 1.75 çizgi). **Emoji kullanılmaz:** platformdan
+  platforma değişir, renk sistemine uymaz, ekran okuyucuda gürültü üretir. İkon kütüphanesi de
+  eklenmedi (CLAUDE.md §4).
+- `money.tsx` — para gösterimi. **Değer hiç sayıya çevrilmez** (invariant #10): `Money` yalnızca
+  tipografik hiyerarşi kurar (`tabular-nums`, işaret, soluk para birimi). İşaret TUTARDAN değil
+  işlemin yönünden gelir, çünkü `Transaction.amount` daima pozitiftir (#53).
+- `badge.tsx` — etiketler. `CategoryBadge` tonu adın **hash**'inden türetir: aynı kategori her
+  ekranda aynı rengi alır. Rastgele ya da dizideki sıraya göre atama bu garantiyi vermezdi ve
+  renk bir bilgi değil gürültü olurdu. "Kategorisiz" renkli ton ALMAZ — o bir kategori değil,
+  kategorinin yokluğudur.
+- `table.tsx` — tablo iskeleti. `TableScroll` olmadan geniş bir tablo SAYFANIN kendisini yatay
+  kaydırılır hâle getirir ve tüm düzen bozulur; kaydırma tablonun kutusunda kalmalı.
+- `empty-state.tsx` — boş durumlar. "Kayıt yok" yazıp bırakmak kullanıcıyı çıkmazda bırakır;
+  desen üç şeyi birlikte verir: görsel çapa, ne olduğunu söyleyen cümle ve **mümkünse** bir
+  eylem. Eylem opsiyoneldir çünkü yetkisi olmayan bir kullanıcıya "ilkini oluştur" demek, kesin
+  `403` alacağı bir yola davet etmek olurdu.
+- `surfaces.tsx` — `PageHeader`, `Panel`, `PanelHeader`, `IconTile`. `Panel`'in `tone`'u
+  dekorasyon değil HİYERARŞİ aracıdır: bir ekrandaki bütün kartlar aynı beyaz kutu olduğunda
+  hiçbiri öne çıkmaz. `accent` en fazla bir kart için.
+- `brand-mark.tsx` — marka işareti. Gerçek bir logo geldiğinde dokunulacak tek yer.
+
+`FIELD_CLASS` / `LABEL_CLASS` (`auth-form.tsx`) dışa açıktır: uygulamada `select` alanları da
+var ve onlar `TextField`'ı kullanamaz. Sınıf dizisi her formda elle tekrarlandığında kaçınılmaz
+olarak ayrışıyordu — bir ekranda kenarlık başka tonda, diğerinde odak rengi yok.
+
+### Kabuk: sidebar
+
+Uygulama kabuğu üst navigasyondan **sidebar**'a geçti (`app-sidebar.tsx`). Kararlar:
+
+- **Tek bir `<nav aria-label="Ana menü">` var.** Masaüstü ve mobil için iki ayrı nav render
+  etmek, erişilebilirlik ağacında aynı isimde iki navigasyon bırakır ve ekran okuyucuya aynı
+  menüyü iki kez okur. Aynı DOM düğümü CSS ile yer değiştiriyor: mobilde ekran dışından kayan
+  bir panel, `lg` üstünde sabit bir kolon.
+- **Sidebar bir `<header>`dir** (`banner` rolü), `<aside>` değil: marka ve birincil
+  navigasyonu barındıran bölge tanımı gereği banner'dır.
+- **Aktif öğe ÜÇ kanaldan belli olur** — dolgulu zemin, marka renginde ikon ve sol kenarda ince
+  şerit — artı `aria-current="page"`. Tek kanal (yalnızca renk) renk körlüğünde kaybolurdu.
+- **Menü iki gruba ayrıldı** ("Finans", "Yönetim"): sekiz öğelik düz bir liste, hangisinin para
+  hareketiyle hangisinin yönetimle ilgili olduğunu söylemiyordu.
+- Mobil üst çubuk `fixed`tir; telafi boşluğu **içerik kabına** verilir. Sidebar'ın yanına boş
+  bir `div` koymak denendi ve çalışmadı — kabuk bir flex SATIRI olduğu için o div dikey değil
+  yatay yer kaplıyordu.
+
+Sidebar sola taşındığı için ekranlardaki "Önce **üstteki** menüden bir çalışma alanı seçin"
+kopyası yanlış hâle geldi ve yön belirtmeyen bir cümleye çevrildi; ilgili E2E testleri de
+güncellendi.
+
+### Auth ekranları: split layout
+
+`AuthCard` iki kolonlu: solda koyu marka paneli (ürünün GERÇEK yetenekleri), sağda yalnızca
+form. Beyaz bir zeminde ortada duran bir form, kullanıcının açılış sayfasından getirdiği
+bağlamı koparıyordu.
+
+**Mobilde sol panel hiç render EDİLMEZ** (`hidden lg:flex`) — DOM'da duran gizli bir dekorasyon
+değil. Küçük ekranda tek iş formu doldurmaktır ve kaydırılacak bir tanıtım paneli o işin önüne
+geçerdi. Kullanılabilirlik görselliğin önünde.
+
+### Panel (`/dashboard`) ve kapsam sınırı
+
+Panel artık aktif çalışma alanının **hesap kartlarını** ve **son beş hareketini** gösteriyor.
+Hepsi MEVCUT servis fonksiyonlarından okunur (`listAccounts`, `listTransactions`,
+`listCategories`) — yeni bir API, servis ya da sorgu eklenmedi.
+
+**Bilerek YOK — "toplam bakiye", "bu ayın geliri/gideri" gibi özetler:**
+
+1. Hesaplar farklı para birimlerinde olabilir; bunları toplamak anlamsız bir sayı üretirdi.
+2. Dönemsel toplamlar para aritmetiği demektir ve bu, sunum katmanına değil `src/lib/finance`
+   içine ait bir iş kuralıdır (Epic 7 / #62'nin konusu).
+
+Yani paneldeki her sayı, başka bir ekranda da aynen görünen gerçek bir değerdir; hiçbiri o
+sayfada hesaplanmaz. **Grafik de yok** — üründe hiç veri görselleştirmesi bulunmuyor ve bir
+tanesini yalnızca tasarım için eklemek, var olmayan bir ekranı vaat etmek olurdu.
+
+### Tipografi: webfont yok, native yığın
+
+`--font-sans` bir **native sistem yığınıdır**; hiçbir webfont indirilmez. #131/#142'nin kararı
+(bkz. "Fontlar: webfont yok") burada **korunuyor** — `next/font/google` build zamanında Google'a
+çıkan bir bağımlılıktı ve geri getirilmemelidir.
+
+Değişen tek şey yığının SIRASI: #142 onu `Arial` ile başlatmıştı, bu tasarım sistemi
+`-apple-system` / `Segoe UI` / `Roboto` ile başlatıyor. Çelişki değil, o kararın kendi
+"sonraki adım" notunun uygulanması: #142 Arial'ı bilerek seçti çünkü o issue bir **bağımlılık
+temizliğiydi** ve "görünüm değişmesin" kısıtı vardı; kendi notu da native yığını ayrı bir
+görünüm kararı olarak işaretliyordu. Bu tasarım sistemi tam olarak o karardır. `Arial` yığında
+son çare olarak duruyor.
+
+Başlıklarda `tracking-tight` + `text-balance`, gövde metinlerinde `text-pretty`; finansal
+değerlerde `tabular-nums` (rakamlar eşit genişlikte basılır, kolonlar birbirini hizalar).
+
+**Bilinen sınır:** marka fontu hâlâ yok. İstenirse `next/font/local` + repoya alınmış woff2 ile
+eklenmeli — `next/font/google`a dönmek build'in ağ bağımlılığını geri getirir.
+
 ## Public Açılış Sayfası (`/`)
 
 `/` artık public bir ürün açılış sayfasıdır (`src/app/page.tsx`). Öncesinde

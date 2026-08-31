@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { MembershipRole } from "@prisma/client";
 
 import { requirePageUser } from "@/lib/auth/page-guard";
 import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { listMembers } from "@/lib/tenants/membership";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
+
+import { EmptyState } from "@/components/ui/empty-state";
+import { IconUsers, IconWorkspace } from "@/components/ui/icons";
+import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/ui/surfaces";
 
 import { MembersTable } from "./members-table";
 
@@ -38,14 +42,14 @@ export default async function MembersPage() {
   // yoktur. Kullanıcı seçiciyi (Issue #40) kullanmaya yönlendirilir.
   if (!active) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">Üyeler</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Önce üstteki menüden bir çalışma alanı seçin.{" "}
-          <Link href="/tenants/new" className="underline underline-offset-4">
-            Yeni bir tane oluşturabilirsiniz.
-          </Link>
-        </p>
+      <section className="space-y-8">
+        <PageHeader title="Üyeler" />
+        <EmptyState
+          icon={<IconWorkspace className="size-5" />}
+          title="Çalışma alanı seçilmedi"
+          description="Önce menüden bir çalışma alanı seçin. Yeni bir tane de oluşturabilirsiniz."
+          action={{ label: "Çalışma alanı oluştur", href: "/tenants/new" }}
+        />
       </section>
     );
   }
@@ -57,11 +61,13 @@ export default async function MembersPage() {
   // otomatik olarak doğru davranır.
   if (!hasPermission(role, PERMISSIONS.VIEW_MEMBERS)) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">Üyeler</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Bu çalışma alanının üyelerini görüntüleme yetkiniz yok.
-        </p>
+      <section className="space-y-8">
+        <PageHeader title="Üyeler" />
+        <EmptyState
+          icon={<IconUsers className="size-5" />}
+          title="Görüntüleme yetkiniz yok"
+          description="Bu çalışma alanının üyelerini görmek için yöneticinizden yetki isteyin."
+        />
       </section>
     );
   }
@@ -71,13 +77,15 @@ export default async function MembersPage() {
 
   return (
     <section className="space-y-6">
-      <div className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">Üyeler</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          <span className="font-medium text-zinc-900 dark:text-zinc-100">{tenant.name}</span>{" "}
-          çalışma alanındaki kişiler. Bu alandaki rolünüz: {role}.
-        </p>
-      </div>
+      <PageHeader
+        title="Üyeler"
+        description={
+          <>
+            <span className="font-medium text-strong">{tenant.name}</span> çalışma alanındaki
+            kişiler. Bu alandaki rolünüz: <Badge tone="brand">{role}</Badge>
+          </>
+        }
+      />
 
       <MembersTable
         tenantId={tenant.id}

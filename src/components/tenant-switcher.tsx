@@ -32,7 +32,7 @@ export function TenantSwitcher({
   // yalnızca durum bildirilir.
   if (tenants.length === 0) {
     return (
-      <span className="text-sm text-zinc-500 dark:text-zinc-500">Çalışma alanı yok</span>
+      <span className="block rounded-control border border-dashed border-shell-line px-3 py-2 text-sm text-shell-muted">Çalışma alanı yok</span>
     );
   }
 
@@ -80,7 +80,7 @@ export function TenantSwitcher({
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="space-y-1.5">
       {/* Etiket `sr-only` ile görsel olarak gizlenir ama DOM'da kalır: dar header'da yer
           kaplamadan, ekran okuyucular (ve E2E testleri) alanı gerçek bir isimle bulur.
           `aria-label` yerine gerçek bir `<label>` tercih edildi — `htmlFor`/`id` eşleşmesi
@@ -94,7 +94,7 @@ export function TenantSwitcher({
         disabled={pending}
         defaultValue={activeTenantId ?? ""}
         onChange={handleChange}
-        className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+        className="w-full rounded-control border border-shell-line bg-shell-raised px-3 py-2 text-sm font-medium text-shell-text transition-colors duration-150 ease-out-soft hover:border-brand-500/60 disabled:opacity-60"
       >
         {/* Aktif tenant yoksa seçilebilir bir placeholder gösterilir. Sunucunun sayfa
             render'ı sırasında "ilk tenant'ı otomatik aktif yap" YAPILAMAZ: bu bir GET
@@ -112,7 +112,7 @@ export function TenantSwitcher({
       </select>
 
       {error && (
-        <p role="alert" className="text-sm text-red-700 dark:text-red-300">
+        <p role="alert" className="text-xs text-danger-300">
           {error}
         </p>
       )}

@@ -3,6 +3,8 @@
 import { signOut } from "next-auth/react";
 import { useState } from "react";
 
+import { IconSignOut } from "@/components/ui/icons";
+
 /**
  * Uygulama kabuğundaki çıkış düğmesi (Issue #39).
  *
@@ -31,8 +33,9 @@ export function SignOutButton() {
         // hata durumunda düğmenin kilitli kalmaması için `catch` ile açılır.
         void signOut({ callbackUrl: "/login" }).catch(() => setPending(false));
       }}
-      className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-900 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-900"
+      className="flex w-full items-center gap-2.5 rounded-control px-2.5 py-2 text-sm font-medium text-shell-muted transition-colors duration-150 ease-out-soft hover:bg-shell-raised hover:text-shell-text disabled:cursor-not-allowed disabled:opacity-60"
     >
+      <IconSignOut className="size-4.5" />
       {pending ? "Çıkış yapılıyor…" : "Çıkış yap"}
     </button>
   );

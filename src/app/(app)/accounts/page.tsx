@@ -1,12 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { DeleteWithConfirm } from "@/components/delete-with-confirm";
+import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
+import { IconWallet, IconWorkspace } from "@/components/ui/icons";
+import { Money } from "@/components/ui/money";
+import { IconTile, PageHeader } from "@/components/ui/surfaces";
+import { Table, Tbody, Td, Th, Thead, TableScroll, Tr } from "@/components/ui/table";
 import { requirePageUser } from "@/lib/auth/page-guard";
 import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { listAccounts } from "@/lib/finance/account";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
-
-import { DeleteWithConfirm } from "@/components/delete-with-confirm";
 
 import { AccountForm } from "./account-form";
 
@@ -27,9 +32,9 @@ const TYPE_LABELS: Record<string, string> = {
  *
  * KAPSAM: liste + oluşturma + düzenleme/silme (#47, #130).
  *
- * DÜZENLEME DURUMU URL'DE: `?edit=<id>` verildiğinde liste yerine dolu bir düzenleme formu
- * gösterilir. Filtre formundaki (#56) aynı gerekçe — durum React state'inde değil URL'de
- * olduğu için tarayıcı geri tuşu ve sayfa yenileme doğru çalışır.
+ * DÜZENLEME DURUMU URL'DE: `?edit=<id>` verildiğinde dolu bir düzenleme formu gösterilir ve
+ * ilgili satır listede İŞARETLENİR. Durum React state'inde değil URL'de olduğu için tarayıcı
+ * geri tuşu ve sayfa yenileme doğru çalışır (filtre formundaki #56 ile aynı gerekçe).
  */
 export default async function AccountsPage({
   searchParams,
@@ -42,14 +47,14 @@ export default async function AccountsPage({
 
   if (!active) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">Hesaplar</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Önce üstteki menüden bir çalışma alanı seçin.{" "}
-          <Link href="/tenants/new" className="underline underline-offset-4">
-            Yeni bir tane oluşturabilirsiniz.
-          </Link>
-        </p>
+      <section className="space-y-8">
+        <PageHeader title="Hesaplar" />
+        <EmptyState
+          icon={<IconWorkspace className="size-5" />}
+          title="Çalışma alanı seçilmedi"
+          description="Önce menüden bir çalışma alanı seçin. Yeni bir tane de oluşturabilirsiniz."
+          action={{ label: "Çalışma alanı oluştur", href: "/tenants/new" }}
+        />
       </section>
     );
   }
@@ -58,11 +63,13 @@ export default async function AccountsPage({
 
   if (!hasPermission(role, PERMISSIONS.VIEW_ACCOUNTS)) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">Hesaplar</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Bu çalışma alanının hesaplarını görüntüleme yetkiniz yok.
-        </p>
+      <section className="space-y-8">
+        <PageHeader title="Hesaplar" />
+        <EmptyState
+          icon={<IconWallet className="size-5" />}
+          title="Görüntüleme yetkiniz yok"
+          description="Bu çalışma alanının hesaplarını görmek için yöneticinizden yetki isteyin."
+        />
       </section>
     );
   }
@@ -80,58 +87,67 @@ export default async function AccountsPage({
 
   return (
     <section className="space-y-8">
-      <div className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">Hesaplar</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          <span className="font-medium text-zinc-900 dark:text-zinc-100">{tenant.name}</span>{" "}
-          çalışma alanının banka ve kasa hesapları.
-        </p>
-      </div>
+      <PageHeader
+        title="Hesaplar"
+        description={
+          <>
+            <span className="font-medium text-strong">{tenant.name}</span> çalışma alanının banka
+            ve kasa hesapları.
+          </>
+        }
+      />
 
       {accounts.length === 0 ? (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Henüz hesap yok.
-          {canManage ? " Aşağıdaki formla ilkini oluşturun." : ""}
-        </p>
+        <EmptyState
+          icon={<IconWallet className="size-5" />}
+          title="Henüz hesap yok"
+          description={
+            canManage
+              ? "İlk banka ya da kasa hesabınızı aşağıdaki formla oluşturun. Bakiye, kaydettiğiniz her işlemle birlikte kendiliğinden güncellenir."
+              : "Bu çalışma alanında henüz hesap tanımlanmamış."
+          }
+        />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[32rem] text-left text-sm">
-            <thead className="text-xs uppercase text-zinc-500 dark:text-zinc-400">
-              <tr>
-                <th scope="col" className="py-2 pr-4 font-medium">Hesap</th>
-                <th scope="col" className="py-2 pr-4 font-medium">Tür</th>
-                <th scope="col" className="py-2 pr-4 font-medium">Bakiye</th>
-                {canManage && (
-                  <th scope="col" className="py-2 font-medium">
-                    <span className="sr-only">İşlemler</span>
-                  </th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
+        <TableScroll>
+          <Table minWidth="34rem">
+            <Thead>
+              <Th>Hesap</Th>
+              <Th>Tür</Th>
+              <Th align="right">Bakiye</Th>
+              {canManage && <Th srOnly>İşlemler</Th>}
+            </Thead>
+            <Tbody>
               {accounts.map((account) => (
-                <tr key={account.id} className="border-t border-zinc-200 dark:border-zinc-800">
-                  <td className="py-3 pr-4 font-medium text-zinc-900 dark:text-zinc-100">
-                    {account.name}
-                  </td>
-                  <td className="py-3 pr-4 text-zinc-700 dark:text-zinc-300">
-                    {TYPE_LABELS[account.type] ?? account.type}
-                  </td>
+                <Tr key={account.id} highlighted={account.id === editingAccount?.id}>
+                  <Td emphasis>
+                    <span className="flex items-center gap-2.5">
+                      <IconTile tone="neutral">
+                        <IconWallet className="size-4" />
+                      </IconTile>
+                      {account.name}
+                    </span>
+                  </Td>
+                  <Td>
+                    <Badge tone="outline">{TYPE_LABELS[account.type] ?? account.type}</Badge>
+                  </Td>
                   {/* BAKİYE HAM STRING OLARAK GÖSTERİLİR, `Intl.NumberFormat` ile DEĞİL:
                       biçimlendirme değeri önce `Number`'a çevirmeyi gerektirir ve bu, para
                       için yasak olan kayan nokta dönüşümünü (invariant #10) arayüz katmanından
                       geri getirirdi. Yerelleştirilmiş gösterim, string üzerinde çalışan ayrı
-                      bir yardımcı ile ele alınmalıdır — bu issue'nun kapsamı değil. */}
-                  <td className="py-3 pr-4 tabular-nums text-zinc-900 dark:text-zinc-100">
-                    {account.balance} {account.currency}
-                  </td>
+                      bir yardımcı ile ele alınmalıdır — bu issue'nun kapsamı değil.
+
+                      Hesap bakiyesinde İŞARET (+/−) EKLENMEZ: bakiye bir yön değil bir
+                      durumdur; eksiye düşmüşse değerin kendisi zaten "-" ile başlar. */}
+                  <Td align="right">
+                    <Money value={account.balance} currency={account.currency} size="lg" />
+                  </Td>
                   {canManage && (
-                    <td className="py-3 align-top">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                    <Td align="right">
+                      <div className="flex items-center justify-end gap-3">
                         {/* Düzenleme bir LİNK: form durumunu URL'e yazar, yan etkisi yoktur. */}
                         <Link
                           href={`/accounts?edit=${account.id}`}
-                          className="text-sm text-zinc-700 underline underline-offset-4 dark:text-zinc-300"
+                          className="text-sm font-medium text-brand-600 transition-colors duration-150 ease-out-soft hover:text-brand-700 dark:text-brand-300"
                         >
                           <span aria-hidden="true">Düzenle</span>
                           <span className="sr-only">{account.name} hesabını düzenle</span>
@@ -153,13 +169,13 @@ export default async function AccountsPage({
                           }}
                         />
                       </div>
-                    </td>
+                    </Td>
                   )}
-                </tr>
+                </Tr>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </Tbody>
+          </Table>
+        </TableScroll>
       )}
 
       {/* Formlar yalnızca yetkili role render edilir. Bu bir güvenlik kontrolü DEĞİLDİR —
@@ -177,7 +193,7 @@ export default async function AccountsPage({
             <AccountForm key={editingAccount.id} tenantId={tenant.id} account={editingAccount} />
             <Link
               href="/accounts"
-              className="text-sm text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
+              className="inline-block text-sm font-medium text-muted underline-offset-4 hover:text-strong hover:underline"
             >
               Vazgeç
             </Link>

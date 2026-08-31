@@ -267,7 +267,7 @@ test.describe("/accounts — yetki ve tenant durumu", () => {
 
     await page.goto("/accounts");
 
-    await expect(page.getByText("Önce üstteki menüden bir çalışma alanı seçin")).toBeVisible();
+    await expect(page.getByText("Önce menüden bir çalışma alanı seçin")).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(0);
     await expect(page.getByLabel("Hesap adı")).toHaveCount(0);
   });

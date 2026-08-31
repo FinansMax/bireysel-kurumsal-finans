@@ -280,7 +280,7 @@ test.describe("/categories — yetki ve tenant durumu", () => {
 
     await page.goto("/categories");
 
-    await expect(page.getByText("Önce üstteki menüden bir çalışma alanı seçin")).toBeVisible();
+    await expect(page.getByText("Önce menüden bir çalışma alanı seçin")).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(0);
     await expect(page.getByLabel("Kategori adı")).toHaveCount(0);
   });

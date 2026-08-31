@@ -7,6 +7,11 @@ import { listCategories } from "@/lib/finance/category";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 
 import { DeleteWithConfirm } from "@/components/delete-with-confirm";
+import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
+import { IconTag, IconWorkspace } from "@/components/ui/icons";
+import { IconTile, PageHeader } from "@/components/ui/surfaces";
+import { Table, Tbody, Td, Th, Thead, TableScroll, Tr } from "@/components/ui/table";
 
 import { CategoryForm } from "./category-form";
 
@@ -43,14 +48,14 @@ export default async function CategoriesPage({
 
   if (!active) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">Kategoriler</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Önce üstteki menüden bir çalışma alanı seçin.{" "}
-          <Link href="/tenants/new" className="underline underline-offset-4">
-            Yeni bir tane oluşturabilirsiniz.
-          </Link>
-        </p>
+      <section className="space-y-8">
+        <PageHeader title="Kategoriler" />
+        <EmptyState
+          icon={<IconWorkspace className="size-5" />}
+          title="Çalışma alanı seçilmedi"
+          description="Önce menüden bir çalışma alanı seçin. Yeni bir tane de oluşturabilirsiniz."
+          action={{ label: "Çalışma alanı oluştur", href: "/tenants/new" }}
+        />
       </section>
     );
   }
@@ -59,11 +64,13 @@ export default async function CategoriesPage({
 
   if (!hasPermission(role, PERMISSIONS.VIEW_CATEGORIES)) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">Kategoriler</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Bu çalışma alanının kategorilerini görüntüleme yetkiniz yok.
-        </p>
+      <section className="space-y-8">
+        <PageHeader title="Kategoriler" />
+        <EmptyState
+          icon={<IconTag className="size-5" />}
+          title="Görüntüleme yetkiniz yok"
+          description="Bu çalışma alanının kategorilerini görmek için yöneticinizden yetki isteyin."
+        />
       </section>
     );
   }
@@ -80,48 +87,58 @@ export default async function CategoriesPage({
 
   return (
     <section className="space-y-8">
-      <div className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">Kategoriler</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          <span className="font-medium text-zinc-900 dark:text-zinc-100">{tenant.name}</span>{" "}
-          çalışma alanının gelir ve gider kategorileri.
-        </p>
-      </div>
+      <PageHeader
+        title="Kategoriler"
+        description={
+          <>
+            <span className="font-medium text-strong">{tenant.name}</span> çalışma alanının gelir
+            ve gider kategorileri.
+          </>
+        }
+      />
 
       {categories.length === 0 ? (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Henüz kategori yok.
-          {canManage ? " Aşağıdaki formla ilkini oluşturun." : ""}
-        </p>
+        <EmptyState
+          icon={<IconTag className="size-5" />}
+          title="Henüz kategori yok"
+          description={
+            canManage
+              ? "Gelir ve gider için ayrı kategoriler tanımlayın; hareketlerinizi bunlara göre gruplayacaksınız. İlkini aşağıdaki formla oluşturun."
+              : "Bu çalışma alanında henüz kategori tanımlanmamış."
+          }
+        />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[24rem] text-left text-sm">
-            <thead className="text-xs uppercase text-zinc-500 dark:text-zinc-400">
-              <tr>
-                <th scope="col" className="py-2 pr-4 font-medium">Kategori</th>
-                <th scope="col" className="py-2 pr-4 font-medium">Tür</th>
-                {canManage && (
-                  <th scope="col" className="py-2 font-medium">
-                    <span className="sr-only">İşlemler</span>
-                  </th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
+        <TableScroll>
+          <Table minWidth="26rem">
+            <Thead>
+              <Th>Kategori</Th>
+              <Th>Tür</Th>
+              {canManage && <Th srOnly>İşlemler</Th>}
+            </Thead>
+            <Tbody>
               {categories.map((category) => (
-                <tr key={category.id} className="border-t border-zinc-200 dark:border-zinc-800">
-                  <td className="py-3 pr-4 font-medium text-zinc-900 dark:text-zinc-100">
-                    {category.name}
-                  </td>
-                  <td className="py-3 pr-4 text-zinc-700 dark:text-zinc-300">
-                    {TYPE_LABELS[category.type] ?? category.type}
-                  </td>
+                <Tr key={category.id} highlighted={category.id === editingCategory?.id}>
+                  <Td emphasis>
+                    <span className="flex items-center gap-2.5">
+                      <IconTile tone="neutral">
+                        <IconTag className="size-4" />
+                      </IconTile>
+                      {category.name}
+                    </span>
+                  </Td>
+                  <Td>
+                    {/* TÜR RENKLE AYRILIR: gelir mint, gider nötr. Aynı listede iki tür yan yana
+                        durduğu için, metni okumadan ayırt edilebilmesi taramayı hızlandırır. */}
+                    <Badge tone={category.type === "INCOME" ? "mint" : "neutral"}>
+                      {TYPE_LABELS[category.type] ?? category.type}
+                    </Badge>
+                  </Td>
                   {canManage && (
-                    <td className="py-3 align-top">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                    <Td align="right">
+                      <div className="flex items-center justify-end gap-3">
                         <Link
                           href={`/categories?edit=${category.id}`}
-                          className="text-sm text-zinc-700 underline underline-offset-4 dark:text-zinc-300"
+                          className="text-sm font-medium text-brand-600 transition-colors duration-150 ease-out-soft hover:text-brand-700 dark:text-brand-300"
                         >
                           <span aria-hidden="true">Düzenle</span>
                           <span className="sr-only">{category.name} kategorisini düzenle</span>
@@ -143,13 +160,13 @@ export default async function CategoriesPage({
                           }}
                         />
                       </div>
-                    </td>
+                    </Td>
                   )}
-                </tr>
+                </Tr>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </Tbody>
+          </Table>
+        </TableScroll>
       )}
 
       {/* Oluşturma formu yalnızca yetkili role render edilir. Bu bir güvenlik kontrolü
@@ -166,7 +183,7 @@ export default async function CategoriesPage({
             />
             <Link
               href="/categories"
-              className="text-sm text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
+              className="inline-block text-sm font-medium text-muted underline-offset-4 hover:text-strong hover:underline"
             >
               Vazgeç
             </Link>

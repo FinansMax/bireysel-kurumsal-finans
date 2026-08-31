@@ -1,36 +1,19 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 
-import { SignOutButton } from "./sign-out-button";
-import { TenantSwitcher, type SwitchableTenant } from "./tenant-switcher";
+import { AppSidebar } from "./app-sidebar";
+import { type SwitchableTenant } from "./tenant-switcher";
 
 /**
- * Giriş yapmış kullanıcının gördüğü uygulama kabuğu — header + navigasyon iskeleti (Issue #39).
+ * Giriş yapmış kullanıcının gördüğü uygulama kabuğu (Issue #39).
  *
- * `auth-form.tsx` ile aynı duruş: bu bir design system DEĞİL, korumalı sayfaların paylaştığı
- * markup'ın toplandığı saf sunum katmanıdır. Veri okumaz, oturum kontrolü YAPMAZ (o iş
- * `requirePageUser()`'ındır) — yalnızca prop olarak aldığını gösterir.
- */
-
-/**
- * Navigasyon iskeleti.
+ * Bu dosya SUNUCU bileşeni ve yalnızca DÜZENİ kurar: solda sidebar, sağda içerik. Sidebar'ın
+ * kendisi mobilde açılıp kapandığı için istemci bileşenidir (`app-sidebar.tsx`); ayrımı korumak
+ * önemli — kabuk verisi (kullanıcı, tenant listesi) sunucuda çözülür, yalnızca aç/kapa durumu
+ * istemcide yaşar.
  *
- * `href: null` olan öğeler HENÜZ VAR OLMAYAN ekranlardır ve link değil, devre dışı metin olarak
- * render edilir. Alternatif (öğeleri şimdiden `<Link>` yapmak) kullanıcıyı 404'e götürürdü;
- * öğeleri hiç göstermemek ise issue'nun istediği "iskelet"i vermezdi. İlgili ekran eklendiğinde
- * yapılacak tek şey buraya `href` yazmaktır.
+ * Veri okumaz, oturum kontrolü YAPMAZ (o iş `requirePageUser()`'ındır) — prop olarak aldığını
+ * gösterir.
  */
-const NAV_ITEMS: ReadonlyArray<{ label: string; href: string | null }> = [
-  { label: "Genel Bakış", href: "/dashboard" },
-  { label: "Üyeler", href: "/members" }, // Issue #43
-  { label: "Yeni Çalışma Alanı", href: "/tenants/new" }, // Issue #42
-  { label: "Hesaplar", href: "/accounts" }, // Issue #47
-  { label: "Kategoriler", href: "/categories" }, // Issue #50
-  { label: "İşlemler", href: "/transactions" }, // Issue #54
-  { label: "Raporlar", href: null }, // Issue #63
-  { label: "Ayarlar", href: null }, // Issue #86
-];
-
 export function AppShell({
   userEmail,
   tenants,
@@ -43,57 +26,28 @@ export function AppShell({
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-1 flex-col bg-zinc-50 dark:bg-black">
-      <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-4 px-6 py-4">
-          <Link
-            href="/dashboard"
-            className="text-sm font-semibold text-zinc-950 dark:text-zinc-50"
-          >
-            Bireysel ve Kurumsal Finans
-          </Link>
+    <div className="flex min-h-full flex-1 bg-canvas">
+      <AppSidebar userEmail={userEmail} tenants={tenants} activeTenantId={activeTenantId} />
 
-          <div className="flex items-center gap-4">
-            <TenantSwitcher tenants={tenants} activeTenantId={activeTenantId} />
-
-            {/* Kimliğin göstergesi olarak e-posta kullanılır, `session.user.name` DEĞİL:
-                JWT'deki `name`, profil güncellendikten sonra bayat kalıyor (açık hata:
-                Issue #113). E-posta bu endpoint'lerle değiştirilemediği için aynı sorunu
-                taşımaz. #113 kapandığında burada adı göstermek tek satırlık bir değişiklik. */}
-            <span className="text-sm text-zinc-600 dark:text-zinc-400">{userEmail}</span>
-            <SignOutButton />
-          </div>
-        </div>
-
-        {/* `aria-label`: sayfada birden fazla navigasyon olduğunda ekran okuyucuların ayırt
-            edebilmesi için; E2E testleri de nav'ı bu rol+isimle bulur. */}
-        <nav aria-label="Ana menü" className="mx-auto w-full max-w-5xl px-6">
-          <ul className="flex flex-wrap gap-4 pb-3 text-sm">
-            {NAV_ITEMS.map((item) => (
-              <li key={item.label}>
-                {item.href ? (
-                  <Link
-                    href={item.href}
-                    className="font-medium text-zinc-900 underline-offset-4 hover:underline dark:text-zinc-100"
-                  >
-                    {item.label}
-                  </Link>
-                ) : (
-                  <span
-                    aria-disabled="true"
-                    title="Yakında"
-                    className="cursor-not-allowed text-zinc-400 dark:text-zinc-600"
-                  >
-                    {item.label}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </nav>
-      </header>
-
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">{children}</main>
+      {/*
+       * `min-w-0` KRİTİK: flex çocuğu varsayılan olarak içeriğinden daha küçük olamaz, bu yüzden
+       * geniş bir tablo bu kabı şişirir ve SAYFA yatay kaydırılır. `min-w-0` ile taşma
+       * tablonun kendi kutusunda kalır (bkz. `components/ui/table.tsx` → `TableScroll`).
+       */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/*
+         * `pt-[4.25rem]` MOBİLDE ZORUNLU: sidebar'ın mobil üst çubuğu `fixed`tir ve akışta yer
+         * kaplamaz — bu boşluk olmadan sayfa başlığı çubuğun ALTINDA kalıyordu.
+         *
+         * Telafi burada, içerik kabında yapılır; sidebar'ın yanına boş bir `div` koymak
+         * denendi ve ÇALIŞMADI: kabuk bir flex SATIRI olduğu için o div dikey değil YATAY yer
+         * kaplıyordu.
+         */
+        }
+        <main className="mx-auto w-full max-w-6xl flex-1 px-5 pt-[4.25rem] pb-10 sm:px-8 lg:pt-10">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

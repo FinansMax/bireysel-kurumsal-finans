@@ -127,7 +127,7 @@ export function MembersTable({
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[36rem] text-left text-sm">
-        <thead className="text-xs uppercase text-zinc-500 dark:text-zinc-400">
+        <thead className="bg-surface-muted text-xs uppercase text-muted">
           <tr>
             <th scope="col" className="py-2 pr-4 font-medium">Kişi</th>
             <th scope="col" className="py-2 pr-4 font-medium">Rol</th>
@@ -150,10 +150,10 @@ export function MembersTable({
             const rowError = error?.membershipId === member.id ? error.message : null;
 
             return (
-              <tr key={member.id} className="border-t border-zinc-200 dark:border-zinc-800">
+              <tr key={member.id} className="border-t border-line transition-colors duration-150 ease-out-soft hover:bg-surface-muted/70">
                 <td className="py-3 pr-4 align-top">
-                  <div className="font-medium text-zinc-900 dark:text-zinc-100">{member.email}</div>
-                  <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                  <div className="font-medium text-strong">{member.email}</div>
+                  <div className="text-xs text-muted">
                     {member.name ?? "İsim girilmemiş"}
                     {member.userId === viewerUserId ? " · siz" : ""}
                   </div>
@@ -178,7 +178,7 @@ export function MembersTable({
                         onChange={(event) =>
                           void updateRole(member.id, event.target.value as MembershipRole)
                         }
-                        className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                        className="rounded-control border border-line-strong bg-surface px-2 py-1 text-sm text-strong disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {/* Mevcut rol seçeneklerde yoksa (ör. ADMIN bir OWNER'a bakıyor) kutu
                             boş görünmesin diye o rol de eklenir — ama seçim kilitlidir. */}
@@ -193,7 +193,7 @@ export function MembersTable({
                       </select>
                     </>
                   ) : (
-                    <span className="text-zinc-700 dark:text-zinc-300">
+                    <span className="text-body">
                       {ROLE_LABELS[member.role]}
                     </span>
                   )}
@@ -201,12 +201,12 @@ export function MembersTable({
 
                 <td className="py-3 align-top">
                   {!canRemove ? (
-                    <span className="text-xs text-zinc-500 dark:text-zinc-500">—</span>
+                    <span className="text-xs text-faint">—</span>
                   ) : confirmingId === member.id ? (
                     // Native `confirm()` yerine satır içi onay: tarayıcı diyaloğu testlerde ve
                     // ekran okuyucularda daha kırılgan, üstelik sayfa akışını bloke eder.
                     <span className="flex items-center gap-2">
-                      <span className="text-xs text-zinc-600 dark:text-zinc-400">Emin misiniz?</span>
+                      <span className="text-xs text-muted">Emin misiniz?</span>
                       <button
                         type="button"
                         disabled={pending}
@@ -219,7 +219,7 @@ export function MembersTable({
                         type="button"
                         disabled={pending}
                         onClick={() => setConfirmingId(null)}
-                        className="rounded-md border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700"
+                        className="rounded-control border border-line-strong px-2 py-1 text-xs text-body transition-colors duration-150 ease-out-soft hover:bg-surface-muted"
                       >
                         Vazgeç
                       </button>
@@ -233,7 +233,7 @@ export function MembersTable({
                         setError(null);
                         setConfirmingId(member.id);
                       }}
-                      className="rounded-md border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-900"
+                      className="rounded-control border border-danger-200 px-2 py-1 text-xs font-medium text-danger-700 transition-colors duration-150 ease-out-soft hover:bg-danger-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-danger-900 dark:text-danger-200 dark:hover:bg-danger-900/30"
                     >
                       Çıkar
                     </button>

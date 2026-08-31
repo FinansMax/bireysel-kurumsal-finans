@@ -8,7 +8,7 @@ import { expect, test } from "@playwright/test";
 test("ana sayfa açılıyor", async ({ page }) => {
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Finansınızı tek bir yerden yönetin.", level: 1 }),
+    page.getByRole("heading", { name: "Paranın kontrolü sende.", level: 1 }),
   ).toBeVisible();
 });
 

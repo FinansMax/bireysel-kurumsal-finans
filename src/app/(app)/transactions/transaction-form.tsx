@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useMemo, useState, type FormEvent } from "react";
 
-import { FormError, SubmitButton, TextField } from "@/components/auth-form";
+import { FIELD_CLASS, FormError, LABEL_CLASS, SubmitButton, TextField } from "@/components/auth-form";
 
 /**
  * İşlem kaydetme ve düzenleme formu (Issue #54 + #130).
@@ -193,12 +193,11 @@ export function TransactionForm({
     }
   }
 
-  const selectClassName =
-    "w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50";
+  const selectClassName = FIELD_CLASS;
 
   return (
-    <div className="max-w-sm space-y-4 border-t border-zinc-200 pt-6 dark:border-zinc-800">
-      <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+    <div className="max-w-sm space-y-4 rounded-panel border border-line bg-surface p-5 shadow-subtle">
+      <h2 className="text-sm font-semibold text-strong">
         {editing ? "İşlemi düzenle" : "Yeni işlem"}
       </h2>
 
@@ -215,7 +214,7 @@ export function TransactionForm({
         <div className="space-y-1.5">
           <label
             htmlFor="transaction-account"
-            className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
+            className={LABEL_CLASS}
           >
             Hesap
           </label>
@@ -238,7 +237,7 @@ export function TransactionForm({
         <div className="space-y-1.5">
           <label
             htmlFor="transaction-type"
-            className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
+            className={LABEL_CLASS}
           >
             Tür
           </label>
@@ -266,7 +265,7 @@ export function TransactionForm({
         <div className="space-y-1.5">
           <label
             htmlFor="transaction-amount"
-            className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
+            className={LABEL_CLASS}
           >
             Tutar
           </label>
@@ -281,9 +280,9 @@ export function TransactionForm({
             value={amount}
             disabled={pending}
             onChange={(event) => setAmount(event.target.value)}
-            className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 outline-none placeholder:text-zinc-400 focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:ring-zinc-800"
+            className={`${FIELD_CLASS} tabular-nums`}
           />
-          <p id="transaction-amount-hint" className="text-xs text-zinc-500 dark:text-zinc-500">
+          <p id="transaction-amount-hint" className="text-xs text-faint">
             Ondalık ayırıcı nokta: 1250.50. Yön için tür alanını kullanın.
           </p>
         </div>
@@ -291,7 +290,7 @@ export function TransactionForm({
         <div className="space-y-1.5">
           <label
             htmlFor="transaction-date"
-            className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
+            className={LABEL_CLASS}
           >
             Tarih
           </label>
@@ -309,7 +308,7 @@ export function TransactionForm({
         <div className="space-y-1.5">
           <label
             htmlFor="transaction-category"
-            className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
+            className={LABEL_CLASS}
           >
             Kategori
           </label>

@@ -220,7 +220,7 @@ test.describe("/members — yetkisiz roller", () => {
 
     await page.goto("/members");
 
-    await expect(page.getByText("Önce üstteki menüden bir çalışma alanı seçin")).toBeVisible();
+    await expect(page.getByText("Önce menüden bir çalışma alanı seçin")).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(0);
   });
 });

@@ -427,7 +427,7 @@ test.describe("/transactions — yetki ve kurulum durumu", () => {
 
     await page.goto("/transactions");
 
-    await expect(page.getByText("Önce üstteki menüden bir çalışma alanı seçin")).toBeVisible();
+    await expect(page.getByText("Önce menüden bir çalışma alanı seçin")).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(0);
     await expect(createForm(page)).toHaveCount(0);
   });
@@ -699,8 +699,9 @@ test.describe("/transactions — düzenleme ve silme (Issue #130)", () => {
     await editForm(page).getByLabel("Tutar").fill("250");
     await saveEditAndWait(page);
 
-    // Tutar hücresi para birimiyle birlikte yazılır ("250 TRY").
-    await expectRow(page, "250 TRY");
+    // Tutar hücresi İŞARET ve para birimiyle birlikte yazılır: gider olduğu için "-250 TRY".
+    // İşaret bir gösterim kararıdır (bkz. components/ui/money.tsx) — kayıttaki tutar pozitiftir.
+    await expectRow(page, "-250 TRY");
 
     // ASIL İDDİA: bakiye eski etkiyi geri alıp yenisini uygulamış olmalı (1000 - 250).
     expect(await apiBalance(page, tenantId, accountId)).toBe("750");

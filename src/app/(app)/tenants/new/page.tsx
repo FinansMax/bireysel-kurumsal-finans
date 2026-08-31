@@ -22,10 +22,10 @@ export default async function NewTenantPage() {
   return (
     <section className="space-y-6">
       <div className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">
+        <h1 className="text-xl font-semibold tracking-tight text-strong sm:text-2xl">
           Yeni çalışma alanı
         </h1>
-        <p className="max-w-prose text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="max-w-prose text-sm text-pretty text-muted">
           Bireysel bütçeniz veya şirketiniz için ayrı bir çalışma alanı oluşturun. Oluşturan
           kişi o alanın sahibi (OWNER) olur.
         </p>

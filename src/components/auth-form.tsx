@@ -1,21 +1,33 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+import { BrandMark } from "@/components/ui/brand-mark";
+import { IconShield, IconTag, IconTransactions, IconWallet } from "@/components/ui/icons";
+
 /**
- * Login ve signup ekranlarının paylaştığı minimal sunum bileşenleri (Issue #36).
+ * Login, signup ve şifre sıfırlama ekranlarının paylaştığı sunum bileşenleri (Issue #36).
  *
  * Kasıtlı olarak küçük tutulmuştur: bir UI kütüphanesi veya design system DEĞİLDİR
- * (bkz. Issue #34 "Yeni ağır UI kütüphanesi zorunlu değil"). Yalnızca iki ekran arasında
- * birebir tekrar eden markup'ı toplar. Bu bileşenler saf sunumdur — state, fetch veya
- * yönlendirme içermez; o mantık sayfaların kendisindedir.
+ * (bkz. Issue #34 "Yeni ağır UI kütüphanesi zorunlu değil"). Yalnızca ekranlar arasında birebir
+ * tekrar eden markup'ı toplar. Bu bileşenler saf sunumdur — state, fetch veya yönlendirme
+ * içermez; o mantık sayfaların kendisindedir.
  *
- * KAPSAM NOTU (Issue #42): `TextField`/`FormError`/`SubmitButton` artık kabuk içindeki
- * formlarda da (ör. tenant oluşturma) kullanılıyor; `AuthCard`/`AuthLink` ise hâlâ yalnızca
- * public auth ekranlarına aittir. Dosya adı bilinçli olarak DEĞİŞTİRİLMEDİ: yeniden
- * adlandırmak dört auth ekranının import satırını #42'nin diff'ine sokardı. Üçüncü bir form
- * ekranı geldiğinde (ör. #43) generic parçaları ayrı bir dosyaya taşımak doğru olur.
+ * KAPSAM NOTU (Issue #42): `TextField`/`FormError`/`SubmitButton` kabuk içindeki formlarda da
+ * (ör. tenant oluşturma, hesap/kategori/işlem formları) kullanılıyor; `AuthCard`/`AuthLink` ise
+ * yalnızca public auth ekranlarına aittir. Dosya adı bilinçli olarak DEĞİŞTİRİLMEDİ.
  */
 
+/**
+ * Auth ekranlarının iki kolonlu düzeni.
+ *
+ * NEDEN SPLIT: beyaz bir zeminde ortada duran bir form, ürünle hiçbir bağ kurmaz — kullanıcı
+ * açılış sayfasından gelir ve aynı markanın devamı olduğunu görmelidir. Sol kolon marka
+ * dünyasını (koyu yüzey, ürünün gerçek yetenekleri) taşır; sağ kolon YALNIZCA formdur.
+ *
+ * MOBİLDE SOL KOLON HİÇ RENDER EDİLMEZ (`hidden lg:flex`), gizlenmiş ama DOM'da duran bir
+ * dekorasyon değil: küçük ekranda tek iş formu doldurmaktır ve kaydırılacak bir tanıtım
+ * paneli o işin önüne geçerdi. Kullanılabilirlik görselliğin önünde.
+ */
 export function AuthCard({
   title,
   description,
@@ -28,20 +40,95 @@ export function AuthCard({
   footer: ReactNode;
 }) {
   return (
-    <main className="flex flex-1 items-center justify-center bg-zinc-50 px-6 py-12 dark:bg-black">
-      <div className="w-full max-w-sm">
-        <div className="rounded-xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-          <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">{title}</h1>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{description}</p>
+    <main className="flex min-h-dvh flex-1 bg-canvas">
+      <AuthBrandPanel />
 
-          <div className="mt-6">{children}</div>
+      <div className="flex flex-1 items-center justify-center px-5 py-10 sm:px-8">
+        <div className="w-full max-w-sm">
+          {/* Mobilde marka yalnızca burada görünür — sol panel yok. */}
+          <Link href="/" className="mb-8 inline-flex items-center gap-2.5 lg:hidden">
+            <BrandMark />
+            <span className="text-base font-semibold tracking-tight text-strong">FinansMax</span>
+          </Link>
+
+          <div className="rounded-panel border border-line bg-surface p-6 shadow-raised sm:p-8">
+            <h1 className="text-xl font-semibold tracking-tight text-strong">{title}</h1>
+            <p className="mt-1.5 text-sm text-pretty text-muted">{description}</p>
+
+            <div className="mt-6">{children}</div>
+          </div>
+
+          <p className="mt-6 text-center text-sm text-muted">{footer}</p>
         </div>
-
-        <p className="mt-6 text-center text-sm text-zinc-600 dark:text-zinc-400">{footer}</p>
       </div>
     </main>
   );
 }
+
+/**
+ * Sol marka paneli.
+ *
+ * İçerideki maddeler ÜRÜNDE GERÇEKTEN VAR OLAN yeteneklerdir — auth ekranı, henüz hesabı
+ * olmayan birinin ürünle ikinci teması; burada verilen yanlış bir söz, açılış sayfasındakinden
+ * daha pahalıya patlar.
+ */
+function AuthBrandPanel() {
+  return (
+    <aside className="relative hidden w-[46%] max-w-xl flex-col justify-between overflow-hidden bg-shell p-10 lg:flex xl:p-12">
+      {/* Dekoratif ışık lekeleri — açılış sayfasının hero zeminiyle aynı dil. */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+        <div className="absolute -top-24 -left-16 size-80 rounded-full bg-brand-500/25 blur-3xl" />
+        <div className="absolute right-0 bottom-0 size-72 rounded-full bg-mint-500/15 blur-3xl" />
+      </div>
+
+      <Link href="/" className="relative flex items-center gap-2.5">
+        <BrandMark className="size-8" />
+        <span className="text-base font-semibold tracking-tight text-shell-text">FinansMax</span>
+      </Link>
+
+      <div className="relative">
+        <p className="text-2xl leading-snug font-semibold tracking-tight text-balance text-shell-text">
+          Gelirinizi ve giderinizi tek bir yerden takip edin.
+        </p>
+
+        <ul className="mt-8 space-y-4">
+          {[
+            { icon: <IconWallet className="size-4.5" />, text: "Banka ve kasa hesapları, kuruşu kaybetmeyen bakiyeler" },
+            { icon: <IconTransactions className="size-4.5" />, text: "Gelir ve gider hareketleri, tarih ve hesap bazlı arama" },
+            { icon: <IconTag className="size-4.5" />, text: "Gelir ve gider için ayrı kategoriler" },
+            { icon: <IconShield className="size-4.5" />, text: "Çalışma alanları birbirinden tamamen yalıtık" },
+          ].map((item) => (
+            <li key={item.text} className="flex items-start gap-3">
+              <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-shell-raised text-brand-300">
+                {item.icon}
+              </span>
+              <span className="text-sm text-pretty text-shell-muted">{item.text}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <p className="relative text-xs text-shell-muted/80">
+        Bireysel bütçeniz ve şirketiniz, ayrı çalışma alanlarında.
+      </p>
+    </aside>
+  );
+}
+
+/**
+ * Form alanlarının PAYLAŞILAN sınıfı.
+ *
+ * Dışa açılması bilinçli: bu uygulamada seçici (`select`) alanlar da var — hesap türü,
+ * kategori türü, işlemin hesabı — ve onlar `TextField` bileşenini kullanamaz. Sınıf dizisi
+ * her formda elle tekrarlandığında kaçınılmaz olarak ayrışıyordu: bir ekranda kenarlık başka
+ * tonda, diğerinde odak rengi hiç yok. Tek sabit, girdi ile seçicinin AYNI görünmesini
+ * garanti eder.
+ */
+export const FIELD_CLASS =
+  "w-full rounded-control border border-line-strong bg-surface px-3 py-2 text-sm text-strong transition-colors duration-150 ease-out-soft outline-none placeholder:text-faint focus:border-brand-500 disabled:opacity-60";
+
+/** Alan etiketlerinin paylaşılan sınıfı — aynı gerekçe. */
+export const LABEL_CLASS = "block text-sm font-medium text-strong";
 
 export function TextField({
   id,
@@ -72,7 +159,7 @@ export function TextField({
     <div className="space-y-1.5">
       {/* `htmlFor`/`id` eşleşmesi: etikete tıklamak alanı odaklar ve ekran okuyucular alanı
           doğru isimlendirir. E2E testleri de alanları bu erişilebilir isimle bulur. */}
-      <label htmlFor={id} className="block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+      <label htmlFor={id} className={LABEL_CLASS}>
         {label}
       </label>
       <input
@@ -87,10 +174,13 @@ export function TextField({
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 outline-none placeholder:text-zinc-400 focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:ring-zinc-800"
+        // Odak halkası global olarak `:focus-visible` ile veriliyor (bkz. globals.css); burada
+        // yalnızca kenarlığın marka rengine dönmesi var. İkisini de yerelde tanımlamak,
+        // bir bileşende unutulduğunda klavye kullanıcısının o alanı kaybetmesi demekti.
+        className={FIELD_CLASS}
       />
       {hint && (
-        <p id={hintId} className="text-xs text-zinc-500 dark:text-zinc-500">
+        <p id={hintId} className="text-xs text-muted">
           {hint}
         </p>
       )}
@@ -110,7 +200,7 @@ export function FormError({ message }: { message: string | null }) {
   return (
     <p
       role="alert"
-      className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
+      className="rounded-control border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-700 dark:border-danger-900 dark:bg-danger-900/30 dark:text-danger-200"
     >
       {message}
     </p>
@@ -122,7 +212,7 @@ export function SubmitButton({ pending, children }: { pending: boolean; children
     <button
       type="submit"
       disabled={pending}
-      className="w-full rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+      className="w-full rounded-control bg-brand-600 px-3 py-2.5 text-sm font-medium text-white shadow-raised transition-colors duration-150 ease-out-soft hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
     >
       {children}
     </button>
@@ -131,7 +221,10 @@ export function SubmitButton({ pending, children }: { pending: boolean; children
 
 export function AuthLink({ href, children }: { href: string; children: ReactNode }) {
   return (
-    <Link href={href} className="font-medium text-zinc-900 underline underline-offset-4 dark:text-zinc-100">
+    <Link
+      href={href}
+      className="font-medium text-brand-600 underline-offset-4 hover:underline dark:text-brand-300"
+    >
       {children}
     </Link>
   );

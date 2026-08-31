@@ -59,7 +59,7 @@ test.describe("/ — oturumsuz ziyaretçi", () => {
     await page.goto("/");
 
     await expect(
-      page.getByRole("heading", { name: "Finansınızı tek bir yerden yönetin.", level: 1 }),
+      page.getByRole("heading", { name: "Paranın kontrolü sende.", level: 1 }),
     ).toBeVisible();
 
     // Header'daki hesap eylemleri. `nav` ile kapsamlanır: aynı metinler footer'da da var ve
@@ -99,13 +99,14 @@ test.describe("/ — oturumsuz ziyaretçi", () => {
 
     // Duyarlılık: yukarıdaki "yok" iddiaları, sayfa boş olsaydı da geçerdi. Sayfanın gerçekten
     // dolu olduğu ayrıca kontrol edilir.
-    expect(body).toContain("Ücretsiz Başlayın");
+    expect(body).toContain("Ücretsiz Başla");
   });
 
-  test("'Ücretsiz Başlayın' signup akışına, 'Giriş Yap' login'e gidiyor", async ({ page }) => {
+  test("'Ücretsiz Başla' signup akışına, 'Giriş Yap' login'e gidiyor", async ({ page }) => {
     await page.goto("/");
 
-    await page.getByRole("link", { name: "Ücretsiz Başlayın" }).click();
+    // Sayfada iki ana CTA var (hero ve kapanış bölümü); ikisi de aynı yere gider.
+    await page.getByRole("link", { name: "Ücretsiz Başla" }).first().click();
     await expect(page).toHaveURL(/\/signup$/);
     // Hedefin gerçekten mevcut kayıt ekranı olduğu doğrulanır; yalnızca URL değil.
     await expect(page.getByRole("heading", { name: "Kayıt ol" })).toBeVisible();
@@ -120,13 +121,17 @@ test.describe("/ — oturumsuz ziyaretçi", () => {
     await page.goto("/");
 
     for (const feature of [
-      "Gelir ve gider takibi",
-      "Hesaplar ve bakiyeler",
-      "Kategori yönetimi",
       "Çoklu çalışma alanı",
+      "Gelir ve gider takibi",
+      "Kategori yönetimi",
       "Ekip ve roller",
     ]) {
       await expect(page.getByRole("heading", { name: feature })).toBeVisible();
+    }
+
+    // Kurulum akışının üç adımı da başlık olarak duruyor.
+    for (const step of ["Hesaplarını tanımla", "Hareketleri kaydet", "Aradığını bul"]) {
+      await expect(page.getByRole("heading", { name: step })).toBeVisible();
     }
 
     // HENÜZ OLMAYAN özellikler için söz VERİLMEMELİ. `/dashboard` boş (#62/#63), rapor/grafik
@@ -160,7 +165,7 @@ test.describe("/ — giriş yapmış kullanıcı", () => {
     // meşrudur. Bu, `requirePageUser()` yerine `getCurrentUser()` kullanılmasının sonucudur.
     await expect(page).toHaveURL(/\/$/);
     await expect(
-      page.getByRole("heading", { name: "Finansınızı tek bir yerden yönetin.", level: 1 }),
+      page.getByRole("heading", { name: "Paranın kontrolü sende.", level: 1 }),
     ).toBeVisible();
   });
 

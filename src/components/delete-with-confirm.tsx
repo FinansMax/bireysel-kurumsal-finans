@@ -85,7 +85,7 @@ export function DeleteWithConfirm({
       <button
         type="button"
         onClick={() => setConfirming(true)}
-        className="text-sm text-red-700 underline underline-offset-4 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+        className="text-sm font-medium text-danger-600 transition-colors duration-150 ease-out-soft hover:text-danger-700 dark:text-danger-300 dark:hover:text-danger-200"
       >
         {/* Görünen metin kısa ("Sil"), erişilebilir ad uzun: ekran okuyucu kullanıcısı
             listedeki onlarca "Sil" düğmesinden hangisinde olduğunu bilmelidir. */}
@@ -96,12 +96,12 @@ export function DeleteWithConfirm({
   }
 
   return (
-    <div className="space-y-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm dark:border-red-900/50 dark:bg-red-950/40">
-      <p className="font-medium text-red-800 dark:text-red-300">{confirmQuestion}</p>
-      {consequence && <p className="text-red-700 dark:text-red-400">{consequence}</p>}
+    <div className="space-y-2 rounded-card border border-danger-200 bg-danger-50 p-3 text-left text-sm dark:border-danger-900 dark:bg-danger-900/30">
+      <p className="font-medium text-danger-800 dark:text-danger-200">{confirmQuestion}</p>
+      {consequence && <p className="text-danger-700 dark:text-danger-300">{consequence}</p>}
 
       {error && (
-        <p role="alert" className="text-red-800 dark:text-red-300">
+        <p role="alert" className="text-danger-800 dark:text-danger-200">
           {error}
         </p>
       )}
@@ -111,7 +111,7 @@ export function DeleteWithConfirm({
           type="button"
           onClick={handleDelete}
           disabled={pending}
-          className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-control bg-danger-600 px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 ease-out-soft hover:bg-danger-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {pending ? "Siliniyor…" : "Evet, sil"}
         </button>
@@ -122,7 +122,7 @@ export function DeleteWithConfirm({
             setError(null);
           }}
           disabled={pending}
-          className="text-sm text-zinc-700 underline underline-offset-4 disabled:opacity-60 dark:text-zinc-300"
+          className="text-sm font-medium text-muted underline-offset-4 hover:text-strong hover:underline disabled:opacity-60"
         >
           Vazgeç
         </button>

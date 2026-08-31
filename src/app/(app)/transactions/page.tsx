@@ -10,6 +10,20 @@ import { FILTER_ERRORS, parseTransactionFilters } from "@/lib/finance/transactio
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 
 import { DeleteWithConfirm } from "@/components/delete-with-confirm";
+import { Badge, CategoryBadge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
+import {
+  IconArrowDownRight,
+  IconArrowUpRight,
+  IconChevronRight,
+  IconSearch,
+  IconTransactions,
+  IconWallet,
+  IconWorkspace,
+} from "@/components/ui/icons";
+import { DirectionChip, Money } from "@/components/ui/money";
+import { PageHeader } from "@/components/ui/surfaces";
+import { Table, Tbody, Td, Th, Thead, TableScroll, Tr } from "@/components/ui/table";
 
 import { TransactionForm } from "./transaction-form";
 import { TransactionFiltersForm, type ActiveFilterValues } from "./transaction-filters-form";
@@ -85,14 +99,14 @@ export default async function TransactionsPage({
 
   if (!active) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">İşlemler</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Önce üstteki menüden bir çalışma alanı seçin.{" "}
-          <Link href="/tenants/new" className="underline underline-offset-4">
-            Yeni bir tane oluşturabilirsiniz.
-          </Link>
-        </p>
+      <section className="space-y-8">
+        <PageHeader title="İşlemler" />
+        <EmptyState
+          icon={<IconWorkspace className="size-5" />}
+          title="Çalışma alanı seçilmedi"
+          description="Önce menüden bir çalışma alanı seçin. Yeni bir tane de oluşturabilirsiniz."
+          action={{ label: "Çalışma alanı oluştur", href: "/tenants/new" }}
+        />
       </section>
     );
   }
@@ -101,11 +115,13 @@ export default async function TransactionsPage({
 
   if (!hasPermission(role, PERMISSIONS.VIEW_TRANSACTIONS)) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">İşlemler</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Bu çalışma alanının işlemlerini görüntüleme yetkiniz yok.
-        </p>
+      <section className="space-y-8">
+        <PageHeader title="İşlemler" />
+        <EmptyState
+          icon={<IconTransactions className="size-5" />}
+          title="Görüntüleme yetkiniz yok"
+          description="Bu çalışma alanının hareketlerini görmek için yöneticinizden yetki isteyin."
+        />
       </section>
     );
   }
@@ -182,13 +198,15 @@ export default async function TransactionsPage({
 
   return (
     <section className="space-y-8">
-      <div className="space-y-2">
-        <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">İşlemler</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          <span className="font-medium text-zinc-900 dark:text-zinc-100">{tenant.name}</span>{" "}
-          çalışma alanının gelir ve gider kayıtları.
-        </p>
-      </div>
+      <PageHeader
+        title="İşlemler"
+        description={
+          <>
+            <span className="font-medium text-strong">{tenant.name}</span> çalışma alanının gelir
+            ve gider kayıtları.
+          </>
+        }
+      />
 
       <TransactionFiltersForm
         accounts={accounts.map((account) => ({ id: account.id, name: account.name }))}
@@ -204,7 +222,7 @@ export default async function TransactionsPage({
       {!parsedFilters.ok ? (
         <p
           role="alert"
-          className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
+          className="rounded-panel border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700 dark:border-danger-900 dark:bg-danger-900/30 dark:text-danger-200"
         >
           {/* Sayfalama imleci bozuksa (Issue #135) kullanıcıya TARİH biçimini anlatmak
               yanıltıcı olurdu: onun düzeltebileceği bir filtre yok, elindeki bağlantı bozuk.
@@ -230,89 +248,109 @@ export default async function TransactionsPage({
            (ya da eski bir bağlantıyla) oluşur. Diğer iki mesajı vermek yanlış olurdu: ne
            "henüz işlem yok" doğrudur (kayıtlar var, sadece bu pencerede değil) ne de "filtreyle
            eşleşen yok" (sorun filtrede değil, sayfada). */
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Bu sayfada gösterilecek işlem kalmamış.{" "}
-          <Link href={transactionsHref({ after: "" })} className="underline underline-offset-4">
-            İlk sayfaya dönün.
-          </Link>
-        </p>
+        <EmptyState
+          icon={<IconTransactions className="size-5" />}
+          title="Bu sayfada gösterilecek işlem kalmamış"
+          description="Bu sayfadaki kayıtlar silinmiş ya da bağlantı eski olabilir."
+          action={{ label: "İlk sayfaya dön", href: transactionsHref({ after: "" }) }}
+        />
       ) : transactions.length === 0 ? (
         /* Boş liste iki FARKLI şey anlatabilir ve ikisini aynı cümleyle geçmek yanıltıcı
            olurdu: hiç kayıt olmaması ile filtrenin hiçbir şeyle eşleşmemesi. İkincisinde
            kullanıcıya "ilkini kaydedin" demek, elindeki kayıtları yok saymak olurdu. */
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          {hasActiveFilters
-            ? "Bu filtreyle eşleşen işlem yok. Filtreleri gevşetmeyi deneyin."
-            : `Henüz işlem yok.${
-                canManage && accounts.length > 0 ? " Aşağıdaki formla ilkini kaydedin." : ""
-              }`}
-        </p>
+        <EmptyState
+          icon={hasActiveFilters ? <IconSearch className="size-5" /> : <IconTransactions className="size-5" />}
+          title={hasActiveFilters ? "Bu filtreyle eşleşen işlem yok" : "Henüz işlem yok"}
+          description={
+            hasActiveFilters
+              ? "Filtreleri gevşetmeyi deneyin: tarih aralığını genişletin ya da arama metnini kısaltın."
+              : canManage && accounts.length > 0
+                ? "İlk gelir ya da gider hareketinizi aşağıdaki formla kaydedin; hesabın bakiyesi anında güncellenir."
+                : "Bu çalışma alanında henüz hareket kaydedilmemiş."
+          }
+          action={
+            hasActiveFilters ? { label: "Filtreleri temizle", href: "/transactions" } : undefined
+          }
+        />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[44rem] text-left text-sm">
-            <thead className="text-xs uppercase text-zinc-500 dark:text-zinc-400">
-              <tr>
-                <th scope="col" className="py-2 pr-4 font-medium">Tarih</th>
-                <th scope="col" className="py-2 pr-4 font-medium">Açıklama</th>
-                <th scope="col" className="py-2 pr-4 font-medium">Hesap</th>
-                <th scope="col" className="py-2 pr-4 font-medium">Kategori</th>
-                <th scope="col" className="py-2 pr-4 font-medium">Tür</th>
-                <th scope="col" className="py-2 pr-4 font-medium">Tutar</th>
-                {canManage && (
-                  <th scope="col" className="py-2 font-medium">
-                    <span className="sr-only">İşlemler</span>
-                  </th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
+        <>
+          <TableScroll>
+            <Table minWidth="46rem">
+            <Thead>
+              <Th>Tarih</Th>
+              <Th>Açıklama</Th>
+              <Th>Hesap</Th>
+              <Th>Kategori</Th>
+              <Th>Tür</Th>
+              <Th align="right">Tutar</Th>
+              {canManage && <Th srOnly>İşlemler</Th>}
+            </Thead>
+            <Tbody>
               {transactions.map((transaction) => {
                 const account = accountsById.get(transaction.accountId);
                 const category = transaction.categoryId
                   ? categoriesById.get(transaction.categoryId)
                   : null;
 
+                const isIncome = transaction.type === "INCOME";
+
                 return (
-                  <tr
+                  <Tr
                     key={transaction.id}
-                    className="border-t border-zinc-200 dark:border-zinc-800"
+                    highlighted={transaction.id === editingTransaction?.id}
                   >
                     {/* Tarih `YYYY-MM-DD` olarak, sunucunun yerel ayarına BAĞLI OLMADAN
                         yazılır: `toLocaleDateString()` çıktıyı sunucunun saat dilimine ve
                         locale'ine bağlardı — aynı kayıt geliştirme ve CI ortamında farklı
                         görünebilirdi. Saat dilimi yönetimi bu üründe henüz hiç yok; ayrı bir
                         issue'nun konusudur (bkz. README). */}
-                    <td className="py-3 pr-4 tabular-nums text-zinc-700 dark:text-zinc-300">
+                    <Td className="tabular-nums whitespace-nowrap">
                       {transaction.occurredAt.toISOString().slice(0, 10)}
-                    </td>
-                    <td className="py-3 pr-4 text-zinc-900 dark:text-zinc-100">
-                      {transaction.description ?? "—"}
-                    </td>
-                    <td className="py-3 pr-4 text-zinc-700 dark:text-zinc-300">
-                      {account?.name ?? "—"}
-                    </td>
+                    </Td>
+                    <Td emphasis>
+                      <span className="flex items-center gap-2.5">
+                        {/* Yön göstergesi AÇIKLAMANIN yanında: satırı soldan tarayan göz,
+                            tutara ulaşmadan gelir mi gider mi olduğunu görür. */}
+                        <DirectionChip direction={isIncome ? "in" : "out"}>
+                          {isIncome ? (
+                            <IconArrowUpRight className="size-4" />
+                          ) : (
+                            <IconArrowDownRight className="size-4" />
+                          )}
+                        </DirectionChip>
+                        {transaction.description ?? "—"}
+                      </span>
+                    </Td>
+                    <Td>{account?.name ?? "—"}</Td>
                     {/* Kategori silinmiş olabilir: #53'te `onDelete: SetNull` seçildi, işlem
                         kategorisiz kalır (bkz. README). "Kategorisiz", boş bir hücreden daha
                         anlaşılırdır. */}
-                    <td className="py-3 pr-4 text-zinc-700 dark:text-zinc-300">
-                      {category?.name ?? "Kategorisiz"}
-                    </td>
-                    <td className="py-3 pr-4 text-zinc-700 dark:text-zinc-300">
-                      {TYPE_LABELS[transaction.type] ?? transaction.type}
-                    </td>
+                    <Td>
+                      <CategoryBadge name={category?.name ?? null} />
+                    </Td>
+                    <Td>
+                      <Badge tone={isIncome ? "mint" : "neutral"}>
+                        {TYPE_LABELS[transaction.type] ?? transaction.type}
+                      </Badge>
+                    </Td>
                     {/* TUTAR HAM STRING OLARAK GÖSTERİLİR, `Intl.NumberFormat` ile DEĞİL:
                         biçimlendirme değeri önce `Number`'a çevirmeyi gerektirir ve bu, para
                         için yasak olan kayan nokta dönüşümünü (invariant #10) arayüz
                         katmanından geri getirirdi — hesap ekranındaki (#47) aynı karar. */}
-                    <td className="py-3 pr-4 tabular-nums text-zinc-900 dark:text-zinc-100">
-                      {transaction.amount} {account?.currency ?? ""}
-                    </td>
+                    <Td align="right">
+                      <Money
+                        value={transaction.amount}
+                        currency={account?.currency ?? null}
+                        direction={isIncome ? "in" : "out"}
+                        size="lg"
+                      />
+                    </Td>
                     {canManage && (
-                      <td className="py-3 align-top">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                      <Td align="right">
+                        <div className="flex items-center justify-end gap-3">
                           <Link
                             href={transactionsHref({ edit: transaction.id })}
-                            className="text-sm text-zinc-700 underline underline-offset-4 dark:text-zinc-300"
+                            className="text-sm font-medium text-brand-600 transition-colors duration-150 ease-out-soft hover:text-brand-700 dark:text-brand-300"
                           >
                             <span aria-hidden="true">Düzenle</span>
                             <span className="sr-only">
@@ -336,13 +374,14 @@ export default async function TransactionsPage({
                             }}
                           />
                         </div>
-                      </td>
+                      </Td>
                     )}
-                  </tr>
+                  </Tr>
                 );
               })}
-            </tbody>
-          </table>
+              </Tbody>
+            </Table>
+          </TableScroll>
 
           {/* Sayfalama (Issue #135). "Sonraki sayfa" bir LİNKtir ve durum URL'dedir: her sayfa
               kendi adresine sahiptir, geri tuşu önceki sayfaya döner ve adres paylaşılabilir —
@@ -353,16 +392,17 @@ export default async function TransactionsPage({
               SAYFA NUMARASI DA YOK: keyset sayfalama toplam sayıyı bilmez ve öğrenmek her
               istekte ikinci bir tarama gerektirirdi (bkz. `TransactionPage`). */}
           {nextCursor && (
-            <nav aria-label="Sayfalama" className="pt-4">
+            <nav aria-label="Sayfalama" className="flex justify-end pt-4">
               <Link
                 href={transactionsHref({ after: nextCursor })}
-                className="text-sm text-zinc-700 underline underline-offset-4 dark:text-zinc-300"
+                className="inline-flex items-center gap-1 rounded-control border border-line bg-surface px-3.5 py-2 text-sm font-medium text-strong shadow-subtle transition-colors duration-150 ease-out-soft hover:bg-surface-muted"
               >
                 Sonraki sayfa
+                <IconChevronRight className="size-4 text-muted" />
               </Link>
             </nav>
           )}
-        </div>
+        </>
       )}
 
       {/* Form yalnızca yetkili role render edilir. Bu bir güvenlik kontrolü DEĞİLDİR — asıl
@@ -373,12 +413,18 @@ export default async function TransactionsPage({
         (accounts.length === 0 ? (
           // İşlem, hesapsız kaydedilemez (`accountId` zorunlu). Boş bir hesap seçicisi
           // göstermek yerine kullanıcı doğrudan çözüme yönlendirilir.
-          <p className="border-t border-zinc-200 pt-6 text-sm text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
-            İşlem kaydedebilmek için önce bir hesap gerekiyor.{" "}
-            <Link href="/accounts" className="underline underline-offset-4">
-              Hesaplar ekranından oluşturun.
-            </Link>
-          </p>
+          <div className="rounded-panel border border-dashed border-line bg-surface px-5 py-6">
+            <p className="flex flex-wrap items-center gap-2 text-sm text-muted">
+              <IconWallet className="size-4.5 shrink-0 text-brand-600" />
+              İşlem kaydedebilmek için önce bir hesap gerekiyor.{" "}
+              <Link
+                href="/accounts"
+                className="font-medium text-brand-600 underline-offset-4 hover:underline dark:text-brand-300"
+              >
+                Hesaplar ekranından oluşturun.
+              </Link>
+            </p>
+          </div>
         ) : (
           <div className="space-y-3">
             <TransactionForm
@@ -418,7 +464,7 @@ export default async function TransactionsPage({
               // listeden geldiyse, vazgeçince tam listeye düşmek onu bağlamından koparırdı.
               <Link
                 href={transactionsHref()}
-                className="text-sm text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
+                className="inline-block text-sm font-medium text-muted underline-offset-4 hover:text-strong hover:underline"
               >
                 Vazgeç
               </Link>

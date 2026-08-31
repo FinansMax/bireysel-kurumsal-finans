@@ -189,14 +189,30 @@
   --color-shell-muted: var(--shell-text-muted);
 
   /*
-   * Tipografi. `--font-geist-sans` root layout'taki `next/font` değişkenidir; O KALDIRILIRSA
-   * yığın kendiliğinden sistem fontuna düşer, hiçbir şey bozulmaz. Rakamlar için ayrı bir
-   * aile tanımlanmaz — sayısal hizalama `tabular-nums` ile yapılır (bkz. `money.tsx`).
+   * TİPOGRAFİ — webfont YOK, native sistem yığını.
+   *
+   * #131/#142 `next/font/google`'ı kaldırdı: build zamanında Google'a çıkan bir bağımlılıktı ve
+   * indirilen font hiçbir yerde render edilmiyordu. O karar KORUNUYOR — buraya `next/font`
+   * geri getirilmemeli.
+   *
+   * Ama yığın #142'nin bıraktığı `Arial` ile başlamıyor. #142 Arial'ı bilerek seçti çünkü o
+   * issue bir bağımlılık temizliğiydi ve "görünüm değişmesin" kısıtı vardı; kendi notu da
+   * native yığını "sonraki adım" olarak işaretliyordu. Bu tasarım sistemi tam olarak o adımdır:
+   * her platform kendi arayüz fontunu kullanır (Windows'ta Segoe UI, macOS'ta San Francisco),
+   * `Arial` yığının sonunda son çare olarak kalır.
+   *
+   * Rakamlar için ayrı bir aile tanımlanmaz — sayısal hizalama `tabular-nums` ile yapılır
+   * (bkz. `money.tsx`).
+   *
+   * BİLİNEN SINIR: marka fontu hâlâ yok. İstenirse `next/font/local` + repoya alınmış woff2
+   * ile eklenmeli; `next/font/google`a dönmek build'in ağ bağımlılığını geri getirir.
    */
   --font-sans:
-    var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial,
+    sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
 }
 
 body {

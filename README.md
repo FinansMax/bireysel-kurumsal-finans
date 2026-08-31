@@ -464,6 +464,82 @@ yazıyordu). Bu mismatch baştan beri vardı; client-side JS'e ihtiyaç duyan il
 eklenene kadar görünmedi. `next.config.ts`'teki `allowedDevOrigins` yalnızca development'ı
 etkiler, production build'de karşılığı yoktur.
 
+## Public Açılış Sayfası (`/`)
+
+`/` artık public bir ürün açılış sayfasıdır (`src/app/page.tsx`). Öncesinde
+**"Proje altyapısı başarıyla çalışıyor."** yazan bir geliştirme ekranıydı; ürünün ana adresi,
+ziyaretçiye ürünü değil kurulum durumunu gösteriyordu.
+
+### Route ayrımı yapısaldır, koşullu değil
+
+Açılış sayfası root layout'un altındadır, `src/app/(app)/` altında **değil**. Uygulama kabuğu
+(header + "Ana menü" navigasyonu) yalnızca o route group'un layout'undadır, dolayısıyla `/`'de
+**hiç render edilmez** — "kabuğu gizle" diye bir koşul yazmaya gerek yoktur. Aynı ayrım
+`/login`, `/signup`, `/forgot-password`, `/reset-password` için de geçerlidir; yani public alan
+ile uygulama alanı arasındaki görsel sınır, dosya konumunun doğal sonucudur.
+
+Bu yapının bozulması (ör. sayfanın `(app)` altına taşınması) `e2e/landing.spec.ts` ile
+yakalanır: kabuğun navigasyonunun `/`'de bulunmadığı, `/dashboard`'da bulunduğu ayrı ayrı
+doğrulanır.
+
+### Oturum OKUNUR, yönlendirme YAPILMAZ
+
+Sayfa `getCurrentUser()` kullanır, `requirePageUser()` **değil**. İkincisi oturum yoksa
+`/login`'e yönlendirir; bu sayfanın işi ise tam tersidir — oturumsuz ziyaretçiye ürünü anlatmak.
+
+Oturum varsa **yalnızca header'daki eylem değişir** ("Giriş Yap / Kayıt Ol" yerine
+"Panele Git"); kullanıcı `/dashboard`'a **zorla atılmaz**. Gerekçe: giriş yapmış birinin ana
+sayfayı görmek istemesi meşrudur (paylaşılan bir link, yer imi, ürünü birine gösterme). Zorunlu
+yönlendirme, o ziyaretçiyi kendi ürününün tanıtım sayfasından dışlardı.
+
+Bu bir yetkilendirme kararı **değildir**: header'da "Panele Git" göstermek bir kolaylıktır,
+`/dashboard` kendi `requirePageUser()` guard'ını her hâlükârda çalıştırır.
+
+**Maliyet notu:** oturum cookie'si okunduğu için sayfa dinamiktir, ama oturumsuz ziyaretçide
+DB'ye gitmez — cookie yoksa Auth.js JWT'yi hiç çözmez, dolayısıyla `callbacks.jwt` içindeki
+session-revocation sorgusu da çalışmaz.
+
+### Yalnızca ÜRÜNDE VAR OLAN özellikler anlatılır
+
+Açılış sayfasındaki beş maddenin her birinin arkasında çalışan bir ekran ve API vardır: gelir/
+gider takibi (#54, #56, #135), hesaplar ve bakiyeler (#47), kategoriler (#50), çoklu çalışma
+alanı (#40, #42), ekip ve roller (#43).
+
+**Kasıtlı olarak anılmayanlar:** finansal özet/rapor ve grafikler (`/dashboard` henüz boş —
+#62/#63), bildirimler, içe/dışa aktarma, fatura ve borç/alacak takibi. Hepsi backlog'dadır.
+Bir açılış sayfasını doldurmak için verilen söz, ürünün kendisinden önce güveni tüketir.
+
+Bu, yorum olarak bırakılmamış: `e2e/landing.spec.ts` sayfa metninde "Rapor", "Grafik", "Fatura",
+"Dışa aktar", "İçe aktar", "Bildirim" geçmediğini doğrular. Biri bu özelliklerden birini
+gerçekten eklediğinde testi güncellemek, o an bilinçli bir karar olur.
+
+Aynı spec, **geliştirme/altyapı çıktısının** ("Proje altyapısı", health, JSON, `localhost:3000`)
+sayfada bulunmadığını da doğrular — düzeltilen hatanın tam olarak bu olduğu düşünülürse
+regresyonu ucuza sabitlemek doğruydu. Her iki "yok" iddiası da bir duyarlılık kontrolüyle
+birlikte gelir (sayfa boş olsaydı da geçerlerdi).
+
+### Görsel kararlar
+
+- **Sahte ürün ekran görüntüsü YOK.** Hero'da soyut, `aria-hidden` bir zemin gradyanı var;
+  uydurma bir arayüz görseli, henüz var olmayan ekranları varmış gibi gösterirdi.
+- **Özellik kartları ayrı ayrı çerçevelenir**, bitişik (`gap-px`) bir ızgarada değil. Bitişik
+  düzen daha "premium" duruyordu ama beş özellik üç sütuna bölündüğünde son satırda **boş bir
+  hücre** bırakıyor ve sayfa yarım kalmış gibi görünüyordu. Mevcut düzen özellik sayısından
+  bağımsız olarak bozulmaz.
+- **Birincil eylem rengi `SubmitButton` ile aynıdır** (`zinc-900` / koyu temada `zinc-50`):
+  aynı üründe iki farklı "birincil eylem" rengi olmamalı.
+- **İkonlar inline SVG'dir**; bir ikon kütüphanesi eklenmedi (CLAUDE.md §4 "Ek kural").
+- Sunum parçaları (`PrimaryLink`, `BrandMark`, ikonlar) `src/components/` altına **taşınmadı**:
+  tek bir sayfa kullanıyor ve bu repo kullanılmayan soyutlama getirmiyor. İkinci bir public
+  sayfa geldiğinde ortak olanlar taşınmalı.
+
+### Bilinen sınır: ürün adı iki yerde farklı
+
+Açılış sayfası **FinansMax** der, uygulama kabuğu ise hâlâ "Bireysel ve Kurumsal Finans".
+Kabuktaki adı değiştirmek bu işin kapsamı değildi (ve `e2e/app-shell.spec.ts` o metne bakıyor);
+ama ikisinin ayrışması kalıcı olmamalı — ürün adının nerede ne olacağı tek bir kararla
+netleşmelidir.
+
 ## Korumalı Kabuk (Issue #39)
 
 Giriş yapmış kullanıcının gördüğü alan `(app)` route group'unun altındadır

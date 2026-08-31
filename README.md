@@ -598,6 +598,62 @@ E2E kanıtı: `e2e/tenant-members-ui.spec.ts`. Her sonuç `GET /api/tenants/:id/
 doğrulanır; ayrıca **duyarlılık kanıtı** olarak arayüz baypas edilip endpoint doğrudan çağrılır
 (son OWNER → 409, MEMBER'ın rol değiştirme denemesi → 403).
 
+## Fontlar: webfont yok (Issue #131)
+
+Uygulama **hiçbir webfont yüklemez**; font yığını `src/app/globals.css`'te açık olarak
+yazılıdır. Bu, `create-next-app` iskeletinden gelen `next/font/google` (`Geist`,
+`Geist Mono`) kullanımının kaldırılmasıyla oluştu.
+
+### Neden kaldırıldı: iki maliyet, sıfır fayda
+
+**1. Build ağa çıkıyordu.** `next/font/google` fontu **build sırasında** Google'ın
+sunucularından indirir. Erişimin kesildiği bir anda deploy hattı, uygulamada hiçbir şey
+değişmemişken kırılır (bir kez gözlendi: `Error: next/font: error:`). Ağı olmayan bir ortamda
+proje hiç build edilemez. Bu, repo'nun geri kalanındaki duruşla da çelişiyordu — `CLAUDE.md`
+§4 dış bağımlılığa mesafeli, ama build zamanında sessiz bir tanesi vardı.
+
+**2. Font indiriliyordu ama HİÇ render edilmiyordu.** Kaldırmadan önce tarayıcıda ölçüldü:
+
+| | Öncesi | Sonrası |
+| --- | --- | --- |
+| `html` computed font | `Geist, "Geist Fallback"` | `Arial, Helvetica, sans-serif` |
+| `body` / `h1` / `label` / `button` | `Arial, Helvetica, sans-serif` | `Arial, Helvetica, sans-serif` |
+| İndirilen woff2 sayısı | **2** | **0** |
+
+Sebep: `globals.css` `body`'ye `Arial` yazıyordu ve görünen her şey `body` içindedir; ayrıca
+`src/` genelinde tek bir `font-sans`/`font-mono` kullanımı yoktu. Geist yalnızca `<html>`de
+"kullanıldığı" için tarayıcı iki woff2'yi indiriyor, **sıfır glif** basıyordu.
+
+Yani ortada korunacak bir görünüm yoktu.
+
+### Reddedilen alternatifler
+
+- **Fontu self-host etmek** (`next/font/local` + repoya alınmış woff2). Issue'nun ilk önerisiydi
+  ve build bağımlılığını gerçekten kaldırırdı, ama yukarıdaki ölçüm nedeniyle **kullanılmayan bir
+  varlığı repoya taşımak** olurdu: ziyaretçi iki fontu indirmeye devam eder, ekranda hiçbir şey
+  değişmezdi. Fontu gerçekten kullanmak ayrı bir görünüm kararıdır.
+- **Geist'i gerçekten kullanmak** (self-host + `body`'deki `Arial` override'ını kaldırmak).
+  Tutarlı bir son durum, ama bu issue bir bağımlılık temizliğidir; sitenin görünümünü
+  değiştirmek onun kapsamı değildi.
+- **Kabul edip kayda geçirmek** ("build ağ erişimi ister"). Riski belgeler, ortadan kaldırmaz.
+
+### Yığın neden `Arial` ile başlıyor
+
+Bu değişikliğin **görünüme etkisi olmaması** gerekiyordu, o yüzden önceki `body` kuralının yığını
+(`Arial, Helvetica, sans-serif`) aynen korundu ve `--font-sans` olarak tanımlandı. `body` artık
+sabit bir liste yerine `var(--font-sans)` kullanıyor: böylece `font-sans` utility'si ile aynı
+yığına çözülür ve ikisi ayrışamaz — kaldırılan hatanın tam olarak bu ayrışma olduğu düşünülürse
+kayda değer.
+
+**Bilinen sınır / sonraki adım:** modern bir "native" yığın (`-apple-system`, `Segoe UI`,
+`Roboto` ile başlayan) her platformda o platformun arayüz fontunu kullanır ve genellikle daha iyi
+görünür — ama Windows'ta Arial yerine Segoe UI render eder, yani **gerçek bir görünüm
+değişikliğidir** ve ayrı bir karar olarak bırakıldı.
+
+**Gelecekte marka fontu istenirse:** `next/font/local` + repoya alınmış woff2 dosyaları
+kullanılmalı ve `--font-sans` o değişkene çevrilmelidir. `next/font/google`a **dönülmemelidir** —
+build zamanı ağ bağımlılığı geri gelir.
+
 ## Güvenlik Header'ları
 
 Tüm yanıtlara (sayfalar ve `/api/*`, hata yanıtları dahil) `next.config.ts` üzerinden temel

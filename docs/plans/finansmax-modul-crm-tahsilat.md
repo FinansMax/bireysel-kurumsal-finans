@@ -683,6 +683,17 @@ model Contact {
 - `@@unique([tenantId, name])`: aynı kurumun iki kez girilmesini DB seviyesinde engeller;
   servis `P2002`'yi 409'a çevirir ("önce ara, yoksa ekle" yarışı kapatılır). Kıyas
   büyük/küçük harfe duyarlıdır (mevcut `Account`/`Category` ile aynı sınır).
+- **Arşivlenmiş kayıt da ismi İŞGAL EDER** — `@@unique([tenantId, name])` arşiv durumuna
+  bakmaz ve bu bilinçlidir. Kısıtı kaldırmak (ya da `archivedAt`'i unique anahtara katmak)
+  aynı kurumun iki kaydını yaratırdı ve geçmişin/tahsilatın hangisine bağlı olduğu
+  belirsizleşirdi — bu modelde kurum, süreç ve tahsilat geçmişinin taşıyıcısıdır.
+- Servis `P2002`'yi `409`'a çevirirken, çakışan kaydın **arşivlenmiş olup olmadığını aynı
+  transaction içinde** tespit eder ve yanıtta ayırt edilebilir bir kod döner:
+  `{ error, code: "ARCHIVED_NAME_CONFLICT", archivedId }`. Kullanıcı böylece "bu isim
+  kullanımda" duvarına toslamak yerine kaydı arşivden çıkarabilir ([C5]). Bu, invariant #7'nin
+  (hata yanıtları bilgi sızdırmaz) **istisnası DEĞİLDİR**: kayıt zaten aynı tenant'a aittir ve
+  çağıranın onu görmeye yetkisi vardır (`VIEW_CRM`); dışarıya sızan bir bilgi yoktur. Aktif bir
+  kayıtla çakışmada kod dönmez, yalın `409` döner.
 - **Silme yerine arşivleme**: `archivedAt`. Bir kurumun süreç ve tahsilat geçmişi vardır;
   silmek bu geçmişi anlamsızlaştırır. Gerçek silme yalnızca hiç `Deal`'ı olmayan kurum için
   mümkündür (`onDelete: NoAction` ile korunur, servis `P2003`'ü 409'a çevirir) — `Transaction`
@@ -733,6 +744,10 @@ sayfalama (mevcut `transactions` listesindeki desenle aynı).
 - Aynı isimde ikinci kurum → 409.
 - `Deal`'ı olan kurum silinemiyor → 409; arşivlenebiliyor.
 - Bir kurumda ikinci kontak primary yapılınca öncekinin primary'si düşüyor (tek transaction).
+- Arşivdeki bir isimle kurum oluşturma denemesi `409` + `code: "ARCHIVED_NAME_CONFLICT"` ve
+  `archivedId` döner; aktif bir isimle çakışmada yalın `409` döner.
+- Arşivden çıkarma sonrası kayıt normal çalışıyor (listede görünüyor, düzenlenebiliyor, yeni
+  süreç açılabiliyor).
 - Cross-tenant erişim testleri (`security/crm-institution-security.spec.ts`) yeşil.
 - `integration/tenant-scope-pattern.spec.ts`'e yeni modeller eklendi.
 
@@ -826,6 +841,16 @@ model PipelineStage {
   `runSerializable()` içinde doğrular (okuma sonucuna bağlı invariant).
 - Kullanılan (`DealStageProgress` kaydı olan) bir aşama **silinemez** → 409; yeniden
   adlandırılabilir. Geçmişteki tik "hangi aşama" bilgisini kaybetmemelidir.
+- **Arşivlenmiş pipeline da ismi İŞGAL EDER** — `@@unique([tenantId, name])` arşiv durumuna
+  bakmaz ve bu bilinçlidir. Kısıtı kaldırmak aynı şablonun iki kaydını yaratırdı ve geçmiş
+  süreçlerin hangi şablona dayandığı belirsizleşirdi ([C1]'deki kurum kararıyla aynı).
+- Servis `P2002`'yi `409`'a çevirirken çakışan kaydın **arşivlenmiş olup olmadığını aynı
+  transaction içinde** tespit eder ve ayırt edilebilir bir kod döner:
+  `{ error, code: "ARCHIVED_NAME_CONFLICT", archivedId }` — kullanıcı şablonu arşivden
+  çıkarabilsin diye ([C7]). Invariant #7'nin **istisnası DEĞİLDİR**: kayıt aynı tenant'a
+  aittir ve çağıranın görme yetkisi vardır (`VIEW_CRM`). Aktif kayıtla çakışmada yalın `409`
+  döner. (`PipelineStage`'in `@@unique([pipelineId, name])`'i aynı deseni izler; aşamada arşiv
+  kavramı olmadığı için orada yalnızca yalın `409` vardır.)
 
 ### Servis + Route
 
@@ -880,6 +905,8 @@ Seed idempotenttir; `@@unique([pipelineId, name])` ve `@@unique([tenantId, name]
 - Kullanılan aşama silinemiyor → 409; adı değiştirilebiliyor.
 - `reorder` eksik id ile 400 döner; başarılı çağrıda sıra beklenen hâle geliyor.
 - MEMBER aşama şablonunu değiştiremiyor → 403.
+- Arşivdeki bir isimle pipeline oluşturma denemesi `409` + `code: "ARCHIVED_NAME_CONFLICT"`
+  döner; arşivden çıkarma sonrası şablon normal çalışıyor.
 - Cross-tenant testleri yeşil.
 
 ## Bağımlılıklar
@@ -1162,6 +1189,9 @@ Kurumların görüntülenip yönetilebildiği ekranlar.
 - `/crm/institutions/[id]` — detay: künye, yetkililer (ekle/düzenle/sil, birincil işaretle),
   o kuruma ait süreçler listesi, son aktiviteler.
 - Kurum ekleme/düzenleme formu.
+- `ARCHIVED_NAME_CONFLICT` kodlu `409`'da kullanıcıya "Bu isimde arşivlenmiş bir kayıt var"
+  mesajı ve tek tıkla **"Arşivden çıkar"** aksiyonu gösterilir (`POST .../unarchive`); başarıda
+  kullanıcı o kurumun detayına götürülür. Diğer `409`'larda yalın çakışma mesajı gösterilir.
 - `requirePageModule(MODULES.CRM)` ile korunur; modül kapalıysa `/dashboard`'a redirect.
 - Boş durum (empty state): "Henüz kurum eklenmedi" + ekleme çağrısı.
 
@@ -1282,6 +1312,8 @@ müşterilere satılabilir olmasının UI tarafındaki karşılığı.
 - Sıralama değişikliği tek bir `reorder` isteğiyle gönderilir (kısmi güncelleme yapılmaz).
 - Kullanılan aşama silinmeye çalışılınca 409 → "Bu aşama X süreçte işaretlenmiş, silinemez.
   Adını değiştirebilirsiniz." mesajı.
+- `ARCHIVED_NAME_CONFLICT` kodlu `409`'da "Bu isimde arşivlenmiş bir süreç şablonu var" mesajı
+  ve tek tıkla **"Arşivden çıkar"** aksiyonu gösterilir; başarıda şablon listeye döner.
 - Yalnız OWNER/ADMIN erişir (`MANAGE_CRM_PIPELINE`); MEMBER için sayfa yok ve API 403 verir.
 
 ## Teknik Gereksinimler
@@ -1509,7 +1541,11 @@ model PaymentInstallment {
   plan   PaymentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
 
   transactionId String?  @unique                           // [T2]
-  cheque        Cheque?
+  // Bir taksit birden fazla çekle ödenebilir: `Cheque.installmentId` üzerindeki `@unique`
+  // [T3]'te REDDEDİLDİ (karşılıksız çekin yerine yenisini bağlamayı imkânsız kılardı), bu
+  // yüzden ilişki 1-N'dir. "Bağlı çeklerin toplamı taksitin kalanını aşamaz" kuralı DB'de
+  // değil serviste, `runSerializable()` içinde zorlanır (bkz. [T3]).
+  cheques       Cheque[]
 
   @@unique([planId, sequence])
   @@index([tenantId, dueDate])
@@ -1733,13 +1769,14 @@ model Cheque {
   planId String?
   plan   PaymentPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
 
-  installmentId String? @unique
+  installmentId String?
   installment   PaymentInstallment? @relation(fields: [installmentId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, bankName, chequeNumber])
   @@index([tenantId, dueDate])
   @@index([tenantId, status])
   @@index([institutionId])
+  @@index([installmentId])
 }
 ```
 
@@ -1748,6 +1785,18 @@ model Cheque {
 - `@@unique([tenantId, bankName, chequeNumber])`: aynı çekin iki kez girilmesini engeller.
   Yalnız `chequeNumber` yetmez — farklı bankalar aynı numarayı kullanabilir. Kıyas
   büyük/küçük harfe duyarlıdır (mevcut sınır).
+- **`installmentId` üzerinde `@unique` YOKTUR.** `@unique` REDDEDİLDİ çünkü kısıt duruma
+  bakmaz: `BOUNCED`/`RETURNED` bir çek de taksitin `installmentId`'sini işgal etmeye devam
+  eder ve "karşılıksız çekin yerine yeni çek bağlama" akışını imkânsız kılardı. Kısıt gerçek
+  hayatı da yanlış modellerdi: bir taksit birden fazla çekle ödenebilir.
+- Bunun yerine kural şudur: **bir taksite bağlı, terminal olmayan (`PORTFOLIO`, `DEPOSITED`)
+  çeklerin tutar toplamı, taksitin KALAN tutarını (`amount - paidAmount`) AŞAMAZ.** Okuma
+  sonucuna bağlı bir invariant olduğu için `runSerializable()` içinde doğrulanır (eşzamanlılık
+  deseni #2; `prisma.$transaction(..., Serializable)` DOĞRUDAN çağrılmaz — retry atlanır);
+  aşılırsa **409**, denemeler tükenirse `503`. **Bedeli:** kural DB'de değil kodda — bu yüzden
+  aşım ve eşzamanlılık senaryoları integration testiyle KANITLANIR, aksi hâlde invariant
+  sessizce kaybolur. İlişki artık 1-N olduğundan [T1]'deki `PaymentInstallment.cheque` alanı
+  `cheques Cheque[]` olur; `@@index([installmentId])` okuma tarafını karşılar.
 - **Durum makinesi** servis katmanında açıkça tanımlanır; geçersiz geçiş **409** döner:
   - `PORTFOLIO → DEPOSITED | RETURNED | CANCELLED`
   - `DEPOSITED → CLEARED | BOUNCED | PORTFOLIO` (tahsilden geri çekildi)
@@ -1795,6 +1844,9 @@ model Cheque {
   tek transaction'da.
 - Aynı banka + numara ile ikinci çek → 409.
 - `overdue=true` filtresi yalnızca vadesi geçmiş ve `PORTFOLIO`/`DEPOSITED` çekleri döner.
+- Karşılıksız (`BOUNCED`) çekin yerine aynı taksite yeni çek bağlanabiliyor.
+- Taksitin kalan tutarını aşan çek bağlama denemesi → 409, hiçbir yazma olmaz.
+- Eşzamanlı iki çek bağlama isteği toplamı aşamıyor: biri başarılı, biri 409 (integration testi).
 - Cross-tenant testleri yeşil.
 
 ## Bağımlılıklar

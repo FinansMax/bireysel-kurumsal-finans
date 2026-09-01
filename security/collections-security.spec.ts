@@ -34,7 +34,7 @@ async function createUserWithMembership(role: MembershipRole, tenantId: string) 
 
 async function seedDeal(tenantId: string) {
   return prisma.deal.create({
-    data: { tenantId, title: `Sec Deal ${randomUUID()}` },
+    data: { tenantId, title: `Sec Deal ${randomUUID()}`, status: "OPEN" },
     select: { id: true },
   });
 }

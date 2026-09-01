@@ -338,3 +338,148 @@ test.describe("Account API — client input spoofing", () => {
     }
   });
 });
+
+/**
+ * Hesabın bankası — saldırgan bakışı (Issue #148).
+ *
+ * Banka bir ETİKETTİR, para değil; buradaki risk tutar kaybı değil, doğrulamanın ATLANMASI:
+ * serbest metin sızarsa "Garanti"/"garanti"/"TGB" üç ayrı banka olur ve alan sonsuza dek
+ * güvenilmez hâle gelir. İş kuralları `integration/account-bank.spec.ts`tedir.
+ */
+test.describe("Account API — banka alanı", () => {
+  test("listede olmayan kod 400 alır ve hesap OLUŞMAZ", async ({ request }) => {
+    const tenant = await createTenant("BankBad");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+
+    try {
+      for (const bad of ["ziraat", "Ziraat Bankası", "UYDURMA", "<script>"]) {
+        const response = await request.post(`/api/tenants/${tenant.id}/accounts`, {
+          headers: { cookie: owner.cookie },
+          data: { name: `Hesap ${randomUUID()}`, type: "BANK", currency: "TRY", bankCode: bad },
+        });
+        expect(response.status(), `beklenen 400: ${bad}`).toBe(400);
+      }
+
+      expect(await prisma.account.count({ where: { tenantId: tenant.id } })).toBe(0);
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("KASA hesabında banka gönderimi 400 alır (sessizce yok sayılmaz)", async ({ request }) => {
+    const tenant = await createTenant("BankOnCash");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+
+    try {
+      const response = await request.post(`/api/tenants/${tenant.id}/accounts`, {
+        headers: { cookie: owner.cookie },
+        data: { name: "Kasa", type: "CASH", currency: "TRY", bankCode: "ZIRAAT" },
+      });
+
+      expect(response.status()).toBe(400);
+      expect(await prisma.account.count({ where: { tenantId: tenant.id } })).toBe(0);
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("MEMBER banka yazamaz (403) ve kayıt DEĞİŞMEZ", async ({ request }) => {
+    const tenant = await createTenant("BankMember");
+    const member = await createUserWithMembership(MembershipRole.MEMBER, tenant.id);
+    const account = await prisma.account.create({
+      data: {
+        tenantId: tenant.id,
+        name: `Hesap ${randomUUID()}`,
+        type: "BANK",
+        currency: "TRY",
+        balance: "0",
+      },
+      select: { id: true },
+    });
+
+    try {
+      // Banka bir etiket de olsa YÖNETİM işidir: matriste `MANAGE_ACCOUNTS` OWNER/ADMIN'dedir.
+      const response = await request.patch(`/api/tenants/${tenant.id}/accounts/${account.id}`, {
+        headers: { cookie: member.cookie },
+        data: { bankCode: "ZIRAAT" },
+      });
+
+      expect(response.status()).toBe(403);
+
+      const row = await prisma.account.findUniqueOrThrow({ where: { id: account.id } });
+      expect(row.bankCode).toBeNull();
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: member.userId } });
+    }
+  });
+
+  test("başka tenant'ın hesabına banka yazılamaz ve kayıt DURUYOR", async ({ request }) => {
+    const mine = await createTenant("BankMine");
+    const theirs = await createTenant("BankTheirs");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, mine.id);
+    const theirAccount = await prisma.account.create({
+      data: {
+        tenantId: theirs.id,
+        name: `Hesap ${randomUUID()}`,
+        type: "BANK",
+        currency: "TRY",
+        balance: "0",
+        bankCode: "AKBANK",
+      },
+      select: { id: true },
+    });
+
+    try {
+      const response = await request.patch(`/api/tenants/${mine.id}/accounts/${theirAccount.id}`, {
+        headers: { cookie: owner.cookie },
+        data: { bankCode: "ZIRAAT" },
+      });
+
+      // Var olmayan hesapla AYNI yanıt — enumeration engeli.
+      expect(response.status()).toBe(404);
+
+      const row = await prisma.account.findUniqueOrThrow({ where: { id: theirAccount.id } });
+      expect(row.bankCode).toBe("AKBANK");
+    } finally {
+      await prisma.tenant.deleteMany({ where: { id: { in: [mine.id, theirs.id] } } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("yanıt banka KODUNU taşır (ad değil) ve alan sözleşmede var", async ({ request }) => {
+    const tenant = await createTenant("BankShape");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+
+    try {
+      const created = await request.post(`/api/tenants/${tenant.id}/accounts`, {
+        headers: { cookie: owner.cookie },
+        // Gövdeye uydurma bir `bankName` eklemek hiçbir etki yaratmamalı: servis yalnızca
+        // doğruladığı alanları yazar (aynı desen `tenantId` spoofing testinde).
+        data: {
+          name: "Sozlesme",
+          type: "BANK",
+          currency: "TRY",
+          bankCode: "GARANTI",
+          bankName: "Uydurma Bank",
+        },
+      });
+      expect(created.status()).toBe(201);
+
+      const { account } = (await created.json()) as {
+        account: { bankCode: unknown; bankName?: unknown };
+      };
+      // Marka değişimi sözleşmeyi bozmasın diye API AD değil KOD taşır.
+      expect(account.bankCode).toBe("GARANTI");
+      expect(account.bankName).toBeUndefined();
+
+      const row = await prisma.account.findFirstOrThrow({ where: { tenantId: tenant.id } });
+      expect(row.bankCode).toBe("GARANTI");
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+});

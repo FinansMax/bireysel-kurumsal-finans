@@ -78,6 +78,24 @@ model Account {
   // demektir. Uygulama katmanı bu alanı JSON'a DAİMA string olarak yazar.
   balance Decimal @default(0) @db.Decimal(19, 4)
 
+  // Hesabın bağlı olduğu banka (Issue #148). YALNIZCA `type = BANK` için anlamlıdır; `CASH`
+  // hesapta daima `null`dur ve servis katmanı tür `CASH`e çevrildiğinde bu alanı temizler.
+  //
+  // ENUM DEĞİL, `String?`: `AccountType`/`CategoryType` enum'dur çünkü kümeleri küçük ve
+  // KARARLIDIR. Banka listesi ikisi de değildir — birleşme, yeni lisans ve marka değişimi olur;
+  // enum, her banka değişikliğinde bir migration demekti. (`AuditLog.action`'daki serbest String
+  // tercihiyle aynı gerekçe.)
+  //
+  // Saklanan değer bir KOD'dur (`ZIRAAT`, `GARANTI`), görünen ad değil: marka değişimleri veri
+  // migration'ı gerektirmemeli. Doğrulama uygulama katmanındaki ALLOWLIST'tedir
+  // (src/lib/finance/banks.ts) — serbest metin kabul edilmez, aksi halde "Garanti",
+  // "garanti bankası" ve "TGB" üç ayrı banka olurdu.
+  //
+  // `null` = belirtilmemiş. #148 ÖNCESİNDE oluşturulmuş banka hesapları bu durumdadır ve
+  // geçerli sayılırlar; alanı zorunlu yapmak mevcut satırları ve API sözleşmesini kırardı
+  // (bkz. README, "#148 kararları").
+  bankCode String?
+
   // Para birimi tutardan AYRI bir alandır (aynı invariant): ISO 4217 kodu, ör. "TRY", "USD".
   // Tam ISO listesi bir bağımlılık gerektireceği için doğrulama biçimseldir (3 büyük harf);
   // gerçek dünyada geçersiz bir kodun zararı, yanlış bir kur dönüşümü DEĞİL, yalnızca

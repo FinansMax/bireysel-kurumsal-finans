@@ -46,13 +46,14 @@ export async function POST(request: Request, { params }: RouteParams) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
-  const { name, type, currency, balance } = body as Record<string, unknown>;
+  const { name, type, currency, balance, bankCode } = body as Record<string, unknown>;
 
   const result = await createAccount(context.tenant.id, context.user.id, {
     name,
     type,
     currency,
     balance,
+    bankCode,
   });
 
   if (!result.ok) {

@@ -11,6 +11,7 @@ import { Table, Tbody, Td, Th, Thead, TableScroll, Tr } from "@/components/ui/ta
 import { requirePageUser } from "@/lib/auth/page-guard";
 import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { listAccounts } from "@/lib/finance/account";
+import { bankName } from "@/lib/finance/banks";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 
 import { AccountForm } from "./account-form";
@@ -128,7 +129,16 @@ export default async function AccountsPage({
                     </span>
                   </Td>
                   <Td>
-                    <Badge tone="outline">{TYPE_LABELS[account.type] ?? account.type}</Badge>
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <Badge tone="outline">{TYPE_LABELS[account.type] ?? account.type}</Badge>
+                      {/* Banka adı TÜRÜN YANINDA, ayrı bir kolonda değil (Issue #148): kasa
+                          hesaplarında hep boş kalacak bir kolon, tabloyu her satırda bir
+                          boşlukla genişletirdi. Kod → ad çevirisi `banks.ts`tedir; bilinmeyen
+                          bir kod (liste güncellenmişse) hiç gösterilmez, ham kod basılmaz. */}
+                      {account.bankCode ? (
+                        <Badge tone="brand">{bankName(account.bankCode) ?? "Banka"}</Badge>
+                      ) : null}
+                    </span>
                   </Td>
                   {/* BAKİYE HAM STRING OLARAK GÖSTERİLİR, `Intl.NumberFormat` ile DEĞİL:
                       biçimlendirme değeri önce `Number`'a çevirmeyi gerektirir ve bu, para

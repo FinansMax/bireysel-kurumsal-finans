@@ -5,6 +5,7 @@ import { writeAuditLog } from "@/lib/audit/write-audit-log";
 import { prisma } from "@/lib/prisma";
 import { tenantScoped } from "@/lib/tenancy/scope";
 
+import { isValidBankCode } from "./banks";
 import {
   isValidAccountName,
   isValidAccountType,
@@ -36,6 +37,7 @@ const accountSelect = {
   id: true,
   name: true,
   type: true,
+  bankCode: true,
   balance: true,
   currency: true,
   createdAt: true,
@@ -55,6 +57,12 @@ export type AccountView = {
   id: string;
   name: string;
   type: AccountType;
+  /**
+   * Banka kodu (Issue #148). `null` = kasa hesabı, ya da banka belirtilmemiş bir banka hesabı
+   * (#148 öncesinde oluşturulmuş kayıtlar). Görünen ad `src/lib/finance/banks.ts`ten okunur —
+   * API adı DEĞİL kodu taşır, böylece marka değişimi sözleşmeyi bozmaz.
+   */
+  bankCode: string | null;
   balance: string;
   currency: string;
   createdAt: Date;
@@ -80,6 +88,7 @@ export type CreateAccountInput = {
   type: unknown;
   currency: unknown;
   balance?: unknown;
+  bankCode?: unknown;
 };
 
 export type CreateAccountResult =
@@ -93,6 +102,8 @@ const INVALID_BALANCE_ERROR = "Balance must be a decimal string with at most 4 d
 const DUPLICATE_NAME_ERROR = "An account with this name already exists";
 const NOT_FOUND_ERROR = "Account not found";
 const HAS_TRANSACTIONS_ERROR = "Account still has transactions";
+const INVALID_BANK_ERROR = "Bank code must be one of the supported bank codes";
+const BANK_ON_NON_BANK_ERROR = "Bank code is only allowed for BANK accounts";
 
 export async function createAccount(
   tenantId: string,
@@ -131,9 +142,27 @@ export async function createAccount(
     balance = parsed;
   }
 
+  // Banka OPSİYONELDİR (Issue #148) ve yalnızca `BANK` hesapta anlamlıdır.
+  //
+  // `null` ile `undefined` burada AYNI anlama gelir ("belirtilmedi") — `balance`taki katı
+  // ayrımın aksine, çünkü "bankası belirtilmemiş banka hesabı" MEŞRU bir durumdur: #148
+  // öncesindeki tüm kayıtlar öyledir ve alanı zorunlu yapmak mevcut sözleşmeyi kırardı.
+  // Arayüz yine de seçim yaptırır (bkz. README, "#148 kararları").
+  let bankCode: string | undefined;
+  if (input.bankCode !== undefined && input.bankCode !== null) {
+    if (input.type !== AccountType.BANK) {
+      // Sessizce yok saymak, kullanıcının seçtiği bankanın kaybolduğu bir kayıt üretirdi.
+      return { ok: false, status: 400, error: BANK_ON_NON_BANK_ERROR };
+    }
+    if (!isValidBankCode(input.bankCode)) {
+      return { ok: false, status: 400, error: INVALID_BANK_ERROR };
+    }
+    bankCode = input.bankCode;
+  }
+
   try {
     const account = await prisma.account.create({
-      data: { tenantId, name, type: input.type, currency, balance },
+      data: { tenantId, name, type: input.type, currency, balance, bankCode },
       select: accountSelect,
     });
 
@@ -168,6 +197,7 @@ export type UpdateAccountInput = {
   type?: unknown;
   currency?: unknown;
   balance?: unknown;
+  bankCode?: unknown;
 };
 
 export type UpdateAccountResult =
@@ -206,6 +236,48 @@ export async function updateAccount(
       return { ok: false, status: 400, error: INVALID_TYPE_ERROR };
     }
     data.type = input.type;
+
+    // TÜR KASAYA ÇEVRİLİYORSA BANKA TEMİZLENİR — istemci ayrıca göndermese bile (Issue #148).
+    // Aksi halde kasa hâline gelmiş bir hesapta eski banka kodu asılı kalır ve ileride banka
+    // bazlı her toplama onu sayardı.
+    if (input.type === AccountType.CASH) {
+      data.bankCode = null;
+    }
+  }
+
+  if (input.bankCode !== undefined) {
+    if (input.bankCode === null) {
+      // Temizleme her zaman serbesttir: "bankasını belirtmiyorum" meşru bir seçimdir.
+      data.bankCode = null;
+    } else {
+      if (!isValidBankCode(input.bankCode)) {
+        return { ok: false, status: 400, error: INVALID_BANK_ERROR };
+      }
+      if (input.type === AccountType.CASH) {
+        return { ok: false, status: 400, error: BANK_ON_NON_BANK_ERROR };
+      }
+      if (input.type === undefined) {
+        // Tür bu istekte verilmediyse ETKİN tür kayıttan okunmalıdır; aksi halde bir kasa
+        // hesabına banka yazılabilirdi. Sorgu `tenantScoped()` üzerinden geçer — başka bir
+        // tenant'ın kaydı okunamaz.
+        //
+        // Kabul edilen yarış: okuma ile yazma arasında biri türü `CASH`e çevirirse, kasa
+        // hesabında banka kodu kalabilir. Bu bir ETİKET tutarsızlığıdır, para hareketi değil;
+        // kapatmak Serializable bir transaction gerektirirdi ve bedeli faydasını aşardı
+        // (karşılaştır: `transaction.ts`teki bakiye yazımı, orada gerçekten para söz konusu).
+        const current = await prisma.account.findFirst({
+          where: tenantScoped(tenantId, { id: accountId }),
+          select: { type: true },
+        });
+        if (!current) {
+          return { ok: false, status: 404, error: NOT_FOUND_ERROR };
+        }
+        if (current.type !== AccountType.BANK) {
+          return { ok: false, status: 400, error: BANK_ON_NON_BANK_ERROR };
+        }
+      }
+      data.bankCode = input.bankCode;
+    }
   }
 
   if (input.currency !== undefined) {

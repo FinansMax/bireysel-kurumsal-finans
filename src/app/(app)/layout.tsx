@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/app-shell";
 import { requirePageUser } from "@/lib/auth/page-guard";
+import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { buildModuleNavLinks } from "@/lib/modules/nav";
 import { listTenantModules } from "@/lib/modules/tenant-module";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
@@ -53,6 +54,11 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
       // `resolveActiveTenantForUser()` `null` döner ve seçici "seçim yok" durumuna düşer.
       activeTenantId={activeTenant?.tenant.id ?? null}
       moduleLinks={moduleLinks}
+      // Modül yönetimi OWNER-only'dir (#151); linki herkese göstermek ADMIN/MEMBER'ı kesin bir
+      // yönlendirmeye davet ederdi. Gizlemek yetkilendirme DEĞİL, UX kararıdır (invariant #3).
+      canManageModules={
+        activeTenant ? hasPermission(activeTenant.role, PERMISSIONS.MANAGE_MODULES) : false
+      }
     >
       {children}
     </AppShell>

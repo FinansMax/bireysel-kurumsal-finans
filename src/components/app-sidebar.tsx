@@ -77,6 +77,7 @@ export function AppSidebar({
   tenants,
   activeTenantId,
   moduleLinks,
+  canManageModules,
 }: {
   userEmail: string;
   tenants: SwitchableTenant[];
@@ -89,6 +90,15 @@ export function AppSidebar({
    * (invariant #3): gerçek koruma `requireModule()`/`requirePageModule()` guard'larındadır.
    */
   moduleLinks: readonly ModuleNavLink[];
+  /**
+   * `MANAGE_MODULES` izni (Issue #153). Modül yönetimi OWNER-only olduğu için, linki herkese
+   * göstermek ADMIN/MEMBER'ı kesin bir yönlendirmeye davet ederdi — `EmptyState`in "yetkisi
+   * olmayana eylem gösterme" kuralıyla aynı duruş.
+   *
+   * Gizlemek YETKİLENDİRME DEĞİLDİR (invariant #3): sayfa kendi guard'ıyla, API ise
+   * `requirePermission()` ile korunur.
+   */
+  canManageModules: boolean;
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -96,21 +106,40 @@ export function AppSidebar({
   // Modül linkleri "Finans" grubunun SONUNA eklenir: çekirdek ekranlar sabit sırada kalır,
   // sonradan açılan yüzeyler onların altına düşer. Ayrı bir "Modüller" başlığı açmak,
   // kullanıcıya bir uygulama detayını (bu ekran bir modülden geliyor) menüde göstermek olurdu.
-  const navGroups = NAV_GROUPS.map((group) =>
-    group.title === "Finans" && moduleLinks.length > 0
-      ? {
-          ...group,
-          items: [
-            ...group.items,
-            ...moduleLinks.map((link) => ({
-              label: link.label,
-              href: link.href,
-              icon: <IconModule className="size-4.5" />,
-            })),
-          ],
-        }
-      : group,
-  );
+  const navGroups = NAV_GROUPS.map((group) => {
+    if (group.title === "Finans" && moduleLinks.length > 0) {
+      return {
+        ...group,
+        items: [
+          ...group.items,
+          ...moduleLinks.map((link) => ({
+            label: link.label,
+            href: link.href,
+            icon: <IconModule className="size-4.5" />,
+          })),
+        ],
+      };
+    }
+
+    // "Modüller" öğesi "Ayarlar" placeholder'ının ÖNÜNE eklenir: ikisi de yönetim işidir ve
+    // gerçek bir ekranı olan öğe, henüz yazılmamış olanın üstünde durmalı.
+    if (group.title === "Yönetim" && canManageModules) {
+      return {
+        ...group,
+        items: [
+          ...group.items.slice(0, -1),
+          {
+            label: "Modüller",
+            href: "/settings/modules",
+            icon: <IconModule className="size-4.5" />,
+          }, // #153
+          ...group.items.slice(-1),
+        ],
+      };
+    }
+
+    return group;
+  });
 
   return (
     <>

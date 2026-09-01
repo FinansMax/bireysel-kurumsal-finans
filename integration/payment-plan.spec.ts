@@ -45,15 +45,14 @@ test.describe("PaymentPlan + PaymentInstallment İş Kuralları", () => {
     const tenantId = await seedTenant();
     const dealId = await seedDeal(tenantId);
 
-    // Total: 1000.00, DownPayment: 100.00 -> Net: 900.00. 12 taksitte 900 / 12 = 75.00 tam bölünür.
-    // Farklı bir bölme testi: Total: 100.00, DownPayment: 0 -> 100 / 3 = 33.3333... -> 33.3333 * 3 = 99.9999 -> Kalan son taksite.
+    // Total: 100.00, DownPayment: 0 -> 100 / 12 = 8.3333... -> kalan son taksite eklenir.
     const createResult = await createPaymentPlan(tenantId, {
       dealId,
       totalAmount: "100.00",
       currency: "TRY",
       method: PaymentMethod.CARD,
       downPayment: "0.00",
-      installmentCount: 3,
+      installmentCount: 12,
       firstDueDate: new Date("2026-10-01"),
       intervalMonths: 1,
       notes: "Test Planı",
@@ -63,7 +62,7 @@ test.describe("PaymentPlan + PaymentInstallment İş Kuralları", () => {
     if (!createResult.ok) return;
 
     const plan = createResult.data;
-    expect(plan.installments.length).toBe(3);
+    expect(plan.installments.length).toBe(12);
 
     // Taksit tutarlarının toplamının net tutara (100.00) kuruşu kuruşuna eşit olduğunu doğrula
     const sum = plan.installments.reduce(
@@ -73,9 +72,8 @@ test.describe("PaymentPlan + PaymentInstallment İş Kuralları", () => {
     expect(sum.toString()).toBe("100.0000");
 
     // Son taksitin kuruş farkını aldığını doğrula
-    expect(plan.installments[0].amount.toString()).toBe("33.3333");
-    expect(plan.installments[1].amount.toString()).toBe("33.3333");
-    expect(plan.installments[2].amount.toString()).toBe("33.3334");
+    expect(plan.installments.slice(0, 11).every((inst) => inst.amount.toString() === "8.3333")).toBe(true);
+    expect(plan.installments[11].amount.toString()).toBe("8.3337");
   });
 
   test("Aynı deal için ikinci aktif plan kurulmaya çalışıldığında 409 döner", async () => {

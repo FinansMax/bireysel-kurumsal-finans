@@ -474,7 +474,7 @@ model PaymentInstallment {
   plan   PaymentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
 
   transactionId String?  @unique
-  cheques       Cheque[]
+  cheque        Cheque?
 
   @@unique([planId, sequence])
   @@index([tenantId, dueDate])
@@ -498,7 +498,7 @@ model Cheque {
   planId String?
   plan   PaymentPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
 
-  installmentId String?
+  installmentId String?  @unique
   installment   PaymentInstallment? @relation(fields: [installmentId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])

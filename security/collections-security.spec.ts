@@ -12,9 +12,20 @@ test.afterAll(async () => {
   await prisma.$disconnect();
 });
 
-async function createTenant(label: string) {
+async function createTenant(label: string, crmEnabled = true) {
   return prisma.tenant.create({
-    data: { name: label, slug: `${label.toLowerCase()}-${randomUUID()}` },
+    data: {
+      name: label,
+      slug: `${label.toLowerCase()}-${randomUUID()}`,
+      tenantModules: {
+        createMany: {
+          data: [
+            { moduleKey: "crm", enabled: crmEnabled },
+            { moduleKey: "collections", enabled: true },
+          ],
+        },
+      },
+    },
     select: { id: true },
   });
 }
@@ -86,10 +97,14 @@ test.describe("Tahsilat ve Ödeme Planı Güvenlik Testleri", () => {
         method: PaymentMethod.CARD,
         installmentCount: 2,
         firstDueDate: new Date().toISOString(),
+        installments: [{ sequence: 99, amount: "1.00" }],
       },
     });
     expect(ownerCreateRes.status()).toBe(201);
     const createdPlan = await ownerCreateRes.json();
+    expect(createdPlan.installments).toHaveLength(2);
+    expect(createdPlan.installments[0].sequence).toBe(1);
+    expect(createdPlan.installments.some((installment: { sequence: number }) => installment.sequence === 99)).toBe(false);
 
     // 3. MEMBER planı okuyabilir -> 200
     const memberGetRes = await request.get(`/api/tenants/${tenant.id}/collections/plans/${createdPlan.id}`, {
@@ -133,18 +148,8 @@ test.describe("Tahsilat ve Ödeme Planı Güvenlik Testleri", () => {
     // Kontrol grubu: crm modülü açık olan tenant'ta normal çalışır.
     // Deney: crm modülünü TenantModule kaydıyla explicit olarak kapattığımızda
     // collections endpoint'inin 404 döndüğü doğrulanır — sistem yüzeyi gizleme kararı.
-    const tenant = await createTenant("SecModuleDisabled");
+    const tenant = await createTenant("SecModuleDisabled", false);
     const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
-
-    // crm modülünü DB kaydıyla devre dışı bırak.
-    // isModuleEnabled(): kayıt yoksa açık varsayılır, kayıt varsa kaydın değerini kullanır.
-    await prisma.tenantModule.create({
-      data: {
-        tenantId: tenant.id,
-        moduleKey: "crm",
-        enabled: false,
-      },
-    });
 
     // collections, crm'e bağımlı; crm kapalıyken collections da kapalı sayılır → 404.
     const res = await request.post(`/api/tenants/${tenant.id}/collections/plans`, {

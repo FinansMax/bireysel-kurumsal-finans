@@ -1,7 +1,65 @@
 import { Prisma, PaymentMethod, PaymentPlanStatus, InstallmentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { tenantScoped } from "@/lib/tenancy/scope";
-import { runSerializable } from "@/lib/db/serializable";
+import { runSerializable, SerializationConflictError } from "@/lib/db/serializable";
+
+const PAYMENT_INSTALLMENT_SELECT = {
+  id: true,
+  sequence: true,
+  dueDate: true,
+  amount: true,
+  paidAmount: true,
+  status: true,
+  paidAt: true,
+  method: true,
+  notes: true,
+  createdAt: true,
+  updatedAt: true,
+  tenantId: true,
+  planId: true,
+  transactionId: true,
+} satisfies Prisma.PaymentInstallmentSelect;
+
+const PAYMENT_PLAN_SELECT = {
+  id: true,
+  totalAmount: true,
+  currency: true,
+  method: true,
+  downPayment: true,
+  installmentCount: true,
+  status: true,
+  notes: true,
+  createdAt: true,
+  updatedAt: true,
+  tenantId: true,
+  dealId: true,
+} satisfies Prisma.PaymentPlanSelect;
+
+const PAYMENT_PLAN_WITH_INSTALLMENTS_SELECT = {
+  ...PAYMENT_PLAN_SELECT,
+  installments: {
+    select: PAYMENT_INSTALLMENT_SELECT,
+    orderBy: { sequence: "asc" },
+  },
+} satisfies Prisma.PaymentPlanSelect;
+
+const PAYMENT_INSTALLMENT_WITH_PLAN_SELECT = {
+  ...PAYMENT_INSTALLMENT_SELECT,
+  plan: { select: PAYMENT_PLAN_SELECT },
+} satisfies Prisma.PaymentInstallmentSelect;
+
+type PaymentPlanWithInstallments = Prisma.PaymentPlanGetPayload<{
+  select: typeof PAYMENT_PLAN_WITH_INSTALLMENTS_SELECT;
+}>;
+type PaymentPlanRecord = Prisma.PaymentPlanGetPayload<{
+  select: typeof PAYMENT_PLAN_SELECT;
+}>;
+type PaymentInstallmentWithPlan = Prisma.PaymentInstallmentGetPayload<{
+  select: typeof PAYMENT_INSTALLMENT_WITH_PLAN_SELECT;
+}>;
+type PaymentInstallmentRecord = Prisma.PaymentInstallmentGetPayload<{
+  select: typeof PAYMENT_INSTALLMENT_SELECT;
+}>;
 
 /**
  * Ödeme planı oluşturma girdi parametreleri.
@@ -42,8 +100,9 @@ function addMonths(date: Date, months: number): Date {
 export async function createPaymentPlan(
   tenantId: string,
   params: CreatePaymentPlanParams
-): Promise<CollectionServiceResult<Prisma.PaymentPlanGetPayload<{ include: { installments: true } }>>> {
-  const result = await runSerializable(async (tx) => {
+): Promise<CollectionServiceResult<PaymentPlanWithInstallments>> {
+  try {
+    const result = await runSerializable(async (tx) => {
     // 1. Sürecin (Deal) bu tenant'a ait olup olmadığını kontrol et.
     const deal = await tx.deal.findFirst({
       where: tenantScoped(tenantId, { id: params.dealId }),
@@ -124,21 +183,23 @@ export async function createPaymentPlan(
           },
         },
       },
-      include: {
-        installments: {
-          orderBy: { sequence: "asc" },
-        },
-      },
+      select: PAYMENT_PLAN_WITH_INSTALLMENTS_SELECT,
     });
 
     return { ok: true as const, data: newPlan };
-  });
+    });
 
-  if (!result.ok) {
-    return { ok: false, status: 503, error: "İşlem çakışması nedeniyle plan oluşturulamadı, lütfen tekrar deneyin." };
+    if (!result.ok) {
+      return result;
+    }
+
+    return { ok: true, data: result.data };
+  } catch (error) {
+    if (error instanceof SerializationConflictError) {
+      return { ok: false, status: 503, error: "İşlem çakışması nedeniyle plan oluşturulamadı, lütfen tekrar deneyin." };
+    }
+    throw error;
   }
-
-  return result.data as unknown as CollectionServiceResult<Prisma.PaymentPlanGetPayload<{ include: { installments: true } }>>;
 }
 
 /**
@@ -147,14 +208,10 @@ export async function createPaymentPlan(
 export async function getPaymentPlan(
   tenantId: string,
   planId: string
-): Promise<CollectionServiceResult<Prisma.PaymentPlanGetPayload<{ include: { installments: true } }>>> {
+): Promise<CollectionServiceResult<PaymentPlanWithInstallments>> {
   const plan = await prisma.paymentPlan.findFirst({
     where: tenantScoped(tenantId, { id: planId }),
-    include: {
-      installments: {
-        orderBy: { sequence: "asc" },
-      },
-    },
+    select: PAYMENT_PLAN_WITH_INSTALLMENTS_SELECT,
   });
 
   if (!plan) {
@@ -171,7 +228,7 @@ export async function updatePaymentPlan(
   tenantId: string,
   planId: string,
   notes: string | null
-): Promise<CollectionServiceResult<Prisma.PaymentPlanGetPayload<Record<string, never>>>> {
+): Promise<CollectionServiceResult<PaymentPlanRecord>> {
   const updateResult = await prisma.paymentPlan.updateMany({
     where: tenantScoped(tenantId, { id: planId }),
     data: { notes },
@@ -183,6 +240,7 @@ export async function updatePaymentPlan(
 
   const updatedPlan = await prisma.paymentPlan.findFirst({
     where: tenantScoped(tenantId, { id: planId }),
+    select: PAYMENT_PLAN_SELECT,
   });
 
   return { ok: true, data: updatedPlan! };
@@ -194,11 +252,15 @@ export async function updatePaymentPlan(
 export async function cancelPaymentPlan(
   tenantId: string,
   planId: string
-): Promise<CollectionServiceResult<Prisma.PaymentPlanGetPayload<{ include: { installments: true } }>>> {
-  const result = await runSerializable(async (tx) => {
+): Promise<CollectionServiceResult<PaymentPlanWithInstallments>> {
+  try {
+    const result = await runSerializable(async (tx) => {
     const plan = await tx.paymentPlan.findFirst({
       where: tenantScoped(tenantId, { id: planId }),
-      include: { installments: true },
+      select: {
+        ...PAYMENT_PLAN_SELECT,
+        installments: { select: PAYMENT_INSTALLMENT_SELECT },
+      },
     });
 
     if (!plan) {
@@ -226,21 +288,23 @@ export async function cancelPaymentPlan(
 
     const updated = await tx.paymentPlan.findFirst({
       where: tenantScoped(tenantId, { id: planId }),
-      include: {
-        installments: {
-          orderBy: { sequence: "asc" },
-        },
-      },
+      select: PAYMENT_PLAN_WITH_INSTALLMENTS_SELECT,
     });
 
     return { ok: true as const, data: updated! };
-  });
+    });
 
-  if (!result.ok) {
-    return { ok: false, status: 503, error: "İşlem çakışması nedeniyle plan iptal edilemedi." };
+    if (!result.ok) {
+      return result;
+    }
+
+    return { ok: true, data: result.data };
+  } catch (error) {
+    if (error instanceof SerializationConflictError) {
+      return { ok: false, status: 503, error: "İşlem çakışması nedeniyle plan iptal edilemedi." };
+    }
+    throw error;
   }
-
-  return result.data as unknown as CollectionServiceResult<Prisma.PaymentPlanGetPayload<{ include: { installments: true } }>>;
 }
 
 /**
@@ -255,7 +319,7 @@ export async function listInstallments(
     status?: InstallmentStatus;
     overdue?: boolean;
   }
-): Promise<CollectionServiceResult<Prisma.PaymentInstallmentGetPayload<{ include: { plan: true } }>[]>> {
+): Promise<CollectionServiceResult<PaymentInstallmentWithPlan[]>> {
   const whereClause: Prisma.PaymentInstallmentWhereInput = {};
 
   if (params.planId) {
@@ -280,9 +344,7 @@ export async function listInstallments(
 
   const installments = await prisma.paymentInstallment.findMany({
     where: tenantScoped(tenantId, whereClause),
-    include: {
-      plan: true,
-    },
+    select: PAYMENT_INSTALLMENT_WITH_PLAN_SELECT,
     orderBy: { dueDate: "asc" },
   });
 
@@ -301,7 +363,7 @@ export async function updateInstallment(
     method?: PaymentMethod | null;
     notes?: string | null;
   }
-): Promise<CollectionServiceResult<Prisma.PaymentInstallmentGetPayload<Record<string, never>>>> {
+): Promise<CollectionServiceResult<PaymentInstallmentRecord>> {
   const updateData: Prisma.PaymentInstallmentUpdateInput = {};
 
   if (params.dueDate !== undefined) updateData.dueDate = params.dueDate;
@@ -320,6 +382,7 @@ export async function updateInstallment(
 
   const updated = await prisma.paymentInstallment.findFirst({
     where: tenantScoped(tenantId, { id: installmentId }),
+    select: PAYMENT_INSTALLMENT_SELECT,
   });
 
   return { ok: true, data: updated! };

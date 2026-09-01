@@ -1,9 +1,26 @@
-import { PaymentMethod } from "@prisma/client";
+import { Prisma, PaymentMethod } from "@prisma/client";
 
 export type ValidationError = {
   field: string;
   message: string;
 };
+
+const MONEY_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d{1,4})?$/;
+const ISO_4217_CODES = new Set(Intl.supportedValuesOf("currency"));
+
+function parseMoney(value: unknown, allowZero: boolean): { raw: string; decimal: Prisma.Decimal } | null {
+  if (typeof value !== "string") return null;
+
+  const raw = value.trim();
+  if (!MONEY_PATTERN.test(raw)) return null;
+
+  const decimal = new Prisma.Decimal(raw);
+  if (!decimal.isFinite() || (!allowZero && decimal.lte(0)) || (allowZero && decimal.lt(0))) {
+    return null;
+  }
+
+  return { raw, decimal };
+}
 
 /**
  * Plan oluşturma isteği verilerini doğrular.
@@ -39,15 +56,14 @@ export function validateCreatePaymentPlan(input: unknown): {
   }
 
   // totalAmount
-  const totalAmountStr = String(raw.totalAmount ?? "").trim();
-  const totalAmountNum = Number(totalAmountStr);
-  if (!totalAmountStr || isNaN(totalAmountNum) || totalAmountNum <= 0) {
+  const totalAmount = parseMoney(raw.totalAmount, false);
+  if (!totalAmount) {
     errors.push({ field: "totalAmount", message: "Toplam tutar 0'dan büyük olmalıdır." });
   }
 
   // currency
   const currencyStr = String(raw.currency ?? "").trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(currencyStr)) {
+  if (!/^[A-Z]{3}$/.test(currencyStr) || !ISO_4217_CODES.has(currencyStr)) {
     errors.push({ field: "currency", message: "Para birimi 3 harfli geçerli ISO 4217 kodu olmalıdır (ör. TRY, USD)." });
   }
 
@@ -58,11 +74,10 @@ export function validateCreatePaymentPlan(input: unknown): {
   }
 
   // downPayment
-  const downPaymentStr = String(raw.downPayment ?? "0").trim();
-  const downPaymentNum = Number(downPaymentStr);
-  if (isNaN(downPaymentNum) || downPaymentNum < 0) {
+  const downPayment = parseMoney(raw.downPayment ?? "0", true);
+  if (!downPayment) {
     errors.push({ field: "downPayment", message: "Peşinat 0 veya daha büyük olmalıdır." });
-  } else if (!isNaN(totalAmountNum) && totalAmountNum > 0 && downPaymentNum >= totalAmountNum) {
+  } else if (totalAmount && downPayment.decimal.gte(totalAmount.decimal)) {
     errors.push({ field: "downPayment", message: "Peşinat toplam tutardan küçük olmalıdır." });
   }
 
@@ -102,10 +117,10 @@ export function validateCreatePaymentPlan(input: unknown): {
     valid: true,
     data: {
       dealId: (raw.dealId as string).trim(),
-      totalAmount: totalAmountStr,
+      totalAmount: totalAmount!.raw,
       currency: currencyStr,
       method: raw.method as PaymentMethod,
-      downPayment: downPaymentStr,
+      downPayment: downPayment!.raw,
       installmentCount: installmentCountNum,
       firstDueDate: firstDueDateParsed,
       intervalMonths: intervalMonthsNum,
@@ -175,12 +190,11 @@ export function validateUpdateInstallment(input: unknown): {
   }
 
   if (raw.amount !== undefined) {
-    const amountStr = String(raw.amount).trim();
-    const amountNum = Number(amountStr);
-    if (!amountStr || isNaN(amountNum) || amountNum <= 0) {
+    const amount = parseMoney(raw.amount, false);
+    if (!amount) {
       errors.push({ field: "amount", message: "Taksit tutarı 0'dan büyük olmalıdır." });
     } else {
-      result.amount = amountStr;
+      result.amount = amount.raw;
     }
   }
 

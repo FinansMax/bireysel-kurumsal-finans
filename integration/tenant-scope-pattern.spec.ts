@@ -178,3 +178,52 @@ test.describe("Tenant scoping pattern koruması — transaction.ts", () => {
     expect(TRANSACTION_SOURCE).toMatch(/tenantScoped\(tenantId,\s*\{[\s\S]{0,240}\.\.\.\(filters/);
   });
 });
+
+/**
+ * Aynı koruma, tenant-scoped verinin ÖZETİNİ üreten `dashboard.ts` için (Issue #62).
+ *
+ * Buradaki risk diğerlerinden farklıdır: bu modül tek satır YAZMAZ, ama tenant'ın TÜM finansal
+ * verisini tek bir yanıtta toplar. Scope'u kaçırılmış bir `count`/`groupBy`, hiçbir kaydı
+ * bozmadan başka tenant'ların bakiyelerini ve ciro büyüklüğünü sızdırırdı — üstelik sessizce,
+ * çünkü sayılar "biraz büyük" görünmekten başka bir belirti vermez.
+ */
+test.describe("Tenant scoping pattern koruması — dashboard.ts", () => {
+  const DASHBOARD_SOURCE = readFileSync(
+    path.join(__dirname, "..", "src", "lib", "finance", "dashboard.ts"),
+    "utf-8",
+  );
+
+  test("tenantScoped() import edilip her sorguda kullanılıyor", () => {
+    expect(DASHBOARD_SOURCE).toContain('from "@/lib/tenancy/scope"');
+
+    const usageCount = DASHBOARD_SOURCE.match(/tenantScoped\(/g)?.length ?? 0;
+    // 3 adet count + bakiye groupBy + aylık groupBy + hesap/para-birimi haritası = en az 6.
+    expect(usageCount).toBeGreaterThanOrEqual(6);
+  });
+
+  test("İSTİSNASIZ her `where` tenantScoped() üzerinden geçiyor", () => {
+    const whereUsages = DASHBOARD_SOURCE.match(/where:[^\n]*/g) ?? [];
+
+    // Test kendi kendini doğrular: tarama bozulup 0 eşleşme bulsa aşağıdaki döngü sessizce
+    // geçerdi.
+    expect(whereUsages.length).toBeGreaterThanOrEqual(6);
+
+    for (const usage of whereUsages) {
+      expect(usage, "tenant filtresi olmayan sorgu").toContain("tenantScoped(");
+    }
+  });
+
+  test("özet modülü SALT OKUNURDUR — hiçbir yazma çağrısı içermez", () => {
+    // Panel bir rapordur. Buraya bir yazma girerse (ör. "son görüntülenme" damgası), hem
+    // GET'in yan etkisizliği (invariant #4) hem de bu modülün sözleşmesi bozulurdu.
+    expect(DASHBOARD_SOURCE).not.toMatch(
+      /\.(create|createMany|update|updateMany|upsert|delete|deleteMany|executeRaw|executeRawUnsafe)\s*\(/,
+    );
+  });
+
+  test("tenant-scoped id'lerle yalnız-id sorgusu kullanılmıyor", () => {
+    expect(DASHBOARD_SOURCE).not.toMatch(/\.account\.findUnique\(/);
+    expect(DASHBOARD_SOURCE).not.toMatch(/\.transaction\.findUnique\(/);
+    expect(DASHBOARD_SOURCE).not.toMatch(/where:\s*\{\s*id:\s*accountId\s*\}/);
+  });
+});

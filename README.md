@@ -2291,3 +2291,60 @@ kayıt, satır silinse bile anlamlı kalmalı. Reddedilen istek audit **yazmaz**
   götüren bir menü üretirdi.
 - **`settings` şeması doğrulanmıyor**; bugün yalnızca okunur/yazılır bir `Json?` taşıyıcıdır
   (#151'in kendi "Scope Dışı" notu).
+
+## Modül guard'ları ve modül-farkında menü (Issue #152)
+
+`requireModule()` (API), `requirePageModule()` (sayfa) ve açık modüllere göre kurulan sidebar.
+
+### Sıra kritiktir: önce kimlik, sonra modül
+
+`requireModule()` **önce** `requirePermission()` çağırır (kimlik → aktif tenant → **canlı
+membership** → rol → izin), **sonra** `isModuleEnabled()`. Ters sıra, kimliği doğrulanmamış bir
+isteğin bir tenant'ın hangi modülleri açtığını **yoklamasına** izin verirdi: yanıt kodu, kimlik
+kontrolünden önce modül durumuna göre değişirdi.
+
+Bu, kolayca sessizce bozulabilecek bir invariant olduğu için `integration/tenant-scope-pattern.spec.ts`
+statik olarak da doğruluyor — adımlar yer değiştirirse hiçbir davranış testi kırılmaz.
+
+### Kapalı modül → 404, 403 DEĞİL
+
+Kapalı bir modül o tenant için **var olmayan bir yüzeydir**; `docs/architecture.md`'nin status
+sözlüğünde 404 zaten "yok ya da senin değil" anlamındadır. 403 dönmek, "bu özellik var ama sen
+açmamışsın" bilgisini sızdırırdı — cross-tenant kayıtların 404 almasıyla aynı duruş (invariant #7).
+
+### Modül durumu her istekte DB'den okunur
+
+Aktif tenant cookie'sinin yalnızca bir **ipucu** olması ve membership'in her istekte
+doğrulanmasıyla aynı duruş: kapatılan bir modül, kullanıcının bir sonraki isteğinde kapalıdır.
+Cache eklenirse ayrı bir issue ve ayrı bir karar (#152'nin kendi "Scope Dışı" notu); pattern
+testi, sessizce bir cache girmesini engelliyor.
+
+### Menüde linki gizlemek YETKİLENDİRME DEĞİLDİR
+
+`buildModuleNavLinks()` **saf** bir fonksiyondur (DB'ye gitmez, oturum okumaz) ve iki filtre
+uygular: modül kapalıysa hiçbir linki görünmez; açık olsa bile linkin istediği izne sahip olmayan
+role gösterilmez. Menü **sunucuda** kurulur — istemciye modül listesi ya da katalog gönderilmez.
+
+Ama bu bir **UX kararıdır** (invariant #3): gerçek koruma guard'lardadır ve ikisi de ayrıca test
+edilir. Linki gizlemek, elle URL yazan kullanıcıyı durdurmaz — `requirePageModule()` durdurur.
+
+### Test edilebilirlik: enjekte edilebilir katalog
+
+`buildModuleNavLinks(keys, role, definitions = MODULE_CATALOG)`. Gerçek katalog bugün (#151)
+bilerek **boş `nav`** listeleriyle geliyor; kuralı ekranlar doğana kadar test edilemez bırakmamak
+için `definitions` enjekte edilebilir tasarlandı ve testler kendi sentetik kataloglarını veriyor.
+Ekranlar geldiğinde bu testler **değişmez**, yalnızca gerçek katalog dolar.
+
+Ayrıca gerçek katalogla "bugün hiçbir link üretilmiyor" testi var: birinin var olmayan bir ekranı
+menüye eklemesini yakalar.
+
+### Bilinen sınır: guard'ın HTTP testi #156 ile geliyor
+
+`requireModule()`'ün "kapalı modül → 404" davranışı ancak **korunan bir endpoint** üzerinden
+uçtan uca sınanabilir; katalogdaki iki modülün bugün hiçbir endpoint'i yok. Bu yüzden bu PR
+guard'ın **sıra ve yanıt invariant'larını statik olarak**, menü kuralını ise **davranışsal
+olarak** doğruluyor; `security/module-guard-security.spec.ts` ilk korunan yüzeyle (#156, CRM
+kurumları) birlikte yazılacak ve #152'nin kendi kabul kriterini orada tamamlayacak.
+
+Alternatif — guard'ı test etmek için sahte bir endpoint eklemek — üretim kodunda yalnızca test
+için var olan bir yüzey bırakırdı; reddedildi.

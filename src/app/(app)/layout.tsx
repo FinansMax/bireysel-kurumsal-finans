@@ -1,5 +1,7 @@
 import { AppShell } from "@/components/app-shell";
 import { requirePageUser } from "@/lib/auth/page-guard";
+import { buildModuleNavLinks } from "@/lib/modules/nav";
+import { listTenantModules } from "@/lib/modules/tenant-module";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 import { listTenantsForUser } from "@/lib/tenants/user-tenants";
 
@@ -28,6 +30,21 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
     resolveActiveTenantForUser(user.id),
   ]);
 
+  // MODÜL MENÜSÜ SUNUCUDA KURULUR (Issue #152): istemciye modül listesi ya da katalog
+  // gönderilmez, yalnızca gösterilecek linkler gider. Aktif tenant yoksa sorulacak bir modül
+  // durumu da yoktur — gereksiz bir sorgu yapılmaz.
+  //
+  // Kapalı modülün linki hiç render edilmez; bu bir UX kararıdır, YETKİLENDİRME DEĞİL
+  // (invariant #3). Gerçek koruma `requireModule()`/`requirePageModule()` guard'larındadır.
+  const moduleLinks = activeTenant
+    ? buildModuleNavLinks(
+        (await listTenantModules(activeTenant.tenant.id))
+          .filter((module) => module.enabled)
+          .map((module) => module.key),
+        activeTenant.role,
+      )
+    : [];
+
   return (
     <AppShell
       userEmail={user.email}
@@ -35,6 +52,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
       // Cookie geçerli olsa bile membership her istekte DB'den doğrulanır; üyelik silinmişse
       // `resolveActiveTenantForUser()` `null` döner ve seçici "seçim yok" durumuna düşer.
       activeTenantId={activeTenant?.tenant.id ?? null}
+      moduleLinks={moduleLinks}
     >
       {children}
     </AppShell>

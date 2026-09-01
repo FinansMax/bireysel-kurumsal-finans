@@ -128,4 +128,37 @@ test.describe("Tahsilat ve Ödeme Planı Güvenlik Testleri", () => {
 
     expect(crossRes.status()).toBe(403);
   });
+
+  test("crm modülü devre dışıyken collections endpoint'leri 404 döner", async ({ request }) => {
+    // Kontrol grubu: crm modülü açık olan tenant'ta normal çalışır.
+    // Deney: crm modülünü TenantModule kaydıyla explicit olarak kapattığımızda
+    // collections endpoint'inin 404 döndüğü doğrulanır — sistem yüzeyi gizleme kararı.
+    const tenant = await createTenant("SecModuleDisabled");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+
+    // crm modülünü DB kaydıyla devre dışı bırak.
+    // isModuleEnabled(): kayıt yoksa açık varsayılır, kayıt varsa kaydın değerini kullanır.
+    await prisma.tenantModule.create({
+      data: {
+        tenantId: tenant.id,
+        moduleKey: "crm",
+        enabled: false,
+      },
+    });
+
+    // collections, crm'e bağımlı; crm kapalıyken collections da kapalı sayılır → 404.
+    const res = await request.post(`/api/tenants/${tenant.id}/collections/plans`, {
+      headers: { cookie: owner.cookie },
+      data: {
+        dealId: "irrelevant-id",
+        totalAmount: "100.00",
+        currency: "TRY",
+        method: "CASH",
+        installmentCount: 1,
+        firstDueDate: new Date().toISOString(),
+      },
+    });
+
+    expect(res.status()).toBe(404);
+  });
 });

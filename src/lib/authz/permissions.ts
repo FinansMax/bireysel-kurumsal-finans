@@ -42,15 +42,9 @@ export const PERMISSIONS = {
   // kolay yoludur ve bu yüzden MEMBER'a verilmez.
   VIEW_DEBT_CREDITS: "debt-credits:view",
   MANAGE_DEBT_CREDITS: "debt-credits:manage",
-  // Modül sistemi (Issue #151). GÖRÜNTÜLEME her role verilir — menüyü kurabilmek için hangi
-  // modüllerin açık olduğunu BİLMEK gerekir; bu bilgi bir sır değildir.
-  //
-  // YÖNETİM YALNIZ OWNER'DADIR ve bu, matristeki genel "OWNER+ADMIN yönetir" kalıbının
-  // BİLİNÇLİ istisnasıdır: bir modülü açmak tenant'ın ÜRÜN YÜZEYİNİ değiştirir (yeni ekranlar,
-  // yeni izinler, yeni veri). Bu, `UPDATE_TENANT_SETTINGS` ile aynı sınıfta bir karardır —
-  // matriste bugün OWNER-only olan tek izin odur.
-  VIEW_MODULES: "modules:view",
-  MANAGE_MODULES: "modules:manage",
+  // tahsilat ve ödeme planı (Issue #165). Okuma (OWNER/ADMIN/MEMBER), Yönetim (OWNER/ADMIN).
+  VIEW_COLLECTIONS: "collections:view",
+  MANAGE_COLLECTIONS: "collections:manage",
 } as const;
 
 /** Geçerli permission string literal'lerinin union tipi — rastgele string kabul edilmez. */
@@ -86,8 +80,8 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.MANAGE_TRANSACTIONS,
     PERMISSIONS.VIEW_DEBT_CREDITS,
     PERMISSIONS.MANAGE_DEBT_CREDITS,
-    PERMISSIONS.VIEW_MODULES,
-    PERMISSIONS.MANAGE_MODULES,
+    PERMISSIONS.VIEW_COLLECTIONS,
+    PERMISSIONS.MANAGE_COLLECTIONS,
   ],
   [MembershipRole.ADMIN]: [
     PERMISSIONS.VIEW_TENANT,
@@ -105,8 +99,8 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.MANAGE_TRANSACTIONS,
     PERMISSIONS.VIEW_DEBT_CREDITS,
     PERMISSIONS.MANAGE_DEBT_CREDITS,
-    // ADMIN modülleri GÖRÜR ama AÇAMAZ: ürün yüzeyini değiştirmek OWNER kararıdır.
-    PERMISSIONS.VIEW_MODULES,
+    PERMISSIONS.VIEW_COLLECTIONS,
+    PERMISSIONS.MANAGE_COLLECTIONS,
   ],
   // MEMBER hesapları GÖRÜR ama yönetemez (Issue #46): finansal kayıtları okumak ekibin
   // günlük işidir; hesap açmak/silmek ve bakiyeyi elle değiştirmek yönetim işidir.
@@ -117,7 +111,7 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.VIEW_CATEGORIES,
     PERMISSIONS.VIEW_TRANSACTIONS,
     PERMISSIONS.VIEW_DEBT_CREDITS,
-    PERMISSIONS.VIEW_MODULES,
+    PERMISSIONS.VIEW_COLLECTIONS,
   ],
 };
 

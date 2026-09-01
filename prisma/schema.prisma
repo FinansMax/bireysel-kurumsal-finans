@@ -58,60 +58,18 @@ model Tenant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships  Membership[]
-  invitations  TenantInvitation[]
-  auditLogs    AuditLog[]
-  accounts     Account[]
-  categories   Category[]
-  transactions Transaction[]
-  debtCredits  DebtCredit[]
-  modules      TenantModule[]
-}
-
-/// Bir tenant'ta bir modülün açık olup olmadığı (Issue #151).
-///
-/// Hangi modüllerin VAR OLDUĞUNU kod bilir (`src/lib/modules/catalog.ts`), hangi tenant'ta
-/// hangisinin AÇIK olduğunu bu tablo bilir.
-model TenantModule {
-  id String @id @default(cuid())
-
-  // `ModuleKey` union'ının string karşılığı. PRISMA ENUM DEĞİL: `AuditLog.action` ve
-  // `Account.bankCode` ile aynı gerekçe — yeni bir modül eklemek migration gerektirmemeli.
-  // Tip güvenliği uygulama katmanındaki `ModuleKey` ile sağlanır; katalogda olmayan bir anahtar
-  // YAZARKEN 400 ile reddedilir, OKURKEN sessizce yok sayılır (katalogdan kaldırılmış eski bir
-  // satır uygulamayı kırmamalı).
-  moduleKey String
-
-  // SATIRIN YOKLUĞU = MODÜL KAPALI. Bu, migration sonrası MEVCUT tenant'ların hiçbirinin
-  // etkilenmemesini sağlar: kimseye satır yazılmaz, kimsede yeni bir ekran belirmez
-  // (`credentialsChangedAt`ın nullable olmasıyla aynı mantık — "hiç dokunulmamış" durumu
-  // temsil edilebilir olmalı).
-  enabled Boolean @default(true)
-
-  // Modüle özel ayarlar. Şeması BU MODELDE doğrulanMAZ; ilgili modülün kendi issue'sunda
-  // tanımlanır (#151 "Scope Dışı"). Bugün yalnızca okunur/yazılır bir taşıyıcıdır.
-  settings Json?
-
-  // Varsayılan verisi kurulduysa dolu (bkz. #154). `null` = seed hiç çalışmadı; bu ayrım,
-  // seed'in idempotent kalabilmesi için gereklidir.
-  seededAt DateTime?
-
-  // Son açılma/kapanma anları. Audit log "kim ne zaman" sorusunu zaten yanıtlıyor; bu alanlar
-  // SORGULANABİLİR durum bilgisidir (ör. "geçen ay kapatılmış modüller") ve audit log'un
-  // best-effort olmasından etkilenmezler.
-  enabledAt  DateTime?
-  disabledAt DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  // Aynı tenant'ta aynı modülün iki satırı olamaz. Bu, "önce var mı diye bak sonra yaz"
-  // yarışını DB seviyesinde kapatır: eşzamanlı iki istek `upsert` ile tek satırda buluşur.
-  @@unique([tenantId, moduleKey])
-  @@index([tenantId])
+  memberships          Membership[]
+  invitations          TenantInvitation[]
+  auditLogs            AuditLog[]
+  accounts             Account[]
+  categories           Category[]
+  transactions         Transaction[]
+  debtCredits          DebtCredit[]
+  modules              TenantModule[]
+  deals                Deal[]
+  paymentPlans         PaymentPlan[]
+  paymentInstallments  PaymentInstallment[]
+  cheques              Cheque[]
 }
 
 // Bir tenant'ın finansal hesabı: banka hesabı veya kasa (Issue #46).
@@ -410,4 +368,138 @@ model AuditLog {
   @@index([actorUserId])
   @@index([action])
   @@index([createdAt])
+}
+
+/// Bir tenant'ta bir modülün açık olup olmadığı (Issue #151).
+model TenantModule {
+  id String @id @default(cuid())
+
+  moduleKey String
+  enabled Boolean @default(true)
+  settings Json?
+  seededAt DateTime?
+  enabledAt DateTime?
+  disabledAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, moduleKey])
+  @@index([tenantId])
+}
+
+// CRM Süreç Takibi (Issue #158 / Epic 14): Ödeme planına bağlanan satış süreci modeli.
+model Deal {
+  id        String   @id @default(cuid())
+  title     String
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  plans PaymentPlan[]
+
+  @@index([tenantId])
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  CHEQUE
+  MIXED
+}
+
+enum PaymentPlanStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum InstallmentStatus {
+  PENDING
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+// Tahsilat Ödeme Planı (Issue #165).
+model PaymentPlan {
+  id               String            @id @default(cuid())
+  totalAmount      Decimal           @db.Decimal(19, 4)
+  currency         String
+  method           PaymentMethod
+  downPayment      Decimal           @default(0) @db.Decimal(19, 4)
+  installmentCount Int
+  status           PaymentPlanStatus @default(ACTIVE)
+  notes            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  dealId String
+  deal   Deal   @relation(fields: [dealId], references: [id], onDelete: NoAction)
+
+  installments PaymentInstallment[]
+  cheques      Cheque[]
+
+  @@index([tenantId])
+  @@index([dealId])
+}
+
+// Tahsilat Taksidi (Issue #165).
+model PaymentInstallment {
+  id         String            @id @default(cuid())
+  sequence   Int
+  dueDate    DateTime
+  amount     Decimal           @db.Decimal(19, 4)
+  paidAmount Decimal           @default(0) @db.Decimal(19, 4)
+  status     InstallmentStatus @default(PENDING)
+  paidAt     DateTime?
+  method     PaymentMethod?
+  notes      String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  planId String
+  plan   PaymentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  transactionId String?  @unique
+  cheques       Cheque[]
+
+  @@unique([planId, sequence])
+  @@index([tenantId, dueDate])
+  @@index([tenantId, status])
+}
+
+// Çek Modeli (Issue #165 / Issue #167 relation).
+model Cheque {
+  id           String   @id @default(cuid())
+  chequeNumber String
+  bankName     String
+  dueDate      DateTime
+  amount       Decimal  @db.Decimal(19, 4)
+  currency     String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  planId String?
+  plan   PaymentPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+
+  installmentId String?
+  installment   PaymentInstallment? @relation(fields: [installmentId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
 }

@@ -46,6 +46,7 @@ export const RATE_LIMIT_POLICIES = {
   RESET_PASSWORD: { limit: 10, windowMs: 15 * MINUTES },
   CHANGE_PASSWORD: { limit: 10, windowMs: 15 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
+  COLLECTIONS_MANAGE: { limit: 60, windowMs: 1 * MINUTES },
 } as const satisfies Record<string, RateLimitPolicy>;
 
 /**
@@ -60,4 +61,5 @@ export const RATE_LIMIT_BUCKETS = {
   RESET_PASSWORD: "auth:reset-password",
   CHANGE_PASSWORD: "auth:change-password",
   TENANT_CREATE: "tenant:create",
+  COLLECTIONS_MANAGE: "collections:manage",
 } as const;

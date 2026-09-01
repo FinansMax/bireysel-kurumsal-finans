@@ -43,11 +43,11 @@ export const AUDIT_ACTIONS = {
   DEBT_CREDIT_CREATED: "DEBT_CREDIT_CREATED",
   DEBT_CREDIT_UPDATED: "DEBT_CREDIT_UPDATED",
   DEBT_CREDIT_DELETED: "DEBT_CREDIT_DELETED",
-  // Modül açma/kapama (Issue #151). Bir modülü açmak tenant'ın ÜRÜN YÜZEYİNİ değiştirir: yeni
-  // ekranlar, yeni izinler, yeni veri. Kapatmak ise o verinin görünmez olması demektir. İkisi
-  // de "kim ne zaman karar verdi" sorusunun yanıtsız kalmaması gereken olaylardır.
-  MODULE_ENABLED: "MODULE_ENABLED",
-  MODULE_DISABLED: "MODULE_DISABLED",
+  // Tahsilat ve Ödeme Planı (issue #165).
+  COLLECTION_PLAN_CREATED: "COLLECTION_PLAN_CREATED",
+  COLLECTION_PLAN_UPDATED: "COLLECTION_PLAN_UPDATED",
+  COLLECTION_PLAN_CANCELLED: "COLLECTION_PLAN_CANCELLED",
+  COLLECTION_INSTALLMENT_UPDATED: "COLLECTION_INSTALLMENT_UPDATED",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
@@ -60,9 +60,8 @@ export const AUDIT_TARGET_TYPES = {
   CATEGORY: "CATEGORY",
   TRANSACTION: "TRANSACTION",
   DEBT_CREDIT: "DEBT_CREDIT",
-  // `targetId` bir satır id'si DEĞİL, modül anahtarıdır ("crm"): modül kapalıyken satır hiç
-  // olmayabilir ve kayıt yine de anlamlı olmalıdır.
-  MODULE: "MODULE",
+  PAYMENT_PLAN: "PAYMENT_PLAN",
+  PAYMENT_INSTALLMENT: "PAYMENT_INSTALLMENT",
 } as const;
 
 export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[keyof typeof AUDIT_TARGET_TYPES];

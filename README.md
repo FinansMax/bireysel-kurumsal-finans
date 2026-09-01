@@ -2209,3 +2209,85 @@ kontrollerinin ikinci bir kopyasını doğururdu.
 - **Karşı taraf serbest metindir**; kişi/kurum rehberi (`Contact`) ayrı bir kavram ve ayrı bir
   issue.
 - **Saat dilimi yok (#134)** — vade ve "bugün" karşılaştırması UTC.
+
+## Modül sistemi — çekirdek (Issue #151)
+
+Ürünü "ham çekirdek + müşteriye göre açılan modüller" hâline getiren temel.
+`GET /api/tenants/:tenantId/modules` ve `PATCH .../modules/:moduleKey`.
+
+**Kural:** hangi modüllerin **var olduğunu kod** bilir (`src/lib/modules/catalog.ts`), hangi
+tenant'ta hangisinin **açık olduğunu veritabanı** bilir (`TenantModule`). Bu ayrım, modül
+tanımının (izinler, bağımlılıklar, menü) kod incelemesinden geçmesini ve derleme zamanında tip
+denetlenmesini sağlar.
+
+**Migration VAR:** tek tablo, eklemeli, veri kaybı yok.
+
+### Satırın YOKLUĞU = modül kapalı
+
+Migration sonrası **hiçbir mevcut tenant etkilenmez**: kimseye satır yazılmaz, kimsede yeni bir
+ekran belirmez. `credentialsChangedAt`'ın nullable olmasıyla aynı mantık — "hiç dokunulmamış"
+durumu temsil edilebilir olmalı.
+
+`GET` bunu **tembel kurulumla bozmaz**: liste katalog + DB birleştirilerek üretilir, eksik
+satırlar oluşturulmaz. Yan etkili bir `GET`, CSRF korumasının dayandığı invariant'ı (#4) bu
+endpoint için ortadan kaldırırdı.
+
+### `moduleKey` String, Prisma enum değil
+
+`AuditLog.action` ve `Account.bankCode` ile aynı gerekçe: yeni modül eklemek migration
+gerektirmemeli. Tip güvenliği uygulama katmanındaki `ModuleKey` union'ı ile sağlanır.
+Katalogda olmayan bir anahtar **yazarken 400** ile reddedilir, **okurken sessizce yok sayılır**
+— katalogdan kaldırılmış eski bir satır uygulamayı kırmamalı.
+
+`MODULE_CATALOG` bir `Record<ModuleKey, ModuleDefinition>`tir: yeni bir anahtar eklendiğinde
+tanımını yazmayı **derleme zamanında** zorunlu kılar (rol→izin matrisiyle aynı gerekçe).
+
+### Bağımlılık OTOMATİK AÇILMAZ — ve kural simetriktir
+
+`collections` → `dependsOn: ["crm"]`.
+
+- **Açarken** bağımlılık kapalıysa **409**. Sessizce `crm`'i de açmak, tenant'ın ürün yüzeyini
+  kullanıcının istemediği bir şekilde genişletirdi — **kullanıcı ne açtığını bilmelidir.**
+- **Kapatırken** buna bağımlı **açık** bir modül varsa **409**. (Kapalı bir bağımlı engel
+  değildir; kural "açık olan bağımlı" üzerinedir.)
+
+Kontrol **okumaya bağlı bir invariant** olduğu için `runSerializable()` içinde yapılır: iki
+eşzamanlı istek — biri `crm`'i kapatırken diğeri `collections`'ı açarsa — ayrı ayrı okuyup ikisi
+de geçerli görebilir ve sonuçta `collections` açık, `crm` kapalı kalırdı. `prisma.$transaction`
++ `Serializable`'ı **doğrudan** çağırmak yetmez: serialization failure'da retry atlanır ve
+kullanıcı 500 alır (#122). Retry tükenirse **503** döner — `409` değil, çünkü bu bir iş kuralı
+ihlali değil geçici bir sunucu durumudur.
+
+Yazma `upsert` + `@@unique([tenantId, moduleKey])` ile yapılır; "önce var mı diye bak sonra yaz"
+yarışı DB seviyesinde kapalıdır.
+
+Katalogun kendi tutarlılığı da test edilir: anahtar/tanım eşleşmesi, bağımlılıkların var olan
+anahtarlara işaret etmesi ve **bağımlılık grafiğinin döngüsüz** olması (iki modül birbirine
+bağımlı olsaydı ikisi de kalıcı olarak kapalı kalırdı).
+
+### Yetki: yönetim yalnız OWNER
+
+- `VIEW_MODULES` → OWNER, ADMIN, MEMBER. Menüyü kurabilmek için hangi modüllerin açık olduğunu
+  bilmek gerekir ve bu bilgi bir sır değildir; modülün **içeriği** elbette kendi izinleriyle
+  korunur.
+- `MANAGE_MODULES` → **yalnız OWNER**. Bu, matristeki genel "OWNER+ADMIN yönetir" kalıbının
+  **bilinçli istisnasıdır**: bir modülü açmak tenant'ın ürün yüzeyini değiştirir (yeni ekranlar,
+  yeni izinler, yeni veri) ve bu, `UPDATE_TENANT_SETTINGS` ile aynı sınıfta bir karardır.
+  Güvenlik testi ADMIN'in de reddedildiğini ayrıca doğrular.
+
+Audit log'da `targetType: "MODULE"` ve `targetId` bir satır id'si **değil modül anahtarıdır**:
+kayıt, satır silinse bile anlamlı kalmalı. Reddedilen istek audit **yazmaz**.
+
+### Bilinen sınırlar / sonraki adımlar
+
+- **Guard yok** — açık olmayan bir modülün API'lerini ve sayfalarını engelleyen katman #152.
+  Bugün katalogdaki iki modülün hiçbir ekranı/izni olmadığı için ortada korunacak bir yüzey de
+  yok.
+- **UI yok** (#153: `/settings/modules`).
+- **Seed yok** (#154: modül açılınca varsayılan veri kurulumu; `seededAt` alanı onun içindir).
+- **`permissions` ve `nav` katalog alanları BOŞ** ve bu bilinçli: ilgili modülün izinleri ve
+  ekranları kendi issue'larında (#156+, #165+) doğduğunda doldurulacak. Bugün uydurma izin
+  adları yazmak derlenmeyen bir katalog, var olmayan yollara link vermek ise kullanıcıyı 404'e
+  götüren bir menü üretirdi.
+- **`settings` şeması doğrulanmıyor**; bugün yalnızca okunur/yazılır bir `Json?` taşıyıcıdır
+  (#151'in kendi "Scope Dışı" notu).

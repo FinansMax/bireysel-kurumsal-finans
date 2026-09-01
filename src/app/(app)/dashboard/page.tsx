@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { Badge, CategoryBadge } from "@/components/ui/badge";
+import { DateRangeForm } from "@/components/ui/date-range-form";
 import { DonutChart, type DonutSlice } from "@/components/ui/donut-chart";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
@@ -28,6 +29,7 @@ import {
   type CurrencyTrend,
   type DashboardSummary,
 } from "@/lib/finance/dashboard";
+import { resolveDateRange } from "@/lib/finance/aggregation";
 import {
   defaultSpendingRange,
   getSpendingByCategory,
@@ -35,10 +37,7 @@ import {
   type SpendingRange,
 } from "@/lib/finance/spending-by-category";
 import { listTransactions } from "@/lib/finance/transaction";
-import { parseTransactionFilters } from "@/lib/finance/transaction-filters";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
-
-import { SpendingRangeForm } from "./spending-range-form";
 
 export const metadata: Metadata = {
   title: "Genel Bakış",
@@ -474,12 +473,12 @@ function singleParam(value: string | string[] | undefined): string {
 }
 
 /**
- * `?from=&to=` → dönem. Ayrıştırıcı `/transactions` ve API ile ORTAKTIR.
+ * `?from=&to=` → dönem. Çözüm ORTAKTIR (`resolveDateRange`): API route'u, rapor ekranı (#67) ve
+ * bu sayfa aynı kuralları paylaşır — aynı biçim, aynı "tekrarlanan parametre hatadır", kısmi
+ * aralığın varsayılanla tamamlanması ve birleştirmeden SONRAKİ ters aralık kontrolü.
  *
- * Aralık KISMEN verilebilir; eksik uç varsayılandan (bu ay) tamamlanır. Ters aralık kontrolü
- * BİRLEŞTİRMEDEN SONRA da yapılır: ayrıştırıcı yalnızca ikisi de verildiğinde bakabilir, oysa
- * tek uçlu bir istek varsayılanla birleşince de ters aralık üretebilir. Sessizce boş dağılım
- * göstermek, kullanıcıya "bu dönemde harcama yok" dedirtirdi; oysa sorun filtrededir (#56).
+ * Buradaki ek iş yalnızca SUNUMA aittir: forma geri yazılacak ham değerler ve "varsayılan
+ * dönemde miyiz" bilgisi.
  */
 function resolveSpendingRange(params: {
   [key: string]: string | string[] | undefined;
@@ -488,24 +487,12 @@ function resolveSpendingRange(params: {
   const rawTo = singleParam(params.to);
   const isDefault = params.from === undefined && params.to === undefined;
 
-  const parsed = parseTransactionFilters((key) =>
-    key === "from" || key === "to" ? params[key] : null,
-  );
+  const parsed = resolveDateRange((key) => params[key], defaultSpendingRange());
   if (!parsed.ok) {
     return { ok: false, from: rawFrom, to: rawTo, isDefault };
   }
 
-  const fallback = defaultSpendingRange();
-  const range: SpendingRange = {
-    from: parsed.filters.from ?? fallback.from,
-    to: parsed.filters.to ?? fallback.to,
-  };
-
-  if (range.from.getTime() > range.to.getTime()) {
-    return { ok: false, from: rawFrom, to: rawTo, isDefault };
-  }
-
-  return { ok: true, range, isDefault };
+  return { ok: true, range: parsed.range, isDefault };
 }
 
 /**
@@ -548,10 +535,14 @@ function SpendingSection({
 
       <Panel>
         <div className="border-b border-line px-5 py-4">
-          <SpendingRangeForm
+          <DateRangeForm
+            action="/dashboard"
+            ariaLabel="Harcama dönemi"
+            idPrefix="spending"
             from={formValues.from}
             to={formValues.to}
             isDefaultRange={range.isDefault}
+            resetLabel="Bu aya dön"
           />
         </div>
 

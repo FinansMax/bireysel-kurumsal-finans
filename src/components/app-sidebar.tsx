@@ -55,7 +55,7 @@ const NAV_GROUPS: ReadonlyArray<{ title: string; items: readonly NavItem[] }> = 
       { label: "Hesaplar", href: "/accounts", icon: <IconWallet className="size-4.5" /> }, // #47
       { label: "Kategoriler", href: "/categories", icon: <IconTag className="size-4.5" /> }, // #50
       { label: "İşlemler", href: "/transactions", icon: <IconTransactions className="size-4.5" /> }, // #54
-      { label: "Raporlar", href: null, icon: <IconReports className="size-4.5" /> }, // #63
+      { label: "Raporlar", href: "/reports", icon: <IconReports className="size-4.5" /> }, // #67
     ],
   },
   {

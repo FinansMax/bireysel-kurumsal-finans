@@ -3,6 +3,14 @@ import { CategoryType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { tenantScoped } from "@/lib/tenancy/scope";
 
+import {
+  compareByAmountThenName,
+  compareCurrencyCode,
+  currentMonthRange,
+  percentOf,
+  toIsoDate,
+  type DateRange,
+} from "./aggregation";
 import { nextDay } from "./transaction";
 
 /**
@@ -77,64 +85,23 @@ export type SpendingByCategory = {
   currencies: CurrencySpending[];
 };
 
-export type SpendingRange = {
-  /** Dahil. */
-  from: Date;
-  /** Dahil (üst sınır `nextDay()` ile uygulanır). */
-  to: Date;
-};
+/** Dönem tipi ORTAKTIR (`aggregation.ts`): rapor ekranı da aynı aralığı kullanır (#67). */
+export type SpendingRange = DateRange;
 
 const ZERO = new Prisma.Decimal(0);
 
 /**
- * Varsayılan aralık: İÇİNDE BULUNULAN AYIN TAMAMI (UTC).
+ * Varsayılan aralık: İÇİNDE BULUNULAN AYIN TAMAMI.
  *
  * "Son 30 gün" REDDEDİLDİ: panelin hemen üstündeki özet "bu ay" diyor ve iki bölümün farklı
  * dönemleri göstermesi, aynı ekranda birbirini yalanlayan iki sayı üretirdi. Ay sonuna kadar
  * (bugüne kadar değil) alınır ki ileri tarihli kayıtlar da özetle aynı kovada kalsın.
  *
- * UTC — `dashboard.ts` ve `parseFilterDate()` ile aynı tercih; saat dilimi yönetimi hâlâ yok
- * (Issue #134).
+ * Hesabın kendisi `aggregation.ts`'tedir — rapor ekranı (#67) da aynı varsayılanı kullanır ve
+ * iki ayrı "bu ay" tanımı doğmamalıdır. Buradaki ad, çağıranlar için ANLAMI söyler.
  */
 export function defaultSpendingRange(now: Date = new Date()): SpendingRange {
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth();
-
-  return {
-    from: new Date(Date.UTC(year, month, 1)),
-    // Ayın 0. günü = bir önceki ayın son günü; artık yıl kuralı elle yazılmaz.
-    to: new Date(Date.UTC(year, month + 1, 0)),
-  };
-}
-
-/** `Date` → `YYYY-MM-DD` (UTC). Aralık sınırları hep gün hassasiyetindedir. */
-function toIsoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function percentOf(value: Prisma.Decimal, total: Prisma.Decimal): string {
-  if (total.isZero()) {
-    return "0.00";
-  }
-  return value.div(total).times(100).toFixed(2);
-}
-
-/** Tutara göre azalan; eşitlikte ada göre. Kategorisiz DAİMA sona düşer (adı yoktur). */
-function compareSlices(
-  a: { amount: Prisma.Decimal; name: string | null },
-  b: { amount: Prisma.Decimal; name: string | null },
-): number {
-  if (!a.amount.equals(b.amount)) {
-    return b.amount.greaterThan(a.amount) ? 1 : -1;
-  }
-  if (a.name === null) {
-    return b.name === null ? 0 : 1;
-  }
-  if (b.name === null) {
-    return -1;
-  }
-  // `localeCompare` KULLANILMAZ: sıra ICU sürümüne bağlı olmasın (dashboard.ts'teki aynı not).
-  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+  return currentMonthRange(now);
 }
 
 export async function getSpendingByCategory(
@@ -197,7 +164,7 @@ export async function getSpendingByCategory(
   }
 
   const currencies: CurrencySpending[] = [...byCurrency.entries()]
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(([a], [b]) => compareCurrencyCode(a, b))
     .map(([currency, buckets]) => {
       const entries = [...buckets.entries()]
         .map(([key, amount]) => ({
@@ -205,7 +172,7 @@ export async function getSpendingByCategory(
           name: key === UNCATEGORIZED ? null : (nameByCategoryId.get(key) ?? null),
           amount,
         }))
-        .sort(compareSlices);
+        .sort(compareByAmountThenName);
 
       let total = ZERO;
       for (const entry of entries) {

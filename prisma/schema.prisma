@@ -64,6 +64,7 @@ model Tenant {
   accounts     Account[]
   categories   Category[]
   transactions Transaction[]
+  debtCredits  DebtCredit[]
 }
 
 // Bir tenant'ın finansal hesabı: banka hesabı veya kasa (Issue #46).
@@ -206,6 +207,67 @@ model Transaction {
   // "işlemi var mı" kontrolü ve kategori silinirken yapılan SetNull taraması bunlara dayanır.
   @@index([accountId])
   @@index([categoryId])
+}
+
+// Borcun yönü (Issue #70): `DEBT` = tenant BORÇLU, `CREDIT` = tenant ALACAKLI.
+//
+// `AccountType`/`CategoryType` ile aynı gerekçeyle Prisma enum'ıdır: küme küçük ve KARARLIDIR
+// (bir kaydın üçüncü bir yönü yoktur). `Account.bankCode`taki serbest `String` tercihiyle
+// karşılaştır — orada küme büyüyor, burada büyümüyor.
+enum DebtCreditType {
+  DEBT
+  CREDIT
+}
+
+// Kaydın durumu (Issue #70). `SETTLED` = kapandı (ödendi/tahsil edildi).
+//
+// Ara durum (`PARTIAL`) BİLEREK YOKTUR: kısmi ödeme, kalan tutarın ne olduğunu ve ödemelerin
+// nerede tutulacağını sorar — yani ayrı bir "ödeme" kaydı ve bakiye mantığı demektir. Bugün
+// istenmiyor; eklenirse bu enum'a bir değer eklemek yetmez, yeni bir model gerekir.
+enum DebtCreditStatus {
+  OPEN
+  SETTLED
+}
+
+/// Tenant'ın borç/alacak kaydı (Issue #70): "kime ne kadar borçluyum / kimden ne kadar
+/// alacağım". `Transaction`dan FARKI, paranın henüz HAREKET ETMEMİŞ olmasıdır — bu yüzden
+/// hiçbir hesabın bakiyesini etkilemez ve `Account` ile ilişkisi yoktur.
+model DebtCredit {
+  id   String         @id @default(cuid())
+  type DebtCreditType
+
+  // Karşı taraf: kişi ya da kurum adı. Serbest metindir ve bir `Contact` modeline
+  // BAĞLANMAZ — kişi/kurum rehberi ayrı bir kavramdır ve bu issue'nun kapsamında değildir.
+  counterparty String
+
+  // Tutar DAİMA POZİTİFTİR; yönü `type` taşır — `Transaction.amount` ile birebir aynı kural
+  // (#53). Negatif bir `DEBT`, kılık değiştirmiş bir alacak olurdu ve her toplamı bozardı.
+  // Ölçek de aynı: (19, 4).
+  amount Decimal @db.Decimal(19, 4)
+
+  // Para birimi tutardan AYRI alandır (invariant #10). ISSUE'NUN ALAN LİSTESİNDE YOKTU ve
+  // BİLEREK EKLENDİ: para birimi olmayan bir tutar, üründeki hiçbir ekranda güvenle
+  // gösterilemez (bkz. README, panelin çok para birimli kararları). Kur dönüşümü yine yok;
+  // toplamlar para birimi bazında ayrılır.
+  currency String
+
+  // Vade. OPSİYONELDİR: "borçluyum ama tarihi belli değil" meşru bir kayıttır ve kullanıcıyı
+  // uydurma bir tarih girmeye zorlamak, veriyi sessizce bozardı. Gün hassasiyetinde saklanır
+  // (UTC gece yarısı) — saat dilimi yönetimi hâlâ yok (#134).
+  dueDate DateTime?
+
+  status DebtCreditStatus @default(OPEN)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Listeleme daima tenant içinde, önce açık kayıtlar ve vadeye göre yapılır; bileşik index
+  // hem filtreyi hem sıralamayı karşılar. `Account`taki gibi ayrı bir `@@index([tenantId])`
+  // YOKTUR — bileşik index'in en soldaki sütunu zaten tenantId'dir.
+  @@index([tenantId, status, dueDate])
 }
 
 model Membership {

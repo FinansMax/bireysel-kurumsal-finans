@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import type { ModuleNavLink } from "@/lib/modules/nav";
+
 import { AppSidebar } from "./app-sidebar";
 import { type SwitchableTenant } from "./tenant-switcher";
 
@@ -18,16 +20,24 @@ export function AppShell({
   userEmail,
   tenants,
   activeTenantId,
+  moduleLinks,
   children,
 }: {
   userEmail: string;
   tenants: SwitchableTenant[];
   activeTenantId: string | null;
+  /** Açık modüllerin menü linkleri (#152); sunucuda hesaplanır, kabuk yalnızca taşır. */
+  moduleLinks: readonly ModuleNavLink[];
   children: ReactNode;
 }) {
   return (
     <div className="flex min-h-full flex-1 bg-canvas">
-      <AppSidebar userEmail={userEmail} tenants={tenants} activeTenantId={activeTenantId} />
+      <AppSidebar
+        userEmail={userEmail}
+        tenants={tenants}
+        activeTenantId={activeTenantId}
+        moduleLinks={moduleLinks}
+      />
 
       {/*
        * `min-w-0` KRİTİK: flex çocuğu varsayılan olarak içeriğinden daha küçük olamaz, bu yüzden

@@ -190,3 +190,14 @@ export function IconHandshake(props: IconProps) {
     </Icon>
   );
 }
+
+// Modülden gelen menü öğeleri (#152). Katalogdaki her modül için ayrı ikon TANIMLANMAZ:
+// ikon, öğenin bir modülden geldiğini söyleyen NÖTR bir işarettir; modüle özel ikonlar,
+// katalog büyüdükçe bakımı imkânsız bir ikon listesi üretirdi.
+export function IconModule(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />
+    </Icon>
+  );
+}

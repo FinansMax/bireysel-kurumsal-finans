@@ -8,6 +8,7 @@ import { BrandMark } from "@/components/ui/brand-mark";
 import {
   IconHandshake,
   IconMenu,
+  IconModule,
   IconOverview,
   IconPlus,
   IconReports,
@@ -17,6 +18,7 @@ import {
   IconUsers,
   IconWallet,
 } from "@/components/ui/icons";
+import type { ModuleNavLink } from "@/lib/modules/nav";
 
 import { SignOutButton } from "./sign-out-button";
 import { TenantSwitcher, type SwitchableTenant } from "./tenant-switcher";
@@ -74,13 +76,41 @@ export function AppSidebar({
   userEmail,
   tenants,
   activeTenantId,
+  moduleLinks,
 }: {
   userEmail: string;
   tenants: SwitchableTenant[];
   activeTenantId: string | null;
+  /**
+   * Açık modüllerin menü linkleri (Issue #152). SUNUCUDA hesaplanır — istemciye modül listesi
+   * ya da katalog gönderilmez; buraya yalnızca gösterilecek linkler ulaşır.
+   *
+   * Kapalı bir modülün linki BURAYA HİÇ GELMEZ. Bu bir UX kararıdır, yetkilendirme DEĞİL
+   * (invariant #3): gerçek koruma `requireModule()`/`requirePageModule()` guard'larındadır.
+   */
+  moduleLinks: readonly ModuleNavLink[];
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+
+  // Modül linkleri "Finans" grubunun SONUNA eklenir: çekirdek ekranlar sabit sırada kalır,
+  // sonradan açılan yüzeyler onların altına düşer. Ayrı bir "Modüller" başlığı açmak,
+  // kullanıcıya bir uygulama detayını (bu ekran bir modülden geliyor) menüde göstermek olurdu.
+  const navGroups = NAV_GROUPS.map((group) =>
+    group.title === "Finans" && moduleLinks.length > 0
+      ? {
+          ...group,
+          items: [
+            ...group.items,
+            ...moduleLinks.map((link) => ({
+              label: link.label,
+              href: link.href,
+              icon: <IconModule className="size-4.5" />,
+            })),
+          ],
+        }
+      : group,
+  );
 
   return (
     <>
@@ -143,7 +173,7 @@ export function AppSidebar({
         {/* `aria-label`: sayfada birden fazla navigasyon olduğunda ekran okuyucuların ayırt
             edebilmesi için; E2E testleri de nav'ı bu rol+isimle bulur. */}
         <nav aria-label="Ana menü" className="flex-1 overflow-y-auto px-3 pb-4">
-          {NAV_GROUPS.map((group) => (
+          {navGroups.map((group) => (
             <div key={group.title} className="mb-5">
               <span className="mb-1.5 block px-2 text-[0.7rem] font-medium tracking-wide text-shell-muted uppercase">
                 {group.title}

@@ -425,3 +425,47 @@ test.describe("Tenant scoping pattern koruması — tenant-module.ts", () => {
     expect(MODULE_SOURCE).not.toMatch(/prisma\.\$transaction\(/);
   });
 });
+
+/**
+ * Modül guard'ının SIRA invariant'ı (Issue #152).
+ *
+ * Bu bir tenant-scope kontrolü değil ama aynı sınıfta bir regresyon korumasıdır: guard'ın
+ * adımları yer değiştirirse hiçbir test kırılmaz, yalnızca kimliksiz bir istek bir tenant'ın
+ * hangi modülleri açtığını YOKLAYABİLİR hâle gelir. Statik kontrol, o sessiz gerilemeyi yakalar.
+ */
+test.describe("Modül guard'ı — sıra ve yanıt invariant'ları", () => {
+  const GUARD_SOURCE = readFileSync(
+    path.join(__dirname, "..", "src", "lib", "modules", "guard.ts"),
+    "utf-8",
+  );
+
+  test("önce requirePermission(), SONRA isModuleEnabled() çağrılıyor", () => {
+    const permissionAt = GUARD_SOURCE.indexOf("await requirePermission(");
+    const moduleAt = GUARD_SOURCE.indexOf("await isModuleEnabled(");
+
+    // Test kendi kendini doğrular: iki çağrı da gerçekten var olmalı.
+    expect(permissionAt).toBeGreaterThan(-1);
+    expect(moduleAt).toBeGreaterThan(-1);
+
+    // Ters sıra, kimliği doğrulanmamış bir isteğe modül durumunu yoklatırdı.
+    expect(permissionAt).toBeLessThan(moduleAt);
+  });
+
+  test("kapalı modül 404 döner, 403 DEĞİL", () => {
+    // Kapalı modül o tenant için VAR OLMAYAN bir yüzeydir; 403 "bu var ama sana kapalı"
+    // bilgisini sızdırırdı (invariant #7, cross-tenant kayıtlarla aynı duruş).
+    expect(GUARD_SOURCE).toMatch(/status:\s*404/);
+    expect(GUARD_SOURCE).not.toMatch(/status:\s*403/);
+  });
+
+  test("modül durumu her istekte DB'den okunuyor (cache yok)", () => {
+    // Cache eklenirse ayrı bir issue ve ayrı bir karar (#152 "Scope Dışı"). Sessizce bir
+    // bellek cache'i girerse, kapatılan bir modül bir süre daha açık davranırdı.
+    expect(GUARD_SOURCE).toContain("isModuleEnabled(");
+    expect(GUARD_SOURCE).not.toMatch(/cache\(|unstable_cache|revalidate/);
+  });
+
+  test("scope'un kaynağı context.tenant.id, URL parametresi DEĞİL", () => {
+    expect(GUARD_SOURCE).toContain("context.tenant.id");
+  });
+});

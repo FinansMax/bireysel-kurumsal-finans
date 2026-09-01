@@ -99,13 +99,17 @@ test.describe("Korumalı kabuk — oturumlu erişim", () => {
     // Henüz var olmayan ekranlar LİNK DEĞİLDİR: link olsalardı kullanıcıyı 404'e
     // götürürlerdi (bkz. `NAV_ITEMS`).
     //
-    // Örnek olarak "Raporlar" (#63) seçildi — bu kontrol, ekranı yazılan bir menü öğesine
-    // bağlanırsa o issue geldiğinde kırılır. Nitekim "Hesaplar" #47 ile gerçek bir bağlantıya
-    // dönüştü; buradaki öğe de #63 geldiğinde hâlâ placeholder olan bir başkasıyla
-    // değiştirilmeli (kontrolün amacı "şu öğe link olmasın" değil, "placeholder'lar link
-    // olmasın"dır).
-    await expect(nav.getByText("Raporlar")).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Raporlar" })).toHaveCount(0);
+    // Örnek olarak "Ayarlar" (#86) seçildi — bu kontrol, ekranı yazılan bir menü öğesine
+    // bağlanırsa o issue geldiğinde kırılır. Nitekim "Hesaplar" #47 ile, "Raporlar" da #67 ile
+    // gerçek bir bağlantıya dönüştü; buradaki öğe de #86 geldiğinde hâlâ placeholder olan bir
+    // başkasıyla değiştirilmeli (kontrolün amacı "şu öğe link olmasın" değil,
+    // "placeholder'lar link olmasın"dır).
+    await expect(nav.getByText("Ayarlar")).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Ayarlar" })).toHaveCount(0);
+
+    // KONTROL GRUBU: gerçekten var olan bir ekran LİNKTİR. Bu olmadan yukarıdaki iddia, menü
+    // hiç link üretmese de geçerdi.
+    await expect(nav.getByRole("link", { name: "Raporlar" })).toBeVisible();
   });
 
   test("public ekranlar kabuğu almıyor", async ({ page }) => {

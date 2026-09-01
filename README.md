@@ -1952,3 +1952,85 @@ adlandırılmış bir **landmark**tır (kendi formu, dönemi ve iki grafiği ola
 - **Saat dilimi yok (#134)** — varsayılan aralık UTC ay sınırlarıyla kurulur.
 - **Dilime tıklayıp işlemleri filtrelemek yok**; `/transactions` zaten aynı `?from=&to=` ve
   `?categoryId=` filtrelerini destekliyor, bağlantı kurmak ayrı bir adım.
+
+## Dönemsel gelir-gider raporu (Issue #67)
+
+`/reports` ekranı ve `GET /api/tenants/:tenantId/reports/income-expense?from=&to=`. Seçilen
+dönem için para birimi başına: **gelir / gider / fark / işlem sayısı**, **kategori kırılımı**
+(gelir ve gider ayrı tablolar) ve **hesap kırılımı**. Hesaplama
+`src/lib/finance/income-expense-report.ts`.
+
+**Migration YOK** — rapor mevcut kayıtlardan türetiliyor.
+
+Sidebar'daki "Raporlar" öğesi bu issue ile placeholder olmaktan çıkıp gerçek bir bağlantıya
+dönüştü (`#63` → `#67`); `e2e/app-shell.spec.ts`'teki "placeholder'lar link olmasın" kontrolü,
+kendi notunun söylediği gibi hâlâ placeholder olan bir öğeye ("Ayarlar", #86) taşındı ve yanına
+bir **kontrol grubu** eklendi (gerçek ekranlar link OLMALI).
+
+### Panelden farkı — ve neden ay kırılımı yok
+
+Panel "şu an durum ne" der (bu ay, son altı ay, sabit pencereler). Rapor "**seçtiğim dönemde ne
+oldu**" der. Ekranın tamamı tek bir dönemi anlatır.
+
+**Ay bazlı satırlar bilerek yok.** Ay kırılımı ya `date_trunc` ister (ham SQL yasak) ya da ay
+başına bir sorgu — panelin **sabit** altı ayında kabul edilebilir, ama burada aralık
+**serbesttir**: beş yıllık bir dönem altmış sorgu demek olurdu. Panelde zaten son altı ayın
+trendi var (#63). Gerekirse ayrı bir issue: sınırlı bir ay sayısı + açık bir üst sınır.
+
+### Tek bir aggregate sorgusu
+
+`groupBy(["accountId", "categoryId", "type"])` bu raporun ihtiyaç duyduğu **her** kırılımı aynı
+anda üretir: toplamlar, kategori kırılımı, hesap kırılımı ve yön ayrımı. `_count` ile işlem
+adedi de aynı sorgudan gelir. Para birimi yine `Account.currency`den katlanır (#62'nin kararı);
+`number`a hiçbir noktada dönüşülmez.
+
+### Paylar KENDİ YÖNÜNÜN toplamına göredir
+
+Gelir kategorisinin payı **gelir toplamına**, gider kategorisininki **gider toplamına**
+oranlanır — genel toplama değil. Aksi halde "maaş gelirin %100'ü" yerine "maaş her şeyin %71'i"
+gibi hiçbir soruyu yanıtlamayan bir sayı çıkardı. Testi:
+`integration/income-expense-report.spec.ts`.
+
+Aynı adı taşıyan gelir ve gider kategorileri **karışmaz** (şema `@@unique([tenantId, type,
+name])` — "Diğer" iki tarafta da olabilir, #49).
+
+### Hesap kırılımı ADA göre sıralanır
+
+Kategori kırılımında soru "en büyük kalem hangisi" (tutara göre azalan). Hesap kırılımında soru
+"şu hesapta ne oldu" — ad, aranan satırı bulmanın en hızlı yoludur ve **dönem değiştikçe sıra
+oynamaz**. Rapor içi tutarlılık ayrıca test ediliyor: hesap kırılımının adet toplamı, para
+biriminin toplam adedine eşit.
+
+### `src/lib/finance/aggregation.ts` — paylaşılan dönem kuralları
+
+Üçüncü toplama modülü eklenirken aynı üç soru üç ayrı yerde soruluyordu: *dönem nedir*, *bir
+tutar toplamın yüzde kaçıdır*, *satırlar hangi sırada*. Üç kopya zamanla üç farklı cevaba
+dönüşür ve bu, kullanıcının fark etmesi en zor hata türüdür (iki ekran aynı veriden iki farklı
+sayı gösterir). Bu yüzden ortaklaştırıldı:
+
+- `currentMonthRange()` — varsayılan dönem (UTC ayın tamamı). `defaultSpendingRange()` artık
+  bunun anlamlı adlı sarmalayıcısı.
+- `resolveDateRange(get, fallback)` — `?from=&to=` çözümünün **tek** tanımı: ortak ayrıştırıcı
+  (`parseTransactionFilters`, #56), kısmi aralığın varsayılanla tamamlanması ve
+  **birleştirmeden sonraki** ters aralık kontrolü. Panel, harcama dağılımı ve rapor aynı kodu
+  çağırır.
+- `percentOf()`, `compareByAmountThenName()`, `compareCurrencyCode()`, `toIsoDate()`.
+
+Modül tenant, HTTP ve Prisma sorgusu **bilmez**; yalnızca saf kurallardır. Bir "utils" çöplüğü
+değildir ve olmamalıdır: buraya yalnızca **birden fazla** toplama modülünün paylaştığı, saf ve
+test edilebilir kurallar girer.
+
+`DateRangeForm` de aynı gerekçeyle paylaşıldı (`src/components/ui/date-range-form.tsx`): panelin
+harcama dönemi ile raporun dönemi aynı formdur, `action` ve `idPrefix` ile ayrışır. `idPrefix`
+zorunludur — aynı sayfada ikinci bir dönem formu belirdiğinde `id`ler çakışır ve `<label for>`
+bağlantısı sessizce yanlış alana giderdi.
+
+### Bilinen sınırlar
+
+- **Ay/çeyrek kırılımı yok** (yukarıdaki gerekçe).
+- **Rapor export'u yok** — Epic 10 (#81).
+- **Karşılaştırma yok** ("geçen döneme göre %x"): ikinci bir dönem ve bir değişim tanımı ister.
+- **Saat dilimi yok (#134)** — varsayılan dönem UTC ay sınırlarıyla kurulur.
+- **Kategori kırılımı gider tarafında #65 ile örtüşür.** Kasıtlı: #65 panelde, sabit görsel bir
+  dağılım (halka); rapor ise seçilen dönemde iki yönü de tablo olarak verir. Ortak olan
+  hesaplama değil yalnızca kavramdır — iki modül ayrı sorular yanıtlıyor.

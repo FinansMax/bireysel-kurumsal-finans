@@ -274,3 +274,47 @@ test.describe("Tenant scoping pattern koruması — spending-by-category.ts", ()
     expect(SPENDING_SOURCE).toMatch(/lt:\s*nextDay\(/);
   });
 });
+
+/**
+ * Aynı koruma, üçüncü salt-okunur özet modülü olan `income-expense-report.ts` için (Issue #67).
+ *
+ * Buradaki yüzey en geniştir: rapor tek yanıtta tutarları, KATEGORİ ADLARINI ve HESAP ADLARINI
+ * birlikte açar. Scope'u kaçırılmış tek bir sorgu, başka bir tenant'ın gider kalemlerini ve
+ * banka hesabı adlarını tablolara yazardı.
+ */
+test.describe("Tenant scoping pattern koruması — income-expense-report.ts", () => {
+  const REPORT_SOURCE = readFileSync(
+    path.join(__dirname, "..", "src", "lib", "finance", "income-expense-report.ts"),
+    "utf-8",
+  );
+
+  test("tenantScoped() import edilip her sorguda kullanılıyor", () => {
+    expect(REPORT_SOURCE).toContain('from "@/lib/tenancy/scope"');
+
+    const usageCount = REPORT_SOURCE.match(/tenantScoped\(/g)?.length ?? 0;
+    // transaction.groupBy + account.findMany + category.findMany = en az 3.
+    expect(usageCount).toBeGreaterThanOrEqual(3);
+  });
+
+  test("İSTİSNASIZ her `where` tenantScoped() üzerinden geçiyor", () => {
+    const whereUsages = REPORT_SOURCE.match(/where:[^\n]*/g) ?? [];
+
+    // Test kendi kendini doğrular.
+    expect(whereUsages.length).toBeGreaterThanOrEqual(3);
+
+    for (const usage of whereUsages) {
+      expect(usage, "tenant filtresi olmayan sorgu").toContain("tenantScoped(");
+    }
+  });
+
+  test("rapor modülü SALT OKUNURDUR — hiçbir yazma çağrısı içermez", () => {
+    expect(REPORT_SOURCE).not.toMatch(
+      /\.(create|createMany|update|updateMany|upsert|delete|deleteMany|executeRaw|executeRawUnsafe)\s*\(/,
+    );
+  });
+
+  test("tarih aralığının üst sınırı ORTAK nextDay() kuralını kullanıyor", () => {
+    expect(REPORT_SOURCE).toContain('from "./transaction"');
+    expect(REPORT_SOURCE).toMatch(/lt:\s*nextDay\(/);
+  });
+});

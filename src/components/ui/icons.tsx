@@ -179,3 +179,14 @@ export function IconCheck(props: IconProps) {
     </Icon>
   );
 }
+
+// Borç/alacak (#70): iki yönlü ok — para bir taraftan diğerine gidecek ama HENÜZ gitmedi.
+// `IconTransactions`tan farkı, okların yatay ve karşılıklı olması: orada hareket olmuş,
+// burada bir yükümlülük var.
+export function IconHandshake(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M3 9h13l-3-3M21 15H8l3 3" />
+    </Icon>
+  );
+}

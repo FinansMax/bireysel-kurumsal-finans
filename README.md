@@ -2121,3 +2121,91 @@ kolon, tabloyu her satırda genişletirdi.
 - **Banka bazlı raporlama yok**; alan bugün yalnızca etiketleme amaçlıdır.
 - **Eski kayıtlar `null` kalır**; toplu doldurma (backfill) yapılmadı — kullanıcı düzenlerken
   form zaten seçim yaptırıyor.
+
+## Borç/Alacak (Issue #70)
+
+`/debt-credits` ekranı ve `GET/POST /api/tenants/:tenantId/debt-credits` +
+`PATCH/DELETE .../:debtCreditId`. "Kime ne kadar borçluyum / kimden ne kadar alacağım", vade ve
+açık/kapandı durumu. Hesaplama katmanı `src/lib/finance/debt-credit.ts`.
+
+**Migration VAR:** iki enum (`DebtCreditType`, `DebtCreditStatus`) ve bir tablo. Eklemeli, veri
+kaybı yok.
+
+### `Transaction`dan farkı: para HENÜZ HAREKET ETMEMİŞTİR
+
+Bir borç/alacak kaydı **hiçbir hesabın bakiyesini değiştirmez** ve `Account` ile ilişkisi
+yoktur. Bu yüzden burada `transaction.ts`'in bakiye/`Serializable` karmaşıklığı **yoktur**.
+
+**"Kapandı" işareti otomatik bir işlem üretmez.** Bir borcu `SETTLED` yapmak o ödemeyi
+kaydetmez; kullanıcı ödemeyi ayrıca işlem olarak girer. Otomatik üretmek kulağa yardımcı gelir
+ama *hangi hesaptan, hangi tarihte, hangi kategoriyle* sorularının cevabı yoktur — uydurulmuş
+bir işlem bakiyeyi sessizce bozardı. Form bunu kullanıcıya da yazıyla söyler.
+
+### `currency` alanı issue'nun listesinde yoktu — bilerek eklendi
+
+#70 alan listesinde para birimi yoktu. Eklendi, çünkü invariant #10 bunu **zorunlu kılar**:
+para birimi olmayan bir tutar üründeki hiçbir ekranda güvenle gösterilemez (panelin çok para
+birimli kararlarının tamamı bunun üzerine kuruludur). Kur dönüşümü yine yok; ileride toplam
+alınırsa para birimi bazında ayrılacak.
+
+### Tutar pozitif, yönü `type` taşır
+
+`Transaction.amount` ile **birebir aynı kural** (#53): negatif bir `DEBT`, kılık değiştirmiş bir
+alacak olurdu ve her toplamı bozardı; sıfır ise kayıt değil gürültü. Arayüz de bunu söyler
+("yön tür alanından gelir, eksi yazılmaz") ve tür etiketleri yönü **açıkça** yazar — "Borç (ben
+borçluyum)" / "Alacak (bana borçlular) —, çünkü "Borç"/"Alacak" sözcükleri tek başına düzenli
+olarak ters okunuyor.
+
+### Durum geçişi İKİ YÖNLÜDÜR
+
+`OPEN → SETTLED` ve `SETTLED → OPEN`. Geri dönüşü yasaklamak, yanlışlıkla "kapandı"
+işaretlenen bir kaydı düzeltmenin tek yolunu **silip yeniden oluşturmak** yapardı — kaydın
+oluşturulma tarihi ve audit izi kaybolurdu. Her iki geçiş de audit log'a düşer ve `status`
+**değeriyle** yazılır (hangi yöne geçildiği alan adından okunamaz).
+
+Ara durum (`PARTIAL`) **bilerek yok**: kısmi ödeme, kalan tutarın ne olduğunu ve ödemelerin
+nerede tutulacağını sorar — yani ayrı bir "ödeme" kaydı ve bakiye mantığı demektir. Eklenirse
+enum'a bir değer eklemek yetmez, yeni bir model gerekir.
+
+### Vade opsiyoneldir; gecikme bir uyarıdır, bildirim değil
+
+"Borçluyum ama tarihi belli değil" meşru bir kayıttır; kullanıcıyı uydurma bir tarih girmeye
+zorlamak veriyi sessizce bozardı. Vade gün hassasiyetinde (UTC gece yarısı) saklanır ve
+`parseCalendarDate` ile doğrulanır — **aralık filtreleriyle (#56) aynı fonksiyon**, çünkü ikisi
+de saat taşımayan takvimsel kavramlardır.
+
+Vadesi geçmiş **açık** kayıtlar listede "Gecikmiş" rozetiyle işaretlenir. Kapanmış olanlar
+işaretlenmez — iş bitmiştir, kırmızı bir rozet yalnızca gürültü olurdu. **Otomatik hatırlatma
+yoktur** (#70'in kendi "Scope Dışı" notu + Epic 9).
+
+### Sıralama ekranın işidir
+
+Önce **açık** kayıtlar, sonra **vadesi yakın** olanlar, vadesizler ise vadelilerin **ardında**
+(`nulls: "last"`). Bu listeye bakan kişi "neyi ödemem/tahsil etmem gerek" sorusunu sorar;
+tarihi olmayan bir kayıt, tarihi geçmiş bir kaydın önüne geçmemeli.
+
+### Yetki
+
+Yeni izinler: `VIEW_DEBT_CREDITS` / `MANAGE_DEBT_CREDITS`. Hesap/kategori/işlemle **aynı
+ayrım**: bir yükümlülüğü görmek ekibin günlük işidir; kaydetmek, tutarını düşürmek ya da
+"kapandı" işaretlemek yönetim işidir. Özellikle **"kapandı" işareti, ödenmemiş bir borcu
+ödenmiş göstermenin en kolay yoludur** — ve hiçbir bakiye değişmediği için hesap ekranlarında
+iz bırakmaz. Bu yüzden MEMBER'a verilmez.
+
+Durum değişimi için **ayrı bir endpoint yoktur** (`POST .../settle` gibi): "kapandı" kaydın bir
+alanıdır ve diğer alanlarla aynı yoldan güncellenir; ayrı endpoint aynı yetki ve izolasyon
+kontrollerinin ikinci bir kopyasını doğururdu.
+
+### Bilinen sınırlar
+
+- **Toplam gösterilmiyor** ("toplam borcum ne kadar"): para birimi bazında ayrılmış bir toplama
+  gerektirir ve bu, sunum katmanına değil `src/lib/finance` içine ait bir iş kuralıdır.
+  İstenirse panel özeti gibi ayrı bir serviste yapılmalı.
+- **Panele bağlanmadı**; borç/alacak bugün yalnızca kendi ekranında yaşıyor.
+- **Sayfalama yok** (`account.ts`/`category.ts` ile aynı duruş): bu liste, işlem listesi gibi
+  sınırsız büyüyen bir kayıt akışı değil, elle tutulan kısa bir listedir. Gerekirse #135'in
+  keyset deseni buraya da uygulanır.
+- **Kısmi ödeme yok** (yukarıdaki `PARTIAL` gerekçesi).
+- **Karşı taraf serbest metindir**; kişi/kurum rehberi (`Contact`) ayrı bir kavram ve ayrı bir
+  issue.
+- **Saat dilimi yok (#134)** — vade ve "bugün" karşılaştırması UTC.

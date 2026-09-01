@@ -318,3 +318,54 @@ test.describe("Tenant scoping pattern koruması — income-expense-report.ts", (
     expect(REPORT_SOURCE).toMatch(/lt:\s*nextDay\(/);
   });
 });
+
+/**
+ * Aynı koruma, beşinci tenant-scoped model olan `DebtCredit` için (Issue #70).
+ *
+ * `Transaction`dan farkı, paranın HENÜZ HAREKET ETMEMİŞ olmasıdır — dolayısıyla başka bir
+ * modelin tablosuna yazmaz. Ama kayıtlar bir YÜKÜMLÜLÜĞÜ temsil eder: scope'u kaçırılmış tek
+ * bir mutation, başka bir tenant'ın borcunu "kapandı" işaretleyebilir.
+ */
+test.describe("Tenant scoping pattern koruması — debt-credit.ts", () => {
+  const DEBT_SOURCE = readFileSync(
+    path.join(__dirname, "..", "src", "lib", "finance", "debt-credit.ts"),
+    "utf-8",
+  );
+
+  test("tenantScoped() import edilip her sorguda kullanılıyor", () => {
+    expect(DEBT_SOURCE).toContain('from "@/lib/tenancy/scope"');
+
+    const usageCount = DEBT_SOURCE.match(/tenantScoped\(/g)?.length ?? 0;
+    // list (1) + update (updateMany + findFirstOrThrow = 2) + delete (1) = en az 4.
+    expect(usageCount).toBeGreaterThanOrEqual(4);
+  });
+
+  test("tenant-scoped resource id'siyle sadece-id update/delete/findUnique kullanılmıyor", () => {
+    expect(DEBT_SOURCE).not.toMatch(/\.debtCredit\.update\(/);
+    expect(DEBT_SOURCE).not.toMatch(/\.debtCredit\.delete\(/);
+    expect(DEBT_SOURCE).not.toMatch(/\.debtCredit\.findUnique\(/);
+
+    expect(DEBT_SOURCE).not.toMatch(/where:\s*\{\s*id:\s*debtCreditId\s*\}/);
+  });
+
+  test("create sırasında tenantId açıkça yazılıyor (client input'tan türetilmiyor)", () => {
+    expect(DEBT_SOURCE).toMatch(/data:\s*\{\s*\n?\s*tenantId/);
+  });
+
+  test("İSTİSNASIZ her `where` tenantScoped() üzerinden geçiyor", () => {
+    // Tarama SATIR BAŞINDAN yapılır (yukarıdaki salt-okunur modüllerdeki serbest regex'ten
+    // farklı): bu dosyanın yorumları `where: { id }` desenini örnek olarak ANIYOR ve serbest
+    // bir eşleme, kodu değil yorumu denetlerdi. Kod tarafında `where:` daima satırın ilk
+    // sözcüğüdür; yorum satırları `*` veya `//` ile başlar ve elenir.
+    const whereUsages = DEBT_SOURCE.split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("where:"));
+
+    // Test kendi kendini doğrular.
+    expect(whereUsages.length).toBeGreaterThanOrEqual(4);
+
+    for (const usage of whereUsages) {
+      expect(usage, "tenant filtresi olmayan sorgu").toContain("tenantScoped(");
+    }
+  });
+});

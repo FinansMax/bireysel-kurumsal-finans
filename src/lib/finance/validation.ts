@@ -1,4 +1,4 @@
-import { AccountType, CategoryType, Prisma } from "@prisma/client";
+import { AccountType, CategoryType, DebtCreditStatus, DebtCreditType, Prisma } from "@prisma/client";
 
 // Temel, bağımlılıksız input validasyonu (bkz. src/lib/tenants/validation.ts deseni).
 
@@ -213,7 +213,15 @@ export function parseSearchQuery(value: unknown): string | null | undefined {
  */
 const FILTER_DATE_PATTERN = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
 
-export function parseFilterDate(value: unknown): Date | null {
+/**
+ * Bir TAKVİM GÜNÜ (`YYYY-MM-DD`, UTC gece yarısı).
+ *
+ * Aralık filtreleri (#56) ve vade tarihi (#70) AYNI kuralı paylaşır ve paylaşmalıdır: ikisi de
+ * saat taşımayan takvimsel kavramlardır. `parseFilterDate` bu fonksiyonun filtre bağlamındaki
+ * adıdır — iki ayrı implementasyon, aynı biçimin iki ekranda farklı kabul edilmesi demek
+ * olurdu.
+ */
+export function parseCalendarDate(value: unknown): Date | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -229,4 +237,30 @@ export function parseFilterDate(value: unknown): Date | null {
   }
 
   return new Date(Date.UTC(year, month - 1, day));
+}
+
+/** `parseCalendarDate`in filtre bağlamındaki adı (#56). Aynı fonksiyon, tek kural. */
+export const parseFilterDate = parseCalendarDate;
+
+export const MIN_COUNTERPARTY_LENGTH = 2;
+export const MAX_COUNTERPARTY_LENGTH = 100;
+
+/**
+ * Borç/alacak kaydındaki karşı taraf adı (Issue #70). Sınırlar hesap ve kategori adıyla
+ * BİLEREK aynı: üçü de kullanıcının yazdığı kısa bir etikettir.
+ */
+export function isValidCounterparty(name: string): boolean {
+  return name.length >= MIN_COUNTERPARTY_LENGTH && name.length <= MAX_COUNTERPARTY_LENGTH;
+}
+
+const DEBT_CREDIT_TYPES = Object.values(DebtCreditType);
+
+export function isValidDebtCreditType(value: unknown): value is DebtCreditType {
+  return typeof value === "string" && (DEBT_CREDIT_TYPES as string[]).includes(value);
+}
+
+const DEBT_CREDIT_STATUSES = Object.values(DebtCreditStatus);
+
+export function isValidDebtCreditStatus(value: unknown): value is DebtCreditStatus {
+  return typeof value === "string" && (DEBT_CREDIT_STATUSES as string[]).includes(value);
 }

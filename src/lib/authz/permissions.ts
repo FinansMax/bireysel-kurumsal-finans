@@ -36,6 +36,12 @@ export const PERMISSIONS = {
   // gevşetme yolu README'de yazılıdır.)
   VIEW_TRANSACTIONS: "transactions:view",
   MANAGE_TRANSACTIONS: "transactions:manage",
+  // Borç/alacak kayıtları (Issue #70). Hesap/kategori/işlemle AYNI ayrım: bir yükümlülüğü
+  // görmek ekibin günlük işidir; kaydetmek, tutarını düşürmek ya da "kapandı" işaretlemek
+  // yönetim işidir. Özellikle "kapandı" işareti, ödenmemiş bir borcu ödenmiş göstermenin en
+  // kolay yoludur ve bu yüzden MEMBER'a verilmez.
+  VIEW_DEBT_CREDITS: "debt-credits:view",
+  MANAGE_DEBT_CREDITS: "debt-credits:manage",
 } as const;
 
 /** Geçerli permission string literal'lerinin union tipi — rastgele string kabul edilmez. */
@@ -69,6 +75,8 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.MANAGE_CATEGORIES,
     PERMISSIONS.VIEW_TRANSACTIONS,
     PERMISSIONS.MANAGE_TRANSACTIONS,
+    PERMISSIONS.VIEW_DEBT_CREDITS,
+    PERMISSIONS.MANAGE_DEBT_CREDITS,
   ],
   [MembershipRole.ADMIN]: [
     PERMISSIONS.VIEW_TENANT,
@@ -84,6 +92,8 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.MANAGE_CATEGORIES,
     PERMISSIONS.VIEW_TRANSACTIONS,
     PERMISSIONS.MANAGE_TRANSACTIONS,
+    PERMISSIONS.VIEW_DEBT_CREDITS,
+    PERMISSIONS.MANAGE_DEBT_CREDITS,
   ],
   // MEMBER hesapları GÖRÜR ama yönetemez (Issue #46): finansal kayıtları okumak ekibin
   // günlük işidir; hesap açmak/silmek ve bakiyeyi elle değiştirmek yönetim işidir.
@@ -93,6 +103,7 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.VIEW_ACCOUNTS,
     PERMISSIONS.VIEW_CATEGORIES,
     PERMISSIONS.VIEW_TRANSACTIONS,
+    PERMISSIONS.VIEW_DEBT_CREDITS,
   ],
 };
 

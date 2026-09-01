@@ -6,6 +6,7 @@ import { useState, type ReactNode } from "react";
 
 import { BrandMark } from "@/components/ui/brand-mark";
 import {
+  IconHandshake,
   IconMenu,
   IconOverview,
   IconPlus,
@@ -55,6 +56,7 @@ const NAV_GROUPS: ReadonlyArray<{ title: string; items: readonly NavItem[] }> = 
       { label: "Hesaplar", href: "/accounts", icon: <IconWallet className="size-4.5" /> }, // #47
       { label: "Kategoriler", href: "/categories", icon: <IconTag className="size-4.5" /> }, // #50
       { label: "İşlemler", href: "/transactions", icon: <IconTransactions className="size-4.5" /> }, // #54
+      { label: "Borç/Alacak", href: "/debt-credits", icon: <IconHandshake className="size-4.5" /> }, // #70
       { label: "Raporlar", href: "/reports", icon: <IconReports className="size-4.5" /> }, // #67
     ],
   },

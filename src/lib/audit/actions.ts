@@ -36,6 +36,13 @@ export const AUDIT_ACTIONS = {
   TRANSACTION_CREATED: "TRANSACTION_CREATED",
   TRANSACTION_UPDATED: "TRANSACTION_UPDATED",
   TRANSACTION_DELETED: "TRANSACTION_DELETED",
+  // Borç/alacak yaşam döngüsü (Issue #70). Bu kayıtlar paranın kendisi DEĞİLDİR (hiçbir
+  // bakiyeyi değiştirmezler) ama bir YÜKÜMLÜLÜĞÜ temsil ederler: "kapandı" işaretlenen bir
+  // borcun kim tarafından ve ne zaman kapatıldığı, tutarının sonradan düşürülmesi kadar
+  // hesap sorulabilir olmalıdır.
+  DEBT_CREDIT_CREATED: "DEBT_CREDIT_CREATED",
+  DEBT_CREDIT_UPDATED: "DEBT_CREDIT_UPDATED",
+  DEBT_CREDIT_DELETED: "DEBT_CREDIT_DELETED",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
@@ -47,6 +54,7 @@ export const AUDIT_TARGET_TYPES = {
   ACCOUNT: "ACCOUNT",
   CATEGORY: "CATEGORY",
   TRANSACTION: "TRANSACTION",
+  DEBT_CREDIT: "DEBT_CREDIT",
 } as const;
 
 export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[keyof typeof AUDIT_TARGET_TYPES];

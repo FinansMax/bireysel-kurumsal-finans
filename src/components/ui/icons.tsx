@@ -169,3 +169,13 @@ export function IconChevronRight(props: IconProps) {
     </Icon>
   );
 }
+
+// Tamamlanmış adım göstergesi (panel onboarding'i, #63). Tek bir çentik: yuvarlak kabı çağıran
+// taraf verir, ikon yalnızca işareti çizer.
+export function IconCheck(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m5 12.5 4.5 4.5L19 7" />
+    </Icon>
+  );
+}

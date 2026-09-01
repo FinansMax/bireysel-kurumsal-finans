@@ -1,3 +1,4 @@
+import type { MembershipRole } from "@prisma/client";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -6,17 +7,26 @@ import { EmptyState } from "@/components/ui/empty-state";
 import {
   IconArrowDownRight,
   IconArrowUpRight,
+  IconCheck,
   IconChevronRight,
+  IconTag,
   IconTransactions,
   IconWallet,
   IconWorkspace,
 } from "@/components/ui/icons";
 import { DirectionChip, Money } from "@/components/ui/money";
 import { IconTile, PageHeader, Panel, PanelHeader } from "@/components/ui/surfaces";
+import { TrendChart, type TrendBar } from "@/components/ui/trend-chart";
 import { requirePageUser } from "@/lib/auth/page-guard";
-import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
+import { hasAllPermissions, hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { listAccounts } from "@/lib/finance/account";
 import { listCategories } from "@/lib/finance/category";
+import {
+  getDashboardSummary,
+  type CurrencyBalance,
+  type CurrencyTrend,
+  type DashboardSummary,
+} from "@/lib/finance/dashboard";
 import { listTransactions } from "@/lib/finance/transaction";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 
@@ -25,25 +35,23 @@ export const metadata: Metadata = {
 };
 
 /**
- * Korumalı alanın giriş sayfası (Issue #39).
+ * Korumalı alanın giriş sayfası (Issue #39, #63).
  *
- * İÇERİK: aktif çalışma alanının hesapları ve son hareketleri. Hepsi MEVCUT servis
- * fonksiyonlarından okunur (`listAccounts`, `listTransactions`, `listCategories`) — yeni bir
- * API, servis ya da sorgu EKLENMEDİ.
+ * TÜM ÖZET DEĞERLER `src/lib/finance/dashboard.ts`'TEN GELİR. Bu sayfada tek bir toplama,
+ * çıkarma ya da oran hesabı yoktur — para aritmetiği bir iş kuralıdır ve sunum katmanına ait
+ * değildir (#62'nin konusu). Burada yapılan tek "hesap", sayıların SIFIR olup olmadığına
+ * bakmaktır (hangi bölümün render edileceği kararı).
  *
- * BİLEREK YOK — "toplam bakiye", "bu ayın geliri/gideri" gibi ÖZET değerler:
+ * FARKLI PARA BİRİMLERİ TOPLANMAZ. Üründe kur dönüşümü yoktur; bu yüzden ekranda "toplam
+ * bakiye" diye TEK bir sayı yoktur, her para birimi kendi kartına ve kendi grafiğine sahiptir.
+ * Gerekçenin tamamı servis modülünün başındadır.
  *
- * 1. Hesaplar farklı para birimlerinde olabilir; bunları toplamak anlamsız bir sayı üretirdi.
- * 2. Dönemsel toplamlar para aritmetiği demektir ve bu, sunum katmanına değil `src/lib/finance`
- *    içine ait bir iş kuralıdır (Epic 7 / #62'nin konusu).
- *
- * Yani buradaki her sayı, başka bir ekranda da aynen görünen GERÇEK bir değerdir; hiçbiri bu
- * sayfada hesaplanmaz.
+ * SAHTE VERİ YOKTUR: bir bölümün göstereceği gerçek veri yoksa o bölüm render EDİLMEZ; yerine
+ * ne yapılacağını söyleyen bir yönlendirme gelir.
  *
  * `requirePageUser()` layout'ta zaten çağrıldığı hâlde BURADA DA çağrılır: layout'lar istemci
  * tarafı gezinmelerde yeniden render edilmediği ve alt segmentlerin render'ını engelleyemediği
  * için layout kontrolü tek başına yeterli değildir (bkz. `src/lib/auth/page-guard.ts`).
- * Aynı istekte ikinci bir DB sorgusuna yol açmaz — sonuç `cache()` ile paylaşılır.
  */
 export default async function DashboardPage() {
   const user = await requirePageUser();
@@ -66,17 +74,45 @@ export default async function DashboardPage() {
   const { tenant, role } = active;
 
   const canViewAccounts = hasPermission(role, PERMISSIONS.VIEW_ACCOUNTS);
+  const canViewCategories = hasPermission(role, PERMISSIONS.VIEW_CATEGORIES);
   const canViewTransactions = hasPermission(role, PERMISSIONS.VIEW_TRANSACTIONS);
-  const canManageAccounts = hasPermission(role, PERMISSIONS.MANAGE_ACCOUNTS);
 
-  // Yetkisi olmayan role o listeyi HİÇ çekmeyiz: gizlemek değil, sormamak doğru olan.
-  const [accounts, transactionPage, categories] = await Promise.all([
+  // Özet ÜÇ modelin verisini birleştirir; bu yüzden üç görüntüleme izninin tamamı aranır —
+  // API'deki (`/api/tenants/[tenantId]/dashboard/summary`) kuralın birebir aynısı. Bugün üç
+  // rolün üçü de bu izinlere sahip; kontrol matris değiştiğinde anlam kazanır.
+  const canSeeSummary = hasAllPermissions(role, [
+    PERMISSIONS.VIEW_ACCOUNTS,
+    PERMISSIONS.VIEW_TRANSACTIONS,
+    PERMISSIONS.VIEW_CATEGORIES,
+  ]);
+
+  // Yetkisi olmayan role o veriyi HİÇ çekmeyiz: gizlemek değil, sormamak doğru olan.
+  const [summary, accounts, transactionPage, categories] = await Promise.all([
+    canSeeSummary ? getDashboardSummary(tenant.id) : Promise.resolve(null),
     canViewAccounts ? listAccounts(tenant.id) : Promise.resolve([]),
     canViewTransactions
       ? listTransactions(tenant.id)
       : Promise.resolve({ transactions: [], nextCursor: null }),
-    canViewTransactions ? listCategories(tenant.id) : Promise.resolve([]),
+    canViewCategories ? listCategories(tenant.id) : Promise.resolve([]),
   ]);
+
+  if (!canViewAccounts && !canViewTransactions) {
+    return (
+      <section className="space-y-8">
+        <PageHeader title="Genel Bakış" />
+        <EmptyState
+          icon={<IconWorkspace className="size-5" />}
+          title="Görüntüleme yetkiniz yok"
+          description="Bu çalışma alanındaki finansal verileri görmek için yöneticinizden yetki isteyin."
+        />
+      </section>
+    );
+  }
+
+  // Hiç işlem yoksa akış panelleri ve son hareketler yerine ONBOARDING gösterilir: sıfırlarla
+  // dolu bir grafik, "veri yok" demenin en kötü yoludur — ekranı doldurur ama hiçbir şey
+  // söylemez ve kullanıcıya ne yapacağını da anlatmaz.
+  const onboarding = summary !== null && summary.counts.transactions === 0;
 
   const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
   // Hesap adı ve PARA BİRİMİ birlikte taşınır: çok para birimli bir çalışma alanında
@@ -101,9 +137,30 @@ export default async function DashboardPage() {
         }
       />
 
-      {canViewAccounts ? <AccountsSection accounts={accounts} canManage={canManageAccounts} /> : null}
+      {summary ? (
+        <>
+          {summary.balancesByCurrency.length > 0 ? (
+            <BalanceSection balances={summary.balancesByCurrency} />
+          ) : null}
 
-      {canViewTransactions ? (
+          <CountsPanel counts={summary.counts} />
+
+          {onboarding ? (
+            <OnboardingPanel counts={summary.counts} role={role} />
+          ) : (
+            <FlowSection summary={summary} />
+          )}
+        </>
+      ) : null}
+
+      {canViewAccounts && (accounts.length > 0 || summary === null) ? (
+        <AccountsSection
+          accounts={accounts}
+          canManage={hasPermission(role, PERMISSIONS.MANAGE_ACCOUNTS)}
+        />
+      ) : null}
+
+      {canViewTransactions && !onboarding ? (
         <RecentSection
           rows={recent}
           accountsById={accountsById}
@@ -111,15 +168,361 @@ export default async function DashboardPage() {
           hasAccounts={accounts.length > 0}
         />
       ) : null}
-
-      {!canViewAccounts && !canViewTransactions ? (
-        <EmptyState
-          icon={<IconWorkspace className="size-5" />}
-          title="Görüntüleme yetkiniz yok"
-          description="Bu çalışma alanındaki finansal verileri görmek için yöneticinizden yetki isteyin."
-        />
-      ) : null}
     </section>
+  );
+}
+
+/* ------------------------------------------------------------------------------------------
+ * Ay etiketleri
+ * --------------------------------------------------------------------------------------- */
+
+/**
+ * Ay adları SABİT bir dizidir, `toLocaleDateString()` DEĞİL.
+ *
+ * Aynı gerekçe işlem tarihlerinde de geçerli (#54): yerelleştirme çıktıyı çalıştığı ortamın
+ * saat dilimine ve ICU sürümüne bağlar; iki farklı sunucu aynı veriyi farklı yazabilir.
+ * Servis `YYYY-MM` (UTC) üretir, burada yalnızca okunur hâle getirilir.
+ */
+const MONTH_SHORT_NAMES = [
+  "Oca",
+  "Şub",
+  "Mar",
+  "Nis",
+  "May",
+  "Haz",
+  "Tem",
+  "Ağu",
+  "Eyl",
+  "Eki",
+  "Kas",
+  "Ara",
+] as const;
+
+const MONTH_LONG_NAMES = [
+  "Ocak",
+  "Şubat",
+  "Mart",
+  "Nisan",
+  "Mayıs",
+  "Haziran",
+  "Temmuz",
+  "Ağustos",
+  "Eylül",
+  "Ekim",
+  "Kasım",
+  "Aralık",
+] as const;
+
+/** `"2026-03"` → ay indeksi (0-11). Ay STRING'inden okunur; tarih nesnesi kurulmaz. */
+function monthIndex(month: string): number {
+  return Number(month.slice(5, 7)) - 1;
+}
+
+function shortMonthLabel(month: string): string {
+  return MONTH_SHORT_NAMES[monthIndex(month)] ?? month;
+}
+
+function longMonthLabel(month: string): string {
+  const name = MONTH_LONG_NAMES[monthIndex(month)];
+  return name ? `${name} ${month.slice(0, 4)}` : month;
+}
+
+/* ------------------------------------------------------------------------------------------
+ * Bölümler
+ * --------------------------------------------------------------------------------------- */
+
+/**
+ * Para birimi başına toplam bakiye.
+ *
+ * BU EKRANIN EN ÖNEMLİ KARARI BURADA GÖRÜNÜR: birden fazla para birimi varsa birden fazla kart
+ * vardır. Tek bir "toplam" kartı, kur dönüşümü olmadan uydurma bir sayı olurdu; alt başlık bunu
+ * kullanıcıya da açıkça söyler.
+ */
+function BalanceSection({ balances }: { balances: ReadonlyArray<CurrencyBalance> }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold text-strong">Bakiye</h2>
+        <p className="text-xs text-muted">
+          {balances.length > 1
+            ? "Para birimleri ayrı toplanır — kur dönüşümü yapılmaz."
+            : "Hesaplarınızın toplamı."}
+        </p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {balances.map((balance, index) => (
+          <Panel key={balance.currency} tone={index === 0 ? "accent" : "plain"} className="p-5">
+            <div className="flex items-start justify-between gap-3">
+              <IconTile tone={index === 0 ? "brand" : "neutral"}>
+                <IconWallet className="size-4.5" />
+              </IconTile>
+              <Badge tone="outline">{balance.accountCount} hesap</Badge>
+            </div>
+
+            <p className="mt-4 text-xs text-muted">Toplam bakiye</p>
+            <div className="mt-0.5">
+              {/* Tutar SAYIYA ÇEVRİLMEZ; `Money` ham string'i tipografik olarak biçimler. */}
+              <Money value={balance.balance} currency={balance.currency} size="xl" />
+            </div>
+          </Panel>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Kayıt sayıları. Para değil, adet — bu yüzden `Money` değil düz sayı. */
+function CountsPanel({ counts }: { counts: DashboardSummary["counts"] }) {
+  const items = [
+    { label: "Hesap", value: counts.accounts, href: "/accounts", icon: <IconWallet className="size-4.5" />, tone: "brand" as const },
+    { label: "İşlem", value: counts.transactions, href: "/transactions", icon: <IconTransactions className="size-4.5" />, tone: "mint" as const },
+    { label: "Kategori", value: counts.categories, href: "/categories", icon: <IconTag className="size-4.5" />, tone: "iris" as const },
+  ];
+
+  return (
+    <Panel>
+      <ul className="grid divide-y divide-line sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        {items.map((item) => (
+          <li key={item.label}>
+            <Link
+              href={item.href}
+              className="flex items-center gap-3 px-5 py-4 transition-colors duration-150 ease-out-soft hover:bg-surface-muted/70"
+            >
+              <IconTile tone={item.tone}>{item.icon}</IconTile>
+              <span className="min-w-0">
+                <span className="block text-xs text-muted">{item.label}</span>
+                <span className="block text-lg font-semibold tabular-nums text-strong">
+                  {item.value}
+                </span>
+              </span>
+              <IconChevronRight className="ml-auto size-4 shrink-0 text-faint" />
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </Panel>
+  );
+}
+
+/**
+ * Para birimi başına akış: bu ayın gelir/gider/farkı + son altı ayın trendi.
+ *
+ * HER PARA BİRİMİ KENDİ PANELİNDE. Alternatif — tek grafikte para birimi seçici — bir client
+ * component ve bir durum yönetimi demekti; ayrı paneller sunucuda render edilir, JavaScript'siz
+ * çalışır ve iki para biriminin AYNI ANDA görünmesini sağlar. Tek para birimi olan (yani
+ * kullanıcıların çoğunluğu için) ekranda tek panel vardır, hiçbir fark hissedilmez.
+ */
+function FlowSection({ summary }: { summary: DashboardSummary }) {
+  if (summary.trend.series.length === 0) {
+    return (
+      <EmptyState
+        icon={<IconTransactions className="size-5" />}
+        title="Son altı ayda hareket yok"
+        description="Kayıtlı işlemleriniz bu pencerenin dışında kalıyor. Tümünü işlemler ekranından görebilirsiniz."
+        action={{ label: "İşlemlere git", href: "/transactions" }}
+      />
+    );
+  }
+
+  const flowByCurrency = new Map(
+    summary.currentMonth.flows.map((flow) => [flow.currency, flow]),
+  );
+
+  return (
+    <div className="space-y-3">
+      <h2 className="text-sm font-semibold text-strong">Gelir ve gider</h2>
+
+      <div className={`grid gap-4 ${summary.trend.series.length > 1 ? "xl:grid-cols-2" : ""}`}>
+        {summary.trend.series.map((series) => (
+          <CurrencyFlowPanel
+            key={series.currency}
+            series={series}
+            month={summary.currentMonth.month}
+            // Seride hareketi olan ama BU AY hareketi olmayan para birimi için sıfır gösterilir
+            // — panelin kendisi de kaybolmaz, çünkü grafiği hâlâ anlamlıdır.
+            flow={
+              flowByCurrency.get(series.currency) ?? {
+                currency: series.currency,
+                income: "0",
+                expense: "0",
+                net: "0",
+                netDirection: "in" as const,
+              }
+            }
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CurrencyFlowPanel({
+  series,
+  month,
+  flow,
+}: {
+  series: CurrencyTrend;
+  month: string;
+  flow: { income: string; expense: string; net: string; netDirection: "in" | "out" };
+}) {
+  const bars: TrendBar[] = series.points.map((point) => ({
+    label: shortMonthLabel(point.month),
+    description: `${longMonthLabel(point.month)}: gelir ${point.income} ${series.currency}, gider ${point.expense} ${series.currency}`,
+    incomePercent: point.incomePercent,
+    expensePercent: point.expensePercent,
+  }));
+
+  return (
+    <Panel>
+      <PanelHeader
+        title={`${series.currency} akışı`}
+        description={`${longMonthLabel(month)} ve önceki beş ay`}
+      />
+
+      <div className="space-y-6 px-5 py-5">
+        <dl className="grid grid-cols-3 gap-3">
+          <FlowStat label="Bu ay gelir" value={flow.income} currency={series.currency} direction="in" />
+          <FlowStat label="Bu ay gider" value={flow.expense} currency={series.currency} direction="out" />
+          {/* `net` MUTLAK değerdir, işareti `netDirection` taşır (#53'ün kuralı) — bu yüzden
+              `Money`ye yön prop'u olarak verilir, string'in başındaki eksi aranmaz. */}
+          <FlowStat
+            label="Fark"
+            value={flow.net}
+            currency={series.currency}
+            direction={flow.netDirection}
+          />
+        </dl>
+
+        <TrendChart bars={bars} />
+      </div>
+    </Panel>
+  );
+}
+
+function FlowStat({
+  label,
+  value,
+  currency,
+  direction,
+}: {
+  label: string;
+  value: string;
+  currency: string;
+  direction: "in" | "out";
+}) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="mt-0.5">
+        <Money value={value} currency={currency} direction={direction} size="lg" />
+      </dd>
+    </div>
+  );
+}
+
+/**
+ * Yeni çalışma alanı için sıralı yönlendirme (#63).
+ *
+ * ÖRNEK RAKAM GÖSTERİLMEZ. "Demo veri" ile dolu bir panel, kullanıcının kendi parasıyla
+ * karıştırabileceği bir yalandır; burada ekranı dolduran şey veri değil, YAPILACAK İŞTİR.
+ *
+ * ADIM SIRASI ZORUNLU BİR BAĞIMLILIKTIR, süsleme değil: işlem bir hesaba bağlanmak
+ * zorundadır (şemadaki `accountId` zorunlu alanı), kategori ise opsiyoneldir ama işlem
+ * kaydederken seçilir. Bu yüzden hesap → kategori → işlem.
+ *
+ * EYLEM YETKİYE BAĞLIDIR (`EmptyState` ile aynı duruş): MEMBER'a kesin 403 alacağı bir yola
+ * "başla" demek, yardım değil tuzaktır.
+ */
+function OnboardingPanel({
+  counts,
+  role,
+}: {
+  counts: DashboardSummary["counts"];
+  role: MembershipRole;
+}) {
+  const steps = [
+    {
+      title: "Hesap oluştur",
+      description: "Banka hesabı ya da kasa. Her hareket bir hesaba bağlanır.",
+      href: "/accounts",
+      done: counts.accounts > 0,
+      allowed: hasPermission(role, PERMISSIONS.MANAGE_ACCOUNTS),
+    },
+    {
+      title: "Kategori oluştur",
+      description: "Gelir ve gider kategorileri, hareketleri sınıflandırmanızı sağlar.",
+      href: "/categories",
+      done: counts.categories > 0,
+      allowed: hasPermission(role, PERMISSIONS.MANAGE_CATEGORIES),
+    },
+    {
+      title: "İlk işlemi ekle",
+      description: "Bir gelir ya da gider kaydedin; bakiye ve grafikler anında oluşur.",
+      href: "/transactions",
+      done: counts.transactions > 0,
+      allowed: hasPermission(role, PERMISSIONS.MANAGE_TRANSACTIONS),
+    },
+  ];
+
+  // Sıradaki adım = tamamlanmamış İLK adım. Kullanıcıya aynı anda tek bir eylem gösterilir;
+  // üç düğme birden, "hangisinden başlayacağım" sorusunu geri getirirdi.
+  const nextIndex = steps.findIndex((step) => !step.done);
+
+  return (
+    <Panel tone="accent">
+      <PanelHeader
+        title="İlk adımlar"
+        description="Panelin sayıları, siz veri girdikçe kendiliğinden oluşur."
+      />
+
+      <ol className="divide-y divide-line">
+        {steps.map((step, index) => {
+          const isNext = index === nextIndex;
+
+          return (
+            <li key={step.title} className="flex items-start gap-3 px-5 py-4">
+              <span
+                className={`mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                  step.done
+                    ? "bg-mint-100 text-mint-700 dark:bg-mint-950 dark:text-mint-300"
+                    : isNext
+                      ? "bg-brand-600 text-white"
+                      : "bg-surface-inset text-faint"
+                }`}
+              >
+                {step.done ? <IconCheck className="size-4" /> : index + 1}
+              </span>
+
+              <div className="min-w-0 flex-1">
+                <p
+                  className={`text-sm font-medium ${step.done ? "text-muted line-through" : "text-strong"}`}
+                >
+                  {step.title}
+                </p>
+                <p className="mt-0.5 text-sm text-pretty text-muted">{step.description}</p>
+              </div>
+
+              {isNext && step.allowed ? (
+                <Link
+                  href={step.href}
+                  className="shrink-0 rounded-control bg-brand-600 px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 ease-out-soft hover:bg-brand-700"
+                >
+                  Başla
+                </Link>
+              ) : null}
+            </li>
+          );
+        })}
+      </ol>
+
+      {nextIndex !== -1 && !steps[nextIndex].allowed ? (
+        <p className="border-t border-line px-5 py-3 text-xs text-muted">
+          Bu adımı tamamlamak için yönetim yetkisi gerekir; çalışma alanı yöneticinizden
+          isteyebilirsiniz.
+        </p>
+      ) : null}
+    </Panel>
   );
 }
 
@@ -164,10 +567,10 @@ function AccountsSection({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {accounts.slice(0, 6).map((account, index) => (
-          <Panel key={account.id} tone={index === 0 ? "accent" : "plain"} className="p-5">
+        {accounts.slice(0, 6).map((account) => (
+          <Panel key={account.id} className="p-5">
             <div className="flex items-start justify-between gap-3">
-              <IconTile tone={index === 0 ? "brand" : "neutral"}>
+              <IconTile tone="neutral">
                 <IconWallet className="size-4.5" />
               </IconTile>
               <Badge tone="outline">{TYPE_LABELS[account.type] ?? account.type}</Badge>
@@ -176,7 +579,7 @@ function AccountsSection({
             <p className="mt-4 truncate text-sm font-medium text-strong">{account.name}</p>
             <div className="mt-1">
               {/* Bakiye SAYIYA ÇEVRİLMEZ; `Money` ham string'i tipografik olarak biçimler. */}
-              <Money value={account.balance} currency={account.currency} size="xl" />
+              <Money value={account.balance} currency={account.currency} size="lg" />
             </div>
           </Panel>
         ))}

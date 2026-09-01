@@ -581,19 +581,24 @@ geçerdi. Kullanılabilirlik görselliğin önünde.
 
 ### Panel (`/dashboard`) ve kapsam sınırı
 
-Panel artık aktif çalışma alanının **hesap kartlarını** ve **son beş hareketini** gösteriyor.
-Hepsi MEVCUT servis fonksiyonlarından okunur (`listAccounts`, `listTransactions`,
-`listCategories`) — yeni bir API, servis ya da sorgu eklenmedi.
+> **Güncelleme (#62/#63):** bu bölümün "özet ve grafik bilerek yok" kararı **artık geçerli
+> değil** — özet servisi ve grafik eklendi. Yerini alan kararlar için aşağıdaki
+> "[Panel özeti, grafik ve onboarding](#panel-özeti-grafik-ve-onboarding-issue-62-63)"
+> bölümüne bakın. Aşağıdaki kısıtın *nedeni* ise hâlâ geçerlidir ve o bölümde korunmuştur:
+> **farklı para birimleri toplanmaz.**
 
-**Bilerek YOK — "toplam bakiye", "bu ayın geliri/gideri" gibi özetler:**
+Panelin ilk hâli (#39) aktif çalışma alanının **hesap kartlarını** ve **son beş hareketini**
+gösteriyordu; hepsi mevcut servis fonksiyonlarından okunuyordu (`listAccounts`,
+`listTransactions`, `listCategories`) — yeni bir API, servis ya da sorgu eklenmemişti.
+
+O aşamada "toplam bakiye", "bu ayın geliri/gideri" gibi özetler **bilerek yoktu:**
 
 1. Hesaplar farklı para birimlerinde olabilir; bunları toplamak anlamsız bir sayı üretirdi.
 2. Dönemsel toplamlar para aritmetiği demektir ve bu, sunum katmanına değil `src/lib/finance`
    içine ait bir iş kuralıdır (Epic 7 / #62'nin konusu).
 
-Yani paneldeki her sayı, başka bir ekranda da aynen görünen gerçek bir değerdir; hiçbiri o
-sayfada hesaplanmaz. **Grafik de yok** — üründe hiç veri görselleştirmesi bulunmuyor ve bir
-tanesini yalnızca tasarım için eklemek, var olmayan bir ekranı vaat etmek olurdu.
+İkinci gerekçe bir *yasak* değil, bir *sıra* kararıydı: #62 o iş kuralını `src/lib/finance`
+içine yazdı, panel de oradan okuyor. Birinci gerekçe ise olduğu gibi duruyor.
 
 ### Tipografi: webfont yok, native yığın
 
@@ -655,9 +660,14 @@ Açılış sayfasındaki beş maddenin her birinin arkasında çalışan bir ekr
 gider takibi (#54, #56, #135), hesaplar ve bakiyeler (#47), kategoriler (#50), çoklu çalışma
 alanı (#40, #42), ekip ve roller (#43).
 
-**Kasıtlı olarak anılmayanlar:** finansal özet/rapor ve grafikler (`/dashboard` henüz boş —
-#62/#63), bildirimler, içe/dışa aktarma, fatura ve borç/alacak takibi. Hepsi backlog'dadır.
-Bir açılış sayfasını doldurmak için verilen söz, ürünün kendisinden önce güveni tüketir.
+**Kasıtlı olarak anılmayanlar:** finansal rapor/analiz (#64–#67), bildirimler, içe/dışa
+aktarma, fatura ve borç/alacak takibi. Hepsi backlog'dadır. Bir açılış sayfasını doldurmak için
+verilen söz, ürünün kendisinden önce güveni tüketir.
+
+**Not (#62/#63):** panel artık özet ve grafik gösteriyor, ama açılış sayfasının metni
+**bilerek değiştirilmedi**. "Grafik" kelimesini pazarlama metnine koymak ayrı bir karardır ve
+`e2e/landing.spec.ts`'teki "yok" iddiasını gevşetmeyi gerektirir; panel içi bir özet, henüz
+"raporlama" diye satılabilecek bir yetenek değildir (asıl rapor ekranları #65–#67).
 
 Bu, yorum olarak bırakılmamış: `e2e/landing.spec.ts` sayfa metninde "Rapor", "Grafik", "Fatura",
 "Dışa aktar", "İçe aktar", "Bildirim" geçmediğini doğrular. Biri bu özelliklerden birini
@@ -1718,3 +1728,121 @@ E2E kanıtı: `e2e/transactions-ui.spec.ts` — 50 altı kayıtta bağlantının
 (kontrol grubu), ikinci sayfada satırların tekrarlamadığı, son sayfada bağlantının kaybolduğu,
 geri tuşunun ilk sayfaya döndüğü, sayfa geçişinin filtreleri koruduğu, filtre değişince imlecin
 düştüğü ve ikinci sayfadaki bir kaydın düzenlenebildiği doğrulanır.
+
+## Panel özeti, grafik ve onboarding (Issue #62, #63)
+
+Panel artık gerçek bir panel: para birimi bazında bakiye, kayıt sayıları, **bu ayın**
+gelir/gider/farkı, **son altı ayın** gelir-gider trendi ve son beş hareket. Hesaplama katmanı
+`src/lib/finance/dashboard.ts` (`getDashboardSummary()`), HTTP yüzeyi
+`GET /api/tenants/:tenantId/dashboard/summary`.
+
+**Migration YOK.** Şemaya tek bir alan eklenmedi; özet tamamen mevcut `Account`, `Transaction`
+ve `Category` kayıtlarından türetiliyor. Bir "özet tablosu" (materialized summary) reddedildi:
+bugünkü veri boyutunda ölçülmüş bir sorun yok ve türetilmiş veriyi kalıcılaştırmak, kaynakla
+ayrışabilen ikinci bir gerçek üretir.
+
+### Farklı para birimleri ASLA toplanmaz
+
+Üründe **kur dönüşümü altyapısı yok** (bkz. `Account.currency` notu). Bu yüzden panelde
+"Toplam Bakiye" diye **tek bir sayı yoktur**; her para birimi kendi kartına, kendi aylık
+özetine ve kendi grafiğine sahiptir. 10.000 TRY ile 500 USD'yi toplayan bir sayı, *doğru
+görünen* ama anlamsız bir sayıdır — finansal bir üründe bu, hiç sayı göstermemekten kötüdür.
+
+Kullanıcıya da söylenir: birden fazla para birimi varken bakiye başlığının yanında "Para
+birimleri ayrı toplanır — kur dönüşümü yapılmaz." yazar. Sessiz bir kısıt, kullanıcının
+kafasında yanlış bir toplam kurmasını engellemez.
+
+**İşlemin para birimi kendi satırında yok:** bir `Transaction`ın para birimi, bağlı olduğu
+`Account.currency`dir. Prisma `groupBy` bir *ilişki* alanına göre gruplayamaz ve ham SQL bu kod
+tabanında yasak (CLAUDE.md §5) — bu yüzden gruplama `accountId` üzerinden yapılır ve para
+birimine katlama uygulama katmanında `Prisma.Decimal` aritmetiğiyle tamamlanır. Toplama yine
+kayıpsızdır: **hiçbir noktada `number`a dönüşülmez** (invariant #10).
+
+Hesap → para birimi haritası, `groupBy`'lardan **sonra** okunur (paralel değil): araya yeni bir
+hesap + işlem girerse işlem `groupBy`'da görünüp hesap listede olmayabilirdi ve o ayın toplamı
+sessizce eksik kalırdı. Şemadaki `onDelete: NoAction` sayesinde işlemi olan bir hesap bu arada
+silinemez, dolayısıyla harita yalnızca büyüyebilir.
+
+### Dönem: UTC ay sınırları, altı aylık pencere
+
+Ay sınırları **UTC**'dir ve üst sınır `lt` ile uygulanır (ayın son milisaniyesini `lte` ile
+yakalamaya çalışmak onu kaçırırdı). Yerel saate göre ay sınırı hesaplamak, aynı işlemi
+sunucunun diliminde başka bir aya düşürürdü; UTC en azından tek ve öngörülebilir bir kuraldır.
+`parseFilterDate()` de aynı tercihi yapıyor. **Bilinen sınır:** saat dilimi yönetimi hâlâ yok
+(#134); kullanıcı UTC+3'te ayın 1'inde gece yarısından önce girdiği bir işlemi bir önceki ayda
+görebilir.
+
+"Bu ay", trendin **son kovasıdır** — ayrı bir sorguyla hesaplanmaz. İki ayrı hesap, zamanla
+"bu ayın geliri"nin iki farklı tanımına dönüşür.
+
+`getDashboardSummary(tenantId, now)`'ın ikinci parametresi **yalnızca testler içindir**; route
+ve sayfa katmanı onu hiç geçirmez. Dönem penceresi sunucunun kararıdır, istemcinin değil.
+
+### `net` mutlak değerdir, işareti ayrı alan taşır
+
+`CurrencyFlow.net` **pozitiftir**; yönü `netDirection: "in" | "out"` taşır. Bu, kod tabanının
+kendi kuralının (`Transaction.amount` daima pozitif, yönü `type` taşır — #53) özet katmanındaki
+karşılığıdır. Alternatif olan işaretli tek bir string, sunum katmanını "başında `-` var mı" diye
+string kesmeye ya da `Money` bileşenine ikinci bir eksi bastırmaya zorlardı.
+
+### Grafik: yeni bağımlılık yok, oran serviste hesaplanır
+
+Grafik **HTML/CSS çubuklarıdır**; Recharts/Chart.js gibi bir kütüphane eklenmedi. Gerekçe: tek
+bir grafik için onlarca kilobayt JavaScript ve bir `"use client"` sınırı; oysa bu grafik
+sunucuda render edilir, JavaScript'siz çalışır ve yazdırılabilir. (Yeni bağımlılık zaten açık
+onay ister — CLAUDE.md §4.) Etkileşim gerektiğinde (zoom, tooltip, seri gizleme) karar yeniden
+gözden geçirilmelidir.
+
+**Çubuk yükseklikleri sunum katmanında hesaplanmaz.** Bileşen hazır yüzde *string*'leri alır ve
+doğrudan CSS'e yazar; oran `Prisma.Decimal` ile serviste üretilir. Yüksekliği bileşende
+hesaplamak `Number(income) / Number(max)` demekti — yani paranın kayan noktaya dönmesi.
+
+Gelir ve gider **ortak ölçekte** normalize edilir: ayrı ayrı normalize edilseydi 100 TRY gelir
+ile 10.000 TRY gider aynı yükseklikte çubuk olurdu ve grafik yalan söylerdi. Sıfır değerli bir
+ay görünmez bir çubuk değil, tabanda ince bir iz bırakır — "veri yok" ile "değer sıfır" ancak
+böyle ayrışır. Grafiğin ekran okuyucu metni ayın gerçek rakamlarını taşır; dekoratif bir çizim
+değildir.
+
+Hareketi hiç olmayan bir para birimi **trende girmez**: altı ay boyunca sıfır olan bir grafik
+bilgi değil gürültüdür. (Bakiyede görünmeye devam eder.)
+
+### Onboarding: sahte veri yerine yapılacak iş
+
+Hiç işlemi olmayan çalışma alanında akış panelleri ve "son hareketler" **hiç render edilmez**;
+yerine üç adımlı bir yönlendirme gelir: hesap → kategori → işlem. Sıra zorunlu bir bağımlılıktır,
+süsleme değil: bir işlem bir hesaba bağlanmak zorundadır (`accountId` zorunlu alan).
+
+**Örnek/demo rakam gösterilmez.** Kullanıcının kendi parasıyla karıştırabileceği bir sayı,
+boş bir ekrandan kötüdür. Aynı nedenle sayımlar sıfırken de gerçek gösterilir ("Hesap 0").
+
+Aynı anda **tek bir eylem** vurgulanır (ilk tamamlanmamış adım); üç düğme birden, "hangisinden
+başlayacağım" sorusunu geri getirirdi. Eylem yetkiye bağlıdır (`EmptyState` ile aynı duruş):
+MEMBER'a kesin 403 alacağı bir yola "başla" demek yardım değil tuzaktır — bunun yerine yetki
+isteme notu gösterilir.
+
+### Yetki: tek bir izin yetmez
+
+Özet üç modelin verisini birlikte açar. Hem route hem sayfa, **üç görüntüleme izninin tamamını**
+arar (`VIEW_ACCOUNTS` + `VIEW_TRANSACTIONS` + `VIEW_CATEGORIES`). Bugün üç rolün üçü de bunlara
+sahip; kontrol matris değiştiğinde anlam kazanır — aksi halde bu endpoint, sessizce fazla veri
+sızdıran yer olurdu.
+
+`GET` yan etkisizdir (invariant #4) ve modül **salt okunurdur**: `dashboard.ts`'te tek bir yazma
+çağrısı yoktur, bunu `integration/tenant-scope-pattern.spec.ts` statik olarak doğrular. Aynı
+dosya, bu modüldeki **istisnasız her `where`'in** `tenantScoped()` üzerinden geçtiğini de
+kontrol eder — scope'u kaçırılmış bir `count`/`groupBy`, hiçbir kaydı bozmadan başka
+tenant'ların bakiyelerini ve ciro büyüklüğünü sızdırırdı, üstelik sessizce.
+
+### Bilinen sınırlar
+
+- **Kur dönüşümü yok** — yukarıdaki kararın kaynağı. Çok para birimli bir çalışma alanı, para
+  birimi sayısı kadar kart ve grafik görür; sayı arttıkça ekran uzar.
+- **Saat dilimi yok (#134)** — ay sınırları UTC.
+- **Kategori bazlı dağılım yok** (#65) ve **dönemsel rapor yok** (#67); panel bunların yerini
+  tutmaz.
+- **Trend penceresi sabit altı aydır**, istemciden ayarlanamaz (`?months=` yoktur) — sayfa
+  boyutu kararıyla (#135) aynı gerekçe: kapatmak açmaktan zordur.
+- **Binlik ayırıcı hâlâ yok**; `Money` ham string basar (#47'den beri kayıtlı borç).
+- **Ay başına bir `groupBy` sorgusu** koşar (altı paralel sorgu). Tek sorguda ay kırılımı
+  `date_trunc` isterdi, o da ham SQL demek. Ölçülmüş bir sorun yok; olursa çare bir
+  materialized özet değil, `Transaction`a denormalize bir `currency` alanı olabilir.

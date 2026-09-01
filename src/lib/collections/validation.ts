@@ -85,6 +85,12 @@ export function validateCreatePaymentPlan(input: unknown): {
   const installmentCountNum = Number(raw.installmentCount);
   if (!Number.isInteger(installmentCountNum) || installmentCountNum < 1) {
     errors.push({ field: "installmentCount", message: "Taksit sayısı en az 1 olmalıdır." });
+  } else if (totalAmount && downPayment) {
+    const net = totalAmount.decimal.sub(downPayment.decimal);
+    const base = net.div(installmentCountNum).toDecimalPlaces(4, Prisma.Decimal.ROUND_DOWN);
+    if (base.lte(0)) {
+      errors.push({ field: "installmentCount", message: "Taksit sayısı net tutar için çok yüksek (taksit tutarı 0 olamaz)." });
+    }
   }
 
   // firstDueDate

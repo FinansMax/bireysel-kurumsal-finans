@@ -137,6 +137,13 @@ export async function createPaymentPlan(
 
     // Her bir taksit tutarı: net tutar / taksit sayısı (4 basamak hassasiyet, aşağı yuvarlama)
     const baseInstallmentDec = netDec.div(params.installmentCount).toDecimalPlaces(4, Prisma.Decimal.ROUND_DOWN);
+    if (baseInstallmentDec.lte(0)) {
+      return {
+        ok: false as const,
+        status: 400 as const,
+        error: "Taksit sayısı net tutar için çok yüksek (taksit tutarı 0 olamaz).",
+      };
+    }
     const sumBaseDec = baseInstallmentDec.mul(params.installmentCount);
     const remainderDec = netDec.sub(sumBaseDec);
 

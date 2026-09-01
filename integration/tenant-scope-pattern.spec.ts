@@ -227,3 +227,50 @@ test.describe("Tenant scoping pattern koruması — dashboard.ts", () => {
     expect(DASHBOARD_SOURCE).not.toMatch(/where:\s*\{\s*id:\s*accountId\s*\}/);
   });
 });
+
+/**
+ * Aynı koruma, ikinci salt-okunur özet modülü olan `spending-by-category.ts` için (Issue #65).
+ *
+ * `dashboard.ts` ile aynı risk: tek satır yazmaz ama tenant'ın harcama profilini bütün olarak
+ * açar. Buradaki ek yüzey KATEGORİ ADLARIDIR — scope'u kaçırılmış bir `category.findMany`,
+ * tutarları sızdırmasa bile başka bir tenant'ın gider kategorilerinin ADLARINI dilim
+ * etiketlerine yazardı.
+ */
+test.describe("Tenant scoping pattern koruması — spending-by-category.ts", () => {
+  const SPENDING_SOURCE = readFileSync(
+    path.join(__dirname, "..", "src", "lib", "finance", "spending-by-category.ts"),
+    "utf-8",
+  );
+
+  test("tenantScoped() import edilip her sorguda kullanılıyor", () => {
+    expect(SPENDING_SOURCE).toContain('from "@/lib/tenancy/scope"');
+
+    const usageCount = SPENDING_SOURCE.match(/tenantScoped\(/g)?.length ?? 0;
+    // transaction.groupBy + account.findMany + category.findMany = en az 3.
+    expect(usageCount).toBeGreaterThanOrEqual(3);
+  });
+
+  test("İSTİSNASIZ her `where` tenantScoped() üzerinden geçiyor", () => {
+    const whereUsages = SPENDING_SOURCE.match(/where:[^\n]*/g) ?? [];
+
+    // Test kendi kendini doğrular.
+    expect(whereUsages.length).toBeGreaterThanOrEqual(3);
+
+    for (const usage of whereUsages) {
+      expect(usage, "tenant filtresi olmayan sorgu").toContain("tenantScoped(");
+    }
+  });
+
+  test("dağılım modülü SALT OKUNURDUR — hiçbir yazma çağrısı içermez", () => {
+    expect(SPENDING_SOURCE).not.toMatch(
+      /\.(create|createMany|update|updateMany|upsert|delete|deleteMany|executeRaw|executeRawUnsafe)\s*\(/,
+    );
+  });
+
+  test("tarih aralığının üst sınırı ORTAK nextDay() kuralını kullanıyor", () => {
+    // Kendi `lte`/`+1 gün` hesabını yazan bir kopya, "15 Mart'a kadar"ın iki ekranda iki farklı
+    // sonuç vermesi demekti (bkz. transaction.ts -> nextDay).
+    expect(SPENDING_SOURCE).toContain('from "./transaction"');
+    expect(SPENDING_SOURCE).toMatch(/lt:\s*nextDay\(/);
+  });
+});

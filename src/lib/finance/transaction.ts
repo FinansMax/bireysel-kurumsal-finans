@@ -169,8 +169,12 @@ export type TransactionFilters = {
  * `occurredAt` bir `DateTime`tir: `lte: 2026-03-15T00:00:00Z` yazmak o gün saat 10:00'da
  * kaydedilmiş bir işlemi DIŞARIDA bırakırdı — kullanıcının gördüğü listeyle filtre sonucu
  * sessizce ayrışırdı. Bu yüzden üst sınır, ertesi günün başlangıcına `lt` olarak uygulanır.
+ *
+ * DIŞA AÇIKTIR (Issue #65): aynı tarih aralığı üzerinde çalışan her sorgu bu kuralı PAYLAŞMAK
+ * zorundadır. İkinci bir kopya, "15 Mart'a kadar"ın iki ekranda iki farklı sonuç vermesi
+ * demek olurdu — kullanıcının fark etmesi en zor hata türü.
  */
-function nextDay(date: Date): Date {
+export function nextDay(date: Date): Date {
   return new Date(date.getTime() + 24 * 60 * 60 * 1000);
 }
 

@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { Badge, CategoryBadge } from "@/components/ui/badge";
+import { DonutChart, type DonutSlice } from "@/components/ui/donut-chart";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
   IconArrowDownRight,
@@ -27,8 +28,17 @@ import {
   type CurrencyTrend,
   type DashboardSummary,
 } from "@/lib/finance/dashboard";
+import {
+  defaultSpendingRange,
+  getSpendingByCategory,
+  type SpendingByCategory,
+  type SpendingRange,
+} from "@/lib/finance/spending-by-category";
 import { listTransactions } from "@/lib/finance/transaction";
+import { parseTransactionFilters } from "@/lib/finance/transaction-filters";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
+
+import { SpendingRangeForm } from "./spending-range-form";
 
 export const metadata: Metadata = {
   title: "Genel Bakış",
@@ -49,11 +59,22 @@ export const metadata: Metadata = {
  * SAHTE VERİ YOKTUR: bir bölümün göstereceği gerçek veri yoksa o bölüm render EDİLMEZ; yerine
  * ne yapılacağını söyleyen bir yönlendirme gelir.
  *
+ * HARCAMA DÖNEMİ URL'DEDİR (`?from=&to=`, Issue #65) — React state'inde değil. `/transactions`
+ * ekranındaki (#56) aynı karar ve aynı ayrıştırıcı: aynı URL, API'de ve ekranda aynı sonucu
+ * vermelidir. Ayrıştırıcıya YALNIZCA `from`/`to` sorulur; işlem listesine özgü diğer filtreler
+ * (`accountId`, `q`, `after`) bu ekranda anlamsızdır ve sessizce yok sayılır.
+ *
  * `requirePageUser()` layout'ta zaten çağrıldığı hâlde BURADA DA çağrılır: layout'lar istemci
  * tarafı gezinmelerde yeniden render edilmediği ve alt segmentlerin render'ını engelleyemediği
  * için layout kontrolü tek başına yeterli değildir (bkz. `src/lib/auth/page-guard.ts`).
  */
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  // Next.js 16'da `searchParams` bir Promise'tir ve değer tekrarlanan parametrede dizi olur
+  // (bkz. node_modules/next/dist/docs/.../file-conventions/page.md).
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const user = await requirePageUser();
   const active = await resolveActiveTenantForUser(user.id);
 
@@ -86,9 +107,18 @@ export default async function DashboardPage() {
     PERMISSIONS.VIEW_CATEGORIES,
   ]);
 
+  // Harcama dönemi. Ayrıştırma DB'ye gitmeden önce yapılır: aralık geçersizse hiçbir sorgu
+  // çalıştırmaya gerek yok (route'taki "ucuz şekil kontrolü en üstte" sırasının sayfa
+  // karşılığı).
+  const params = await searchParams;
+  const spendingRange = resolveSpendingRange(params);
+
   // Yetkisi olmayan role o veriyi HİÇ çekmeyiz: gizlemek değil, sormamak doğru olan.
-  const [summary, accounts, transactionPage, categories] = await Promise.all([
+  const [summary, spending, accounts, transactionPage, categories] = await Promise.all([
     canSeeSummary ? getDashboardSummary(tenant.id) : Promise.resolve(null),
+    canSeeSummary && spendingRange.ok
+      ? getSpendingByCategory(tenant.id, spendingRange.range)
+      : Promise.resolve(null),
     canViewAccounts ? listAccounts(tenant.id) : Promise.resolve([]),
     canViewTransactions
       ? listTransactions(tenant.id)
@@ -148,7 +178,10 @@ export default async function DashboardPage() {
           {onboarding ? (
             <OnboardingPanel counts={summary.counts} role={role} />
           ) : (
-            <FlowSection summary={summary} />
+            <>
+              <FlowSection summary={summary} />
+              <SpendingSection range={spendingRange} spending={spending} />
+            </>
           )}
         </>
       ) : null}
@@ -417,6 +450,164 @@ function FlowStat({
       <dd className="mt-0.5">
         <Money value={value} currency={currency} direction={direction} size="lg" />
       </dd>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------------------------------
+ * Harcama dağılımı (Issue #65)
+ * --------------------------------------------------------------------------------------- */
+
+type ResolvedSpendingRange =
+  | { ok: true; range: SpendingRange; isDefault: boolean }
+  | { ok: false; from: string; to: string; isDefault: boolean };
+
+/**
+ * Bir arama parametresinin form alanına geri yazılacak hâli.
+ *
+ * Tekrarlanan parametre (`?from=a&from=b`) burada boşa düşer — o durumda ayrıştırıcı zaten hata
+ * döndürüyor ve dağılım gösterilmiyor; forma iki değerden birini seçip yazmak, kullanıcıya
+ * reddedilen girdisini "kabul edilmiş" gibi göstermek olurdu (`/transactions`'taki aynı not).
+ */
+function singleParam(value: string | string[] | undefined): string {
+  return typeof value === "string" ? value : "";
+}
+
+/**
+ * `?from=&to=` → dönem. Ayrıştırıcı `/transactions` ve API ile ORTAKTIR.
+ *
+ * Aralık KISMEN verilebilir; eksik uç varsayılandan (bu ay) tamamlanır. Ters aralık kontrolü
+ * BİRLEŞTİRMEDEN SONRA da yapılır: ayrıştırıcı yalnızca ikisi de verildiğinde bakabilir, oysa
+ * tek uçlu bir istek varsayılanla birleşince de ters aralık üretebilir. Sessizce boş dağılım
+ * göstermek, kullanıcıya "bu dönemde harcama yok" dedirtirdi; oysa sorun filtrededir (#56).
+ */
+function resolveSpendingRange(params: {
+  [key: string]: string | string[] | undefined;
+}): ResolvedSpendingRange {
+  const rawFrom = singleParam(params.from);
+  const rawTo = singleParam(params.to);
+  const isDefault = params.from === undefined && params.to === undefined;
+
+  const parsed = parseTransactionFilters((key) =>
+    key === "from" || key === "to" ? params[key] : null,
+  );
+  if (!parsed.ok) {
+    return { ok: false, from: rawFrom, to: rawTo, isDefault };
+  }
+
+  const fallback = defaultSpendingRange();
+  const range: SpendingRange = {
+    from: parsed.filters.from ?? fallback.from,
+    to: parsed.filters.to ?? fallback.to,
+  };
+
+  if (range.from.getTime() > range.to.getTime()) {
+    return { ok: false, from: rawFrom, to: rawTo, isDefault };
+  }
+
+  return { ok: true, range, isDefault };
+}
+
+/**
+ * Kategori bazlı harcama dağılımı.
+ *
+ * YALNIZCA GİDER — panelin başlığı bunu söylüyor, alt başlığı da tekrar ediyor. Gelirleri de
+ * halkaya koymak "harcamanın %40'ı kira" gibi her cümleyi anlamsızlaştırırdı (gerekçenin tamamı
+ * `src/lib/finance/spending-by-category.ts`'te).
+ *
+ * PARA BİRİMİ BAŞINA AYRI HALKA — `FlowSection` ile aynı karar ve aynı gerekçe: kur dönüşümü
+ * yok, TRY ve USD harcamaları tek dağılımda toplanamaz.
+ */
+function SpendingSection({
+  range,
+  spending,
+}: {
+  range: ResolvedSpendingRange;
+  spending: SpendingByCategory | null;
+}) {
+  // Aralık geçerliyken form değerleri SERVİSTEN gelir (`spending.range`), kullanıcının yazdığı
+  // ham metinden değil: eksik uç varsayılanla tamamlandığında form da o tamamlanmış tarihi
+  // göstermeli, boş kalmamalı.
+  const formValues = range.ok
+    ? { from: spending?.range.from ?? "", to: spending?.range.to ?? "" }
+    : { from: range.from, to: range.to };
+
+  return (
+    // ADLANDIRILMIŞ BİR BÖLGE (`aria-labelledby` ile `role="region"`): panelin en karmaşık
+    // bölümü burasıdır — kendi formu, kendi dönemi ve iki grafiği vardır. Ekran okuyucu
+    // kullanıcısının buraya doğrudan atlayabilmesi ve "hangi tutar hangi bölüme ait" sorusunun
+    // yapısal bir cevabı olması için. (E2E de bölümü bu adla kapsıyor; aynı tutar panelin
+    // başka yerlerinde de geçebiliyor.)
+    <section aria-labelledby="spending-heading" className="space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 id="spending-heading" className="text-sm font-semibold text-strong">
+          Harcama dağılımı
+        </h2>
+        <p className="text-xs text-muted">Yalnızca gider işlemleri.</p>
+      </div>
+
+      <Panel>
+        <div className="border-b border-line px-5 py-4">
+          <SpendingRangeForm
+            from={formValues.from}
+            to={formValues.to}
+            isDefaultRange={range.isDefault}
+          />
+        </div>
+
+        {!range.ok ? (
+          <p
+            role="status"
+            className="px-5 py-8 text-center text-sm text-pretty text-muted"
+          >
+            Dönem geçersiz olduğu için dağılım gösterilmiyor. Tarihleri{" "}
+            <span className="font-medium">GG.AA.YYYY</span> biçiminde seçin ve başlangıcın
+            bitişten sonra olmadığından emin olun.
+          </p>
+        ) : spending === null || spending.currencies.length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-pretty text-muted">
+            Seçilen dönemde gider işlemi yok. Dönemi genişletebilir ya da bu aya
+            dönebilirsiniz.
+          </p>
+        ) : (
+          <div className="divide-y divide-line">
+            {spending.currencies.map((currency) => (
+              <CurrencySpendingBlock key={currency.currency} spending={currency} />
+            ))}
+          </div>
+        )}
+      </Panel>
+    </section>
+  );
+}
+
+function CurrencySpendingBlock({
+  spending,
+}: {
+  spending: SpendingByCategory["currencies"][number];
+}) {
+  const slices: DonutSlice[] = spending.slices.map((slice) => ({
+    // "Kategorisiz" bir kategori DEĞİLDİR, kategorinin yokluğudur — `CategoryBadge` ile aynı
+    // sözcük kullanılır ki kullanıcı iki ekranda iki farklı ad görmesin.
+    label: slice.name ?? "Kategorisiz",
+    // Tutar `Money`ye ham string olarak verilir; hiçbir yerde sayıya çevrilmez.
+    // Yön prop'u YOK: bu panelin tamamı gider: her satıra bir eksi basmak, aynı şeyi
+    // ikinci kez söylemek olurdu.
+    value: <Money value={slice.amount} currency={spending.currency} />,
+    sharePercent: slice.sharePercent,
+    offsetPercent: slice.offsetPercent,
+  }));
+
+  return (
+    <div className="space-y-4 px-5 py-5">
+      <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">
+        {spending.currency}
+      </h3>
+      <DonutChart
+        slices={slices}
+        centerLabel="Toplam gider"
+        centerValue={<Money value={spending.total} currency={spending.currency} />}
+      />
     </div>
   );
 }

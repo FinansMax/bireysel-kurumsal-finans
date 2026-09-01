@@ -65,6 +65,53 @@ model Tenant {
   categories   Category[]
   transactions Transaction[]
   debtCredits  DebtCredit[]
+  modules      TenantModule[]
+}
+
+/// Bir tenant'ta bir modülün açık olup olmadığı (Issue #151).
+///
+/// Hangi modüllerin VAR OLDUĞUNU kod bilir (`src/lib/modules/catalog.ts`), hangi tenant'ta
+/// hangisinin AÇIK olduğunu bu tablo bilir.
+model TenantModule {
+  id String @id @default(cuid())
+
+  // `ModuleKey` union'ının string karşılığı. PRISMA ENUM DEĞİL: `AuditLog.action` ve
+  // `Account.bankCode` ile aynı gerekçe — yeni bir modül eklemek migration gerektirmemeli.
+  // Tip güvenliği uygulama katmanındaki `ModuleKey` ile sağlanır; katalogda olmayan bir anahtar
+  // YAZARKEN 400 ile reddedilir, OKURKEN sessizce yok sayılır (katalogdan kaldırılmış eski bir
+  // satır uygulamayı kırmamalı).
+  moduleKey String
+
+  // SATIRIN YOKLUĞU = MODÜL KAPALI. Bu, migration sonrası MEVCUT tenant'ların hiçbirinin
+  // etkilenmemesini sağlar: kimseye satır yazılmaz, kimsede yeni bir ekran belirmez
+  // (`credentialsChangedAt`ın nullable olmasıyla aynı mantık — "hiç dokunulmamış" durumu
+  // temsil edilebilir olmalı).
+  enabled Boolean @default(true)
+
+  // Modüle özel ayarlar. Şeması BU MODELDE doğrulanMAZ; ilgili modülün kendi issue'sunda
+  // tanımlanır (#151 "Scope Dışı"). Bugün yalnızca okunur/yazılır bir taşıyıcıdır.
+  settings Json?
+
+  // Varsayılan verisi kurulduysa dolu (bkz. #154). `null` = seed hiç çalışmadı; bu ayrım,
+  // seed'in idempotent kalabilmesi için gereklidir.
+  seededAt DateTime?
+
+  // Son açılma/kapanma anları. Audit log "kim ne zaman" sorusunu zaten yanıtlıyor; bu alanlar
+  // SORGULANABİLİR durum bilgisidir (ör. "geçen ay kapatılmış modüller") ve audit log'un
+  // best-effort olmasından etkilenmezler.
+  enabledAt  DateTime?
+  disabledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Aynı tenant'ta aynı modülün iki satırı olamaz. Bu, "önce var mı diye bak sonra yaz"
+  // yarışını DB seviyesinde kapatır: eşzamanlı iki istek `upsert` ile tek satırda buluşur.
+  @@unique([tenantId, moduleKey])
+  @@index([tenantId])
 }
 
 // Bir tenant'ın finansal hesabı: banka hesabı veya kasa (Issue #46).

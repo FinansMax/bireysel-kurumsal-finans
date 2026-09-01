@@ -31,7 +31,22 @@ test.afterAll(async () => {
   await prisma.$disconnect();
 });
 
-/** Kayıttan sonra listede beliren satır bir sunucu round-trip'ine bağlı (bkz. #129). */
+/**
+ * Sunucu round-trip'ine bağlı beklemeler için süre (bkz. #129 ve `accounts-ui.spec.ts`).
+ *
+ * Varsayılan 5 saniye, tam e2e suite'i paralel koşarken YETMİYOR: form `fetch` ile
+ * POST/PATCH atar, ardından `router.push()` + `router.refresh()` çağırır — yani hem satırın
+ * listede belirmesi hem de `?edit=` parametresinin DÜŞMESİ bir sunucu gidiş-dönüşüne ve RSC
+ * yeniden render'ına bağlıdır. Bu süre verilmediğinde test, uygulama doğru çalıştığı hâlde
+ * kırmızıya düşüyordu (yük altında ölçüldü).
+ *
+ * BU BİR GEVŞETME DEĞİLDİR: iddialar aynı kalır, yalnızca bilinen bir yavaş adıma daha fazla
+ * süre tanınır. Kaydın sunucuda gerçekten oluştuğu zaten bağımsız bir API okumasıyla, bu
+ * beklemelerden AYRI olarak doğrulanıyor.
+ *
+ * Menü tıklaması gibi düz gezinmelerde varsayılan süre KORUNUR — orada yavaşlık beklenmez ve
+ * gereksiz uzun bir bekleme, gerçek bir kırılmayı geç fark ettirir.
+ */
 const ROW_TIMEOUT_MS = 15_000;
 
 function apiHeaders(): Record<string, string> {
@@ -253,7 +268,7 @@ test.describe("/debt-credits — düzenleme, durum ve silme", () => {
 
     await form.getByLabel("Durum").selectOption("SETTLED");
     await page.getByRole("button", { name: /değişiklikleri kaydet/i }).click();
-    await expect(page).toHaveURL(/\/debt-credits$/);
+    await expect(page).toHaveURL(/\/debt-credits$/, { timeout: ROW_TIMEOUT_MS });
 
     expect((await apiRecords(page, tenantId))[0].status).toBe("SETTLED");
     await expect(page.getByRole("table").getByText("Kapandı")).toBeVisible();
@@ -263,7 +278,7 @@ test.describe("/debt-credits — düzenleme, durum ve silme", () => {
     await editLink(page, "Kapatilacak").click();
     await editForm(page).getByLabel("Durum").selectOption("OPEN");
     await page.getByRole("button", { name: /değişiklikleri kaydet/i }).click();
-    await expect(page).toHaveURL(/\/debt-credits$/);
+    await expect(page).toHaveURL(/\/debt-credits$/, { timeout: ROW_TIMEOUT_MS });
 
     expect((await apiRecords(page, tenantId))[0].status).toBe("OPEN");
   });
@@ -286,7 +301,7 @@ test.describe("/debt-credits — düzenleme, durum ve silme", () => {
 
     await form.getByLabel("Tutar").fill("450.25");
     await page.getByRole("button", { name: /değişiklikleri kaydet/i }).click();
-    await expect(page).toHaveURL(/\/debt-credits$/);
+    await expect(page).toHaveURL(/\/debt-credits$/, { timeout: ROW_TIMEOUT_MS });
 
     expect((await apiRecords(page, tenantId))[0].amount).toBe("450.25");
   });

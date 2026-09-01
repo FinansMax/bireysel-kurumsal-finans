@@ -369,3 +369,59 @@ test.describe("Tenant scoping pattern koruması — debt-credit.ts", () => {
     }
   });
 });
+
+/**
+ * Aynı koruma, altıncı tenant-scoped model olan `TenantModule` için (Issue #151).
+ *
+ * Buradaki risk finansal değil YAPISALDIR: scope'u kaçırılmış tek bir yazma, BAŞKA bir
+ * tenant'ın ürün yüzeyini değiştirir (ekran açar/kapatır). Okuma tarafında ise sızıntı,
+ * komşunun hangi modülleri kullandığını açığa çıkarır.
+ */
+test.describe("Tenant scoping pattern koruması — tenant-module.ts", () => {
+  const MODULE_SOURCE = readFileSync(
+    path.join(__dirname, "..", "src", "lib", "modules", "tenant-module.ts"),
+    "utf-8",
+  );
+
+  test("tenantScoped() import edilip okuma sorgularında kullanılıyor", () => {
+    expect(MODULE_SOURCE).toContain('from "@/lib/tenancy/scope"');
+
+    const usageCount = MODULE_SOURCE.match(/tenantScoped\(/g)?.length ?? 0;
+    // listTenantModules (1) + isModuleEnabled (1) + setModuleEnabled'ın okuması (1) = en az 3.
+    expect(usageCount).toBeGreaterThanOrEqual(3);
+  });
+
+  test("yalnız-anahtar sorgusu yok: her `where` tenant'ı taşıyor", () => {
+    // `upsert` TEK istisnadır ve güvenlidir: `where` bileşik unique'i
+    // (`tenantId_moduleKey`) kullanır, yani tenantId zaten anahtarın parçasıdır.
+    const whereUsages = MODULE_SOURCE.split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("where:"));
+
+    // Test kendi kendini doğrular.
+    expect(whereUsages.length).toBeGreaterThanOrEqual(4);
+
+    for (const usage of whereUsages) {
+      const scoped = usage.includes("tenantScoped(") || usage.includes("tenantId_moduleKey");
+      expect(scoped, `tenant filtresi olmayan sorgu: ${usage}`).toBe(true);
+    }
+  });
+
+  test("tenant-scoped satıra yalnız-id ile update/delete/findUnique yapılmıyor", () => {
+    expect(MODULE_SOURCE).not.toMatch(/\.tenantModule\.update\(/);
+    expect(MODULE_SOURCE).not.toMatch(/\.tenantModule\.delete\(/);
+    expect(MODULE_SOURCE).not.toMatch(/\.tenantModule\.findUnique\(/);
+    expect(MODULE_SOURCE).not.toMatch(/where:\s*\{\s*id:/);
+  });
+
+  test("create/upsert sırasında tenantId açıkça yazılıyor", () => {
+    expect(MODULE_SOURCE).toMatch(/create:\s*\{\s*\n?\s*tenantId/);
+  });
+
+  test("bağımlılık kontrolü retry'lı Serializable içinde yapılıyor", () => {
+    // Okumaya bağlı invariant: `prisma.$transaction` + Serializable'ı DOĞRUDAN çağırmak
+    // retry'ı atlar ve serialization failure kullanıcıya 500 olarak döner (#122).
+    expect(MODULE_SOURCE).toContain("runSerializable(");
+    expect(MODULE_SOURCE).not.toMatch(/prisma\.\$transaction\(/);
+  });
+});

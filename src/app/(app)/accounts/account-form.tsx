@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 import { FIELD_CLASS, FormError, LABEL_CLASS, SubmitButton, TextField } from "@/components/auth-form";
+import { BANK_GROUP_LABELS, groupedBanks } from "@/lib/finance/banks";
 
 /**
  * Hesap oluşturma ve düzenleme formu (Issue #47 + #130).
@@ -27,12 +28,26 @@ export type EditableAccount = {
   name: string;
   type: string;
   currency: string;
+  /** #148 öncesi kayıtlarda `null` olabilir; form o durumda seçim yaptırır. */
+  bankCode: string | null;
 };
+
+/**
+ * Banka seçimi ARAYÜZDE ZORUNLUDUR ama API'de değildir (Issue #148).
+ *
+ * Gerekçe: alanı sözleşmede zorunlu yapmak mevcut istemcileri ve #148 ÖNCESİNDE oluşturulmuş
+ * (bankası `null`) satırları kırardı. Kullanıcının kastı ise nettir — "banka" dediyse hangi
+ * banka olduğu da bilinmelidir. Bu yüzden zorunluluk burada, formda uygulanır; listede olmayan
+ * bankalar için "Diğer" seçeneği vardır, dolayısıyla kimse tıkanmaz.
+ *
+ * Form `noValidate` olduğu için tarayıcının `required` kontrolü çalışmaz; kontrol elle yapılır.
+ */
+const BANK_REQUIRED_ERROR = "Banka hesapları için bir banka seçin.";
 
 function messageForStatus(status: number, editing: boolean): string {
   switch (status) {
     case 400:
-      return "Bilgileri kontrol edin: ad 2-100 karakter, para birimi 3 harf (TRY).";
+      return "Bilgileri kontrol edin: ad 2-100 karakter, para birimi 3 harf (TRY), banka yalnızca banka hesaplarında seçilebilir.";
     case 403:
       return editing
         ? "Bu çalışma alanında hesap düzenleme yetkiniz yok."
@@ -68,6 +83,9 @@ export function AccountForm({
 
   const [name, setName] = useState(account?.name ?? "");
   const [type, setType] = useState<string>(account?.type ?? "BANK");
+  // Tür KASA'ya çevrilince değer SIFIRLANMAZ, yalnızca gönderilmez: kullanıcı yanlışlıkla tür
+  // değiştirip geri dönerse seçimini yeniden yapmak zorunda kalmamalı.
+  const [bankCode, setBankCode] = useState(account?.bankCode ?? "");
   const [currency, setCurrency] = useState(account?.currency ?? "TRY");
   const [balance, setBalance] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +94,13 @@ export function AccountForm({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+
+    const isBank = type === "BANK";
+    if (isBank && bankCode === "") {
+      setError(BANK_REQUIRED_ERROR);
+      return;
+    }
+
     setPending(true);
 
     try {
@@ -95,6 +120,10 @@ export function AccountForm({
             type,
             currency,
             balance: editing || balance.trim() === "" ? undefined : balance.trim(),
+            // KASA hesapta banka açıkça `null` gönderilir, atlanmaz: düzenlemede bir banka
+            // hesabı kasaya çevrildiğinde eski kodun temizlenmesi gerekir. (Servis bunu
+            // ayrıca kendisi de garanti eder — iki katman da aynı kuralı biliyor.)
+            bankCode: isBank ? bankCode : null,
           }),
         },
       );
@@ -168,6 +197,44 @@ export function AccountForm({
             ))}
           </select>
         </div>
+
+        {/* BANKA SEÇİCİ YALNIZCA TÜR "BANKA" İKEN GÖRÜNÜR (Issue #148). Kasa hesabının bankası
+            olmaz; alanı devre dışı bırakıp göstermek, "burada bir şey eksik" hissi verirdi.
+            Koşullu render, formu tür seçimine gerçekten cevap veren bir arayüz yapar. */}
+        {type === "BANK" && (
+          <div className="space-y-1.5">
+            <label htmlFor="account-bank" className={LABEL_CLASS}>
+              Banka
+            </label>
+            <select
+              id="account-bank"
+              name="account-bank"
+              value={bankCode}
+              disabled={pending}
+              onChange={(event) => setBankCode(event.target.value)}
+              className={FIELD_CLASS}
+            >
+              {/* Boş seçenek KALIR: ilk bankayı varsayılan yapmak, kullanıcı hiç dokunmadığında
+                  sessizce yanlış bir banka kaydederdi. Seçim zorunluluğu gönderimde kontrol
+                  edilir. */}
+              <option value="">Seçiniz</option>
+              {/* Uzun listeyi taranabilir kılan tek şey gruplama. */}
+              {groupedBanks().map(({ group, banks }) => (
+                <optgroup key={group} label={BANK_GROUP_LABELS[group]}>
+                  {banks.map((bank) => (
+                    <option key={bank.code} value={bank.code}>
+                      {bank.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <p className="text-xs text-muted">
+              Bankanız listede yoksa <span className="font-medium">Diğer</span> seçeneğini
+              kullanın.
+            </p>
+          </div>
+        )}
 
         <TextField
           id="account-currency"

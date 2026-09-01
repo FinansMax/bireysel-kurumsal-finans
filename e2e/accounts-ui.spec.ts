@@ -76,24 +76,51 @@ async function createAndActivateTenant(page: Page): Promise<string> {
 async function apiAccounts(
   page: Page,
   tenantId: string,
-): Promise<Array<{ name: string; type: string; balance: string; currency: string }>> {
+): Promise<
+  Array<{
+    name: string;
+    type: string;
+    balance: string;
+    currency: string;
+    bankCode: string | null;
+  }>
+> {
   const response = await page.request.get(`/api/tenants/${tenantId}/accounts`);
   expect(response.status()).toBe(200);
 
   return (
     (await response.json()) as {
-      accounts: Array<{ name: string; type: string; balance: string; currency: string }>;
+      accounts: Array<{
+        name: string;
+        type: string;
+        balance: string;
+        currency: string;
+        bankCode: string | null;
+      }>;
     }
   ).accounts;
 }
 
 async function fillAccountForm(
   page: Page,
-  values: { name: string; type?: string; currency?: string; balance?: string },
+  values: { name: string; type?: string; currency?: string; balance?: string; bank?: string },
 ) {
   await page.getByLabel("Hesap adı").fill(values.name);
   if (values.type) {
     await page.getByLabel("Tür").selectOption(values.type);
+  }
+
+  // BANKA SEÇİMİ ARAYÜZDE ZORUNLUDUR (Issue #148): tür "Banka" iken seçim yapılmadan gönderim
+  // reddedilir. Bu yüzden yardımcı, seçici görünürse ve test bir banka BELİRTMEMİŞSE varsayılan
+  // bir banka seçer — böylece bankayla ilgisi olmayan mevcut testler kendi konularına odaklı
+  // kalır. Zorunluluğun KENDİSİ ayrı bir testte doğrulanır ("banka seçmeden kaydedilemiyor").
+  const bankSelect = page.getByLabel("Banka");
+  if (await bankSelect.isVisible()) {
+    if (values.bank !== undefined) {
+      await bankSelect.selectOption(values.bank);
+    } else if ((await bankSelect.inputValue()) === "") {
+      await bankSelect.selectOption("ZIRAAT");
+    }
   }
   if (values.currency !== undefined) {
     await page.getByLabel("Para birimi").fill(values.currency);
@@ -484,5 +511,144 @@ test.describe("/accounts — düzenleme ve silme (Issue #130)", () => {
 
     const unchanged = await prisma.account.findUniqueOrThrow({ where: { id: account.id } });
     expect(unchanged.name).toBe("Ortak Kasa");
+  });
+});
+
+/**
+ * Hesabın bankası (Issue #148).
+ *
+ * Konu: seçicinin türe göre görünmesi, arayüzdeki zorunluluk ve kaydedilen değerin
+ * doğruluğu. Sonuç her zaman BAĞIMSIZ bir okumayla (`GET .../accounts`) doğrulanır — listede
+ * bir rozetin görünmesi tek başına "sunucuda gerçekten kaydedildi" demek değildir.
+ */
+test.describe("/accounts — banka seçimi (Issue #148)", () => {
+  test("banka seçici YALNIZCA tür 'Banka' iken görünür", async ({ page }) => {
+    await signUpAndSignIn(page, "bank-toggle");
+    await createAndActivateTenant(page);
+
+    await page.goto("/accounts");
+
+    // Varsayılan tür "Banka" olduğu için seçici açılışta görünür.
+    await expect(page.getByLabel("Banka")).toBeVisible();
+
+    await page.getByLabel("Tür").selectOption("CASH");
+    // Kasa hesabının bankası olmaz; alanı devre dışı gösterip bırakmak "burada bir şey eksik"
+    // hissi verirdi — hiç render edilmez.
+    await expect(page.getByLabel("Banka")).toHaveCount(0);
+
+    await page.getByLabel("Tür").selectOption("BANK");
+    await expect(page.getByLabel("Banka")).toBeVisible();
+  });
+
+  test("banka seçmeden kaydedilemiyor ve sunucuda hiçbir kayıt oluşmuyor", async ({ page }) => {
+    await signUpAndSignIn(page, "bank-required");
+    const tenantId = await createAndActivateTenant(page);
+
+    await page.goto("/accounts");
+    await page.getByLabel("Hesap adı").fill("Bankasiz Hesap");
+    await submit(page);
+
+    await expect(formAlert(page)).toContainText("Banka hesapları için bir banka seçin.", {
+      timeout: ROW_TIMEOUT_MS,
+    });
+
+    // Zorunluluk yalnızca bir mesaj değil: istek hiç gitmemiş olmalı.
+    expect(await apiAccounts(page, tenantId)).toHaveLength(0);
+  });
+
+  test("seçilen banka kaydediliyor ve listede görünüyor", async ({ page }) => {
+    await signUpAndSignIn(page, "bank-create");
+    const tenantId = await createAndActivateTenant(page);
+
+    await page.goto("/accounts");
+    await fillAccountForm(page, { name: "Maas Hesabi", bank: "GARANTI" });
+    await submit(page);
+
+    await expectRow(page, "Maas Hesabi");
+    // Listede KOD değil AD görünür. İddia TABLOYA kapsanır: form içindeki banka seçicisinin
+    // <option> etiketleri de aynı adları taşır ve sayfa geneli bir eşleme onlara da uyardı.
+    await expect(page.getByRole("table").getByText("Garanti BBVA")).toBeVisible();
+
+    // BAĞIMSIZ DOĞRULAMA: sunucuda saklanan değer koddur.
+    const accounts = await apiAccounts(page, tenantId);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].bankCode).toBe("GARANTI");
+  });
+
+  test("kasa hesabı bankasız kaydediliyor", async ({ page }) => {
+    await signUpAndSignIn(page, "bank-cash");
+    const tenantId = await createAndActivateTenant(page);
+
+    await page.goto("/accounts");
+    await fillAccountForm(page, { name: "Kucuk Kasa", type: "CASH" });
+    await submit(page);
+
+    await expectRow(page, "Kucuk Kasa");
+
+    const accounts = await apiAccounts(page, tenantId);
+    expect(accounts[0].type).toBe("CASH");
+    expect(accounts[0].bankCode).toBeNull();
+  });
+
+  test("düzenlemede banka değiştirilebiliyor", async ({ page }) => {
+    await signUpAndSignIn(page, "bank-edit");
+    const tenantId = await createAndActivateTenant(page);
+
+    await page.goto("/accounts");
+    await fillAccountForm(page, { name: "Degisecek Hesap", bank: "ZIRAAT" });
+    await submit(page);
+    await expectRow(page, "Degisecek Hesap");
+
+    const created = await apiAccounts(page, tenantId);
+    expect(created[0].bankCode).toBe("ZIRAAT");
+
+    await page.getByRole("link", { name: "Degisecek Hesap hesabını düzenle" }).click();
+    const form = page.getByRole("form", { name: "Hesabı düzenle" });
+
+    // Form MEVCUT bankayla dolu gelir; kullanıcı seçimini baştan yapmak zorunda değil.
+    await expect(form.getByLabel("Banka")).toHaveValue("ZIRAAT");
+
+    await form.getByLabel("Banka").selectOption("ISBANK");
+    await page.getByRole("button", { name: /değişiklikleri kaydet/i }).click();
+
+    // KAYDIN TAMAMLANDIĞININ İŞARETİ `?edit=`İN DÜŞMESİDİR — satırın listede görünmesi değil:
+    // satır kaydetmeden ÖNCE de oradadır ve ona bakan bir bekleme, PATCH tamamlanmadan
+    // ilerlerdi (yarış).
+    await expect(page).toHaveURL(/\/accounts$/);
+
+    expect((await apiAccounts(page, tenantId))[0].bankCode).toBe("ISBANK");
+    await expect(page.getByRole("table").getByText("Türkiye İş Bankası")).toBeVisible({
+      timeout: ROW_TIMEOUT_MS,
+    });
+  });
+
+  test("tür KASA'ya çevrilince banka temizleniyor", async ({ page }) => {
+    await signUpAndSignIn(page, "bank-clear");
+    const tenantId = await createAndActivateTenant(page);
+
+    await page.goto("/accounts");
+    await fillAccountForm(page, { name: "Kasaya Donecek", bank: "AKBANK" });
+    await submit(page);
+    await expectRow(page, "Kasaya Donecek");
+
+    await page.getByRole("link", { name: "Kasaya Donecek hesabını düzenle" }).click();
+
+    // İDDİALAR DÜZENLEME FORMUNA KAPSANIR. Oluşturma formunun da "Tür" ve "Banka" alanları var;
+    // istemci tarafı gezinme tamamlanmadan sayfa geneli bir locator ESKİ formu bulur, seçim
+    // oraya gider ve kaydedilen kayıt hiç değişmez (sessizce yeşil kalabilecek bir yarış).
+    const form = page.getByRole("form", { name: "Hesabı düzenle" });
+
+    // Tür kasaya çevrilince banka seçici KAYBOLUR; kullanıcı ayrıca bir şey temizlemez.
+    await form.getByLabel("Tür").selectOption("CASH");
+    await expect(form.getByLabel("Banka")).toHaveCount(0);
+
+    await page.getByRole("button", { name: /değişiklikleri kaydet/i }).click();
+    await expect(page).toHaveURL(/\/accounts$/);
+
+    // Eski banka kodu asılı kalmamalı: ileride banka bazlı her toplama onu sayardı.
+    const accounts = await apiAccounts(page, tenantId);
+    expect(accounts[0].type).toBe("CASH");
+    expect(accounts[0].bankCode).toBeNull();
+    await expect(page.getByRole("table").getByText("Akbank")).toHaveCount(0);
   });
 });

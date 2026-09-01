@@ -39,7 +39,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
-  const { name, type, currency, balance } = body as Record<string, unknown>;
+  const { name, type, currency, balance, bankCode } = body as Record<string, unknown>;
 
   // Trusted tenantId `context.tenant.id`dir; `actorUserId` de aynı context'ten gelir (audit).
   // Body'deki olası `tenantId`/`id` alanları servise HİÇ geçirilmez.
@@ -48,6 +48,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     type,
     currency,
     balance,
+    bankCode,
   });
 
   if (!result.ok) {

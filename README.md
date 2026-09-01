@@ -2034,3 +2034,90 @@ bağlantısı sessizce yanlış alana giderdi.
 - **Kategori kırılımı gider tarafında #65 ile örtüşür.** Kasıtlı: #65 panelde, sabit görsel bir
   dağılım (halka); rapor ise seçilen dönemde iki yönü de tablo olarak verir. Ortak olan
   hesaplama değil yalnızca kavramdır — iki modül ayrı sorular yanıtlıyor.
+
+## Hesabın bankası (Issue #148)
+
+Hesap türü **Banka** seçildiğinde hangi banka olduğu da seçilir. `Account.bankCode` alanı,
+`src/lib/finance/banks.ts` içindeki liste ve hesap formundaki koşullu seçici.
+
+**Migration VAR** ve tek satırdır: `ALTER TABLE "Account" ADD COLUMN "bankCode" TEXT;` —
+nullable, eklemeli, veri kaybı yok.
+
+### Enum değil `String?`, ad değil KOD
+
+`AccountType`/`CategoryType` **enum**dur çünkü kümeleri küçük ve **kararlıdır**. Banka listesi
+ikisi de değildir: birleşmeler, yeni lisanslar ve marka değişimleri olur. Enum yapmak **her
+banka değişikliğinde bir migration** demekti — `AuditLog.action`'daki serbest `String`
+tercihiyle aynı gerekçe.
+
+Saklanan değer **koddur** (`ZIRAAT`, `GARANTI`), görünen ad değil: "Garanti" → "Garanti BBVA"
+gibi bir marka değişimi veri migration'ı gerektirmemeli. API de **kod** taşır; ad yalnızca
+sunum katmanında çözülür.
+
+**Serbest metin kabul edilmez.** Kullanıcı yazsaydı "Garanti", "garanti bankası" ve "TGB" üç
+ayrı banka olurdu ve banka bazlı herhangi bir gruplama sonsuza dek imkânsızlaşırdı. Doğrulama
+bir **allowlist**tir; `isValidBankCode` yalnızca tam eşleşmeyi kabul eder (küçük harf, boşluklu
+ya da uydurma değer `400`).
+
+### Zorunluluk ARAYÜZDE, sözleşmede değil
+
+Kullanıcının kastı net: "banka" dediyse hangi banka olduğu da bilinmeli. Ama alanı **API'de
+zorunlu** yapmak iki şeyi kırardı: mevcut istemcileri ve **#148 öncesinde oluşturulmuş**
+(bankası `null`) satırları. Bu yüzden:
+
+- **Form** banka seçilmeden göndermez (`noValidate` olduğu için kontrol elle yapılır).
+- **API** alansız `BANK` hesabı kabul etmeye devam eder ve `bankCode: null` "belirtilmedi"
+  demektir — `balance`taki katı `null` reddinin aksine, çünkü "bankası belirtilmemiş banka
+  hesabı" meşru bir durumdur.
+
+Veri geriye dönük doldurulduğunda sözleşmenin de sıkılaştırılması ayrı bir karardır.
+
+### `bankCode` yalnızca `BANK` türünde anlamlıdır
+
+- `CASH` hesapta banka göndermek **`400`** — sessizce yok saymak, kullanıcının seçtiği bankanın
+  kaybolduğu bir kayıt üretirdi.
+- Tür `CASH`'e çevrilince banka **otomatik temizlenir**, istemci göndermese bile. Aksi halde
+  kasa hâline gelmiş bir hesapta eski kod asılı kalır ve ileride banka bazlı her toplama onu
+  sayardı.
+- Tür bu istekte verilmemişse etkin tür **kayıttan okunur** (`tenantScoped()` ile), aksi halde
+  bir kasa hesabına banka yazılabilirdi.
+
+**Kabul edilen yarış:** okuma ile yazma arasında biri türü `CASH`'e çevirirse kasa hesabında
+banka kodu kalabilir. Bu bir **etiket** tutarsızlığıdır, para hareketi değil; kapatmak
+`Serializable` bir transaction gerektirirdi ve bedeli faydasını aşardı (karşılaştır:
+`transaction.ts`'teki bakiye yazımı — orada gerçekten para söz konusu).
+
+### Liste elle bakılır — ve "Diğer" seçeneği kaldırılmamalıdır
+
+`banks.ts` bir **anlık görüntüdür** ve BDDK'nın güncel listesine göre periyodik olarak
+doğrulanmalıdır. Kod tabanı bunu otomatik doğrulayamaz: canlı bir kaynak sorgulamak yeni bir
+bağımlılık ve çalışma zamanı ağ çağrısı demekti.
+
+Bu yüzden **"Diğer"** seçeneği vardır: listedeki bir eksik, kullanıcının hesabını hiç
+kaydedememesinden çok daha küçük bir sorundur. Testler listenin kendi tutarlılığını zorlar
+(kodlar benzersiz, her banka bir grupta, gruplama hiçbir bankayı düşürmüyor, "Diğer" duruyor).
+
+**Markalar listede yoktur** (Enpara → QNB, CEPTETEB → TEB): bunlar ayrı bir banka değil, mevcut
+bir bankanın ürün markasıdır; marka satırı eklemek aynı bankanın hesaplarını iki ayrı kova gibi
+gösterirdi. Kullanıcı ayrımı hesap adında yapabilir.
+
+### Arayüz
+
+Seçici **yalnızca tür "Banka" iken render edilir**; kasada alanı devre dışı bırakıp göstermek
+"burada bir şey eksik" hissi verirdi. Tür kasaya çevrilince yerel seçim **sıfırlanmaz**, yalnızca
+gönderilmez — kullanıcı yanlışlıkla tür değiştirip geri dönerse seçimini yeniden yapmak zorunda
+kalmamalı.
+
+Uzun liste **gruplanmış** (`optgroup`) gelir; boş "Seçiniz" seçeneği korunur çünkü ilk bankayı
+varsayılan yapmak, kullanıcı hiç dokunmadığında sessizce yanlış bir banka kaydederdi. Listede
+banka **adı** rozet olarak türün yanında görünür — kasa hesaplarında hep boş kalacak ayrı bir
+kolon, tabloyu her satırda genişletirdi.
+
+### Bilinen sınırlar
+
+- **Liste güncelliği elle korunur** (yukarıdaki gerekçe).
+- **IBAN / hesap numarası yok** — hassas veri; maskeleme, doğrulama ve ayrı bir yetki kararı
+  gerektirir.
+- **Banka bazlı raporlama yok**; alan bugün yalnızca etiketleme amaçlıdır.
+- **Eski kayıtlar `null` kalır**; toplu doldurma (backfill) yapılmadı — kullanıcı düzenlerken
+  form zaten seçim yaptırıyor.

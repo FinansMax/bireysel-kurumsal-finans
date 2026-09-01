@@ -1846,3 +1846,109 @@ tenant'ların bakiyelerini ve ciro büyüklüğünü sızdırırdı, üstelik se
 - **Ay başına bir `groupBy` sorgusu** koşar (altı paralel sorgu). Tek sorguda ay kırılımı
   `date_trunc` isterdi, o da ham SQL demek. Ölçülmüş bir sorun yok; olursa çare bir
   materialized özet değil, `Transaction`a denormalize bir `currency` alanı olabilir.
+
+## Kategori bazlı harcama dağılımı (Issue #65)
+
+Panelde, seçilen dönemin **gider** dağılımı: para birimi başına bir halka (donut) + yanında ad,
+pay ve tutarı taşıyan lejant. Hesaplama `src/lib/finance/spending-by-category.ts`, HTTP yüzeyi
+`GET /api/tenants/:tenantId/dashboard/spending-by-category?from=&to=`.
+
+**Migration YOK** — #62/#63 ile aynı: dağılım mevcut kayıtlardan türetiliyor.
+
+### Issue'nun "grafik kütüphanesi ekle" gereksinimi BİLEREK uygulanmadı
+
+#64/#65'in teknik notu "hafif bir grafik kütüphanesi eklenir (gerekçelendirilerek)" diyordu.
+Eklenmedi. Gerekçe:
+
+1. #63'te trend grafiği zaten **bağımlılıksız** çözüldü; bir kütüphane getirmek aynı ekranda
+   iki farklı grafik motoru bırakırdı.
+2. Yeni bağımlılık **açık onay** gerektirir (CLAUDE.md §4) ve bu halka için gereken tek şey
+   SVG'nin kendi `stroke-dasharray`ıdır.
+3. Kütüphaneler bir `"use client"` sınırı getirir; bu grafik sunucuda render edilir ve
+   JavaScript'siz çalışır.
+
+Karar **geri alınabilir ve geri alınmalıdır** grafik etkileşimli olması gerektiğinde (tooltip,
+tıklanabilir dilim, animasyonlu geçiş, zoom). O gün geldiğinde tek bir kütüphane seçilip **her
+iki** grafik birden taşınmalıdır.
+
+### `pathLength={100}` — bileşende tek bir aritmetik işlem yok
+
+SVG'nin `pathLength` özniteliği, çemberin gerçek uzunluğunu 100 birime **normalize eder**.
+Böylece `strokeDasharray`/`strokeDashoffset` doğrudan **yüzde** olarak yazılabilir; `2πr` hesabı
+hiç gerekmez. Bileşen, servisten gelen yüzde string'lerini olduğu gibi SVG'ye geçirir —
+#63'teki kararın aynısı: oranı sunum katmanında hesaplamak `Number(amount) / Number(total)`
+demekti, yani paranın kayan noktaya dönmesi (invariant #10).
+
+**Ofset kümülatif toplamı TAM değerlerden üretilir**, yuvarlanmış payların toplamından değil:
+üç eşit dilimde (33.33 + 33.33) son dilim 66.66'da başlar ve halkada gözle görülür bir kayma
+kalırdı; doğrusu 66.67'dir. Testi: `integration/spending-by-category.spec.ts`.
+
+### Yalnızca gider; para birimleri yine ayrı
+
+`type: EXPENSE` bir varsayılan değil **tanımın kendisidir**: gelirleri de aynı halkaya koymak
+"harcamanın %40'ı kira" gibi her cümleyi anlamsızlaştırırdı — pay ve payda farklı şeyler olurdu.
+
+Para birimi ayrımı #62'nin kararının aynısı ve aynı gerekçeyle: kur dönüşümü yok, TRY ve USD
+harcamaları tek dağılımda toplanamaz. Aynı kategori iki para biriminde de %100 olabilir; **pay
+daima kendi para biriminin toplamına göredir.**
+
+### Kategorisiz dilim
+
+`categoryId: null` iki durumu birleştirir: kategori hiç seçilmemiş ya da kategori sonradan
+**silinmiş** (`onDelete: SetNull`, #53). Kullanıcı açısından ikisi de "bu harcama
+sınıflandırılmamış"tır; ayrı göstermek olmayan bir ayrımı icat etmek olurdu. Silinen bir
+kategorinin harcaması **kaybolmaz** — kategori bir etikettir, paranın kendisi değil.
+
+Sıralama tutara göre azalandır; eşitlikte ada göre ve **kategorisiz daima sona** düşer (adı
+yoktur). `localeCompare` kullanılmaz — sıra ICU sürümüne bağlı olmamalı.
+
+### Renk: sıraya göre, `CategoryBadge`'in aksine ada göre değil
+
+Rozet listenin içinde tek başına durur ve rengi bir **kimlik** ipucudur, bu yüzden ada göre
+hash'lenir ve her ekranda aynı kalır. Halkada ise renk **sıra** taşır ve hemen yanındaki lejant
+renkleri adlarla zaten eşler; ada göre hash, yan yana gelen iki dilimin aynı rengi almasına izin
+verir ve halka okunamaz hâle gelirdi. `danger` rampası havuzda **yok**: kırmızı bu sistemde
+hatanın rengidir, rastgele bir gider kategorisinin değil.
+
+### Dönem: URL'de, ayrıştırıcı `/transactions` ile ORTAK
+
+Dönem `?from=&to=` olarak URL'de yaşar (düz `<form method="get">`, client component değil) —
+#56'nın kararının aynısı: sonuç paylaşılabilir, geri tuşu çalışır, hiç istemci JavaScript'i
+gerekmez ve `GET` yan etkisiz kalır.
+
+**Ayrıştırıcı ortaktır** (`parseTransactionFilters`): aynı biçim (`YYYY-MM-DD`), aynı
+"tekrarlanan parametre hatadır", aynı "ters aralık 400'dür" kuralı. İşlem listesine özgü
+filtreler (`accountId`, `q`, `after`) bu endpoint'e hiç sorulmaz, dolayısıyla sessizce yok
+sayılırlar. `nextDay()` de artık **dışa açık ve ortaktır** (`transaction.ts`): "15 Mart'a kadar"
+iki ekranda iki farklı sonuç vermemeli.
+
+**Varsayılan: içinde bulunulan ayın tamamı** (UTC). "Son 30 gün" reddedildi — hemen üstteki özet
+"bu ay" diyor ve iki bölümün farklı dönem göstermesi, aynı ekranda birbirini yalanlayan iki sayı
+üretirdi.
+
+**Aralık kısmen verilebilir**; eksik uç varsayılandan tamamlanır. Ters aralık kontrolü
+**birleştirmeden sonra da** yapılır: ayrıştırıcı yalnızca ikisi de verildiğinde bakabilir, oysa
+`?from=2099-01-01` + varsayılan `to` de ters aralık üretir. Sessizce boş dağılım göstermek
+kullanıcıya "bu dönemde harcama yok" dedirtirdi; oysa sorun filtrededir.
+
+### Yetki ve erişilebilirlik
+
+`dashboard/summary` ile aynı kural: üç görüntüleme izninin tamamı aranır. **Bu endpoint'e özgü
+ek yüzey kategori ADLARIDIR** — bir tenant'ın gider kategorileri ("Avukat", "Tazminat") tek
+başına ticari bilgidir; tutarlar sızmasa bile adların sızması ihlaldir, ve güvenlik testi bunu
+ayrıca doğrular.
+
+Halka `aria-hidden`dır: tek başına hiçbir şey söylemez. Veriyi taşıyan şey yanındaki
+**listedir** — gerçek metin, gerçek tutar, gerçek yüzde. Bölümün kendisi `aria-labelledby` ile
+adlandırılmış bir **landmark**tır (kendi formu, dönemi ve iki grafiği olan en karmaşık bölüm).
+
+### Bilinen sınırlar
+
+- **Yedi renkli havuz**; daha fazla kategoride renkler tekrar eder. Lejant adlarla ayırır, ama
+  yan yana iki eşit renk mümkündür. Çare (üst N + "Diğer" kovası) bilinçli olarak ertelendi:
+  gerçek bir dağılımı gizler.
+- **Gelir dağılımı yok** — bu bölüm tanımı gereği yalnızca giderdir.
+- **Kategori kırılımı zaman içinde gösterilmiyor** (kategori × ay); dönemsel rapor #67'nin işi.
+- **Saat dilimi yok (#134)** — varsayılan aralık UTC ay sınırlarıyla kurulur.
+- **Dilime tıklayıp işlemleri filtrelemek yok**; `/transactions` zaten aynı `?from=&to=` ve
+  `?categoryId=` filtrelerini destekliyor, bağlantı kurmak ayrı bir adım.

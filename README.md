@@ -109,7 +109,69 @@ npm run test:e2e          # Playwright E2E (gerçek Chromium)
 
 ## Health Check
 
-Uygulama ayaktayken `GET /api/health` endpoint'i `{ "status": "ok" }` döner.
+İki ayrı endpoint vardır ve bu ayrım bilinçlidir (Issue #184): **liveness** ("süreç ayakta mı")
+ile **readiness** ("istek karşılayabilir mi") farklı sorulardır.
+
+| Endpoint | Ne sorar | Kim kullanır |
+| --- | --- | --- |
+| `GET /api/health` | Süreç ayakta mı? | Load balancer / restart politikası |
+| `GET /api/health/ready` | DB erişilebilir ve migration'lar uygulanmış mı? | Uptime izleme, trafik yönlendirme |
+
+`GET /api/health` sabit `{ status: "ok", timestamp }` döner ve **DB'ye bakmaz** — davranışı
+değişmedi.
+
+`GET /api/health/ready` sağlıklıysa `200`, değilse `503` döner:
+
+```json
+{ "status": "ok", "checks": { "database": "ok", "migrations": "ok" } }
+```
+
+### Neden gerekliydi
+
+Önceki tek endpoint sabit `{ status: "ok" }` dönüyordu: veritabanı düşmüş, migration
+uygulanmamış veya bağlantı havuzu tükenmiş olsa bile **yine "ok" diyordu**. Yani load balancer
+ve uptime izleme, gerçekte bozuk olan bir instance'a trafik göndermeye devam ediyordu.
+
+### Neyi kontrol eder
+
+- **Veritabanı:** `SELECT 1`. Ham SQL burada bilinçli bir istisnadır (`docs/conventions.md`):
+  yoklanan şey bir Prisma modeli değil, bağlantının kendisidir. Bir model üzerinden `count()`
+  yapmak reddedildi — o sorgu tabloya, index'e ve satır sayısına bağlıdır; ölçmek istediğimiz
+  ise yalnızca bağlantının canlılığı.
+- **Migration'lar:** iki ayrı arıza sınıfı. (1) yarım kalmış veya geri alınmış migration
+  (`finished_at IS NULL` ya da `rolled_back_at IS NOT NULL`) — şema belirsiz durumdadır;
+  (2) diskte olup DB'de kaydı olmayan migration — yani "yeni kod eski şemaya deploy edildi",
+  en sık görülen ve en sessiz bozulma biçimi.
+
+Migration dizini okunamıyorsa kontrol **başarısız** sayılır, "sorun yok" değil: bilmiyor olmak
+iyi haber değildir.
+
+### Kararlar
+
+**2 saniyelik zaman aşımı, fail-closed.** Askıda kalan bir health check hiç olmamasından
+kötüdür: bağlantı havuzu tükendiğinde `SELECT 1` dakikalarca bekleyebilir ve izleme sistemi
+instance'ı ne sağlıklı ne sağlıksız sayar — trafik akmaya devam eder. Süre dolarsa kontrol
+başarısızdır.
+
+**503, 500 değil.** 500 endpoint'in kendisinin bozuk olduğunu ima ederdi; izleme sistemi
+"uygulama bozuk" ile "health endpoint'i bozuk" durumlarını ayırt edemezdi.
+
+**Kimlik doğrulaması yok, bu yüzden yanıt bilinçli olarak fakir.** İzleme sistemleri kimlik
+taşıyamaz; endpoint internete açık olabilir. Bu yüzden yanıtta bağlantı dizesi, host, sürüm,
+SQL veya stack trace **yoktur** — yalnızca kontrol adı ve `ok`/`fail` (invariant #7). Ayrıntı
+sunucu logunda kalır. Regresyon bariyeri: `security/health-security.spec.ts` yanıtın alan
+kümesini sabitler; yeni bir alan eklenirse kırmızıya döner.
+
+**Rate limit yok ve bu gerekçelidir** (invariant #9 gerekçe yazılmasını ister): endpoint state
+değiştirmez ve ucuzdur, yani #9'un hedeflediği "public veya pahalı state değiştiren" sınıfına
+girmez. Dahası limit koymak zararlı olurdu — sağlık kontrolü 429 alan bir load balancer,
+sağlıklı bir instance'ı ölü sayardı. Kötüye kullanım riski deployment tarafında (probe'u iç ağa
+kısıtlayarak) ele alınır.
+
+### Kapsam dışı
+
+Bağımlı dış servislerin (e-posta sağlayıcısı, paylaşılan rate-limit store'u) sağlığı bu
+kontrole **dahil değildir**; #180 ve #181 tamamlandıktan sonra ayrı bir issue ile eklenir.
 
 ## Authentication
 
@@ -384,13 +446,12 @@ bazlı bir sliding-window rate limiter ile korunur (`src/lib/rate-limit/`).
   çalışmaz. Diğer auth action'ları (signout, csrf, vb.) etkilenmez.
 - **User enumeration:** `forgot-password` limiti yalnızca IP + endpoint'e bakar, e-postaya hiç
   bakmaz; kayıtlı/kayıtsız e-posta arasında davranış farkı yaratmaz (Issue #7 koruması korunur).
-- **⚠️ Proxy trust varsayımı:** İstemci IP'si `x-forwarded-for` header'ının İLK segmentinden
-  okunur (`src/lib/rate-limit/request-key.ts`). Bu, uygulamanın önünde bu header'ı kendisi set
-  eden güvenilir bir reverse-proxy / load balancer (ör. Vercel, nginx) olduğunu varsayar — tıpkı
-  `authConfig.trustHost: true`'nun zaten varsaydığı gibi. **Güvenilir bir proxy olmadan doğrudan
-  internete açılırsa**, istemci bu header'ı sahteleyerek kendi bucket'ını değiştirebilir ve rate
-  limit'i etkisiz kılabilir. Header eksik veya malformed ise tüm bu istekler ortak bir `unknown`
-  bucket'ını paylaşır — IP bulunamaması limiter'ı bypass ETMEZ.
+- **Proxy trust artık bir varsayım değil, bir yapılandırma (Issue #182):** İstemci IP'si
+  `x-forwarded-for`'un İLK segmentinden okunur (`src/lib/rate-limit/request-key.ts`), ama
+  **yalnızca `TRUSTED_PROXY=true` ise**. Ayrıntı ve deployment gereklilikleri:
+  [`docs/deployment.md`](docs/deployment.md). Header eksik, geçersiz biçimli veya
+  `TRUSTED_PROXY=false` ise tüm bu istekler ortak bir `unknown` bucket'ını paylaşır — IP
+  bulunamaması limiter'ı bypass ETMEZ.
 - **Kapsam dışı:** Limiter process-local'dir; çok instance'lı bir deployment'ta her instance kendi
   sayacını tutar. Distributed rate limiting (Redis vb.) bu issue'nun kapsamı dışındadır —
   `RateLimiter` interface'i (`src/lib/rate-limit/types.ts`) tam da bu yüzden vardır: route
@@ -2405,6 +2466,66 @@ saf fonksiyon olarak test edildi; ekran gelince e2e'nin bu yarısı da yazılaca
 E2E bugün şunu doğruluyor: aç/kapat, onay metni, vazgeçme, iki yönlü bağımlılık hatası (adıyla),
 ADMIN'in sayfaya erişememesi + linki görmemesi + API'den 403 alması, ve OWNER kontrol grubu.
 
+## Güvenilir proxy zorunluluğu (Issue #182)
+
+Rate limiting'in tamamı, istemcileri IP'ye göre ayırmaya dayanır ve IP `x-forwarded-for`
+header'ından okunur. Bu issue'ya kadar header **koşulsuz ve doğrulamasız** okunuyordu; "önümüzde
+güvenilir bir proxy var" varsayımı yalnızca yorumlarda ve bu dosyada yazılıydı, kodda hiçbir
+zorlayıcı yoktu.
+
+### İki ayrı açık kapatıldı
+
+**1. Proxy'siz deployment.** Uygulama doğrudan internete açılırsa `x-forwarded-for`'u istemcinin
+kendisi yazar; her istekte farklı bir değer göndererek her seferinde yeni bir bucket'a düşmek
+ve rate limit'i tamamen etkisiz kılmak mümkündü. Artık `TRUSTED_PROXY` **production'da açıkça
+yazılmak zorunda** (`src/lib/config/trusted-proxy.ts`) ve `false` iken header hiç okunmaz.
+
+**2. Biçim doğrulaması yokluğu.** Bu daha sinsiydi ve proxy VARKEN de sömürülebilirdi: çoğu
+proxy (`nginx`'in `$proxy_add_x_forwarded_for`'u dahil) istemcinin gönderdiği değeri **korur ve
+sonuna ekler**. Yani istemci `x-forwarded-for: aaaa1` gönderirse header `aaaa1, <gerçek-ip>`
+olur ve uygulama ilk segmenti — saldırganın uydurduğu değeri — okurdu. Doğrulama olmadığı için
+`aaaa1`, `aaaa2`, … **sınırsız sayıda geçerli bucket key'i** üretiyordu. Artık ilk segment
+`node:net`'in `isIP()`'siyle doğrulanır; uymayan her değer tek bir paylaşılan `unknown`
+bucket'ına çöker.
+
+Bu ikinci maddenin pratik sonucu: `docs/deployment.md`'deki nginx örneği
+`$proxy_add_x_forwarded_for` **değil** `$remote_addr` kullanır — header'ı korumak değil, ezmek
+gerekir.
+
+### Neden sessiz varsayılan yok
+
+`TRUSTED_PROXY` production'da tanımsızsa uygulama bilerek hata verir (`APP_BASE_URL` ile aynı
+duruş). İki yönde de sessizce yanlış olabilirdi: varsayılan `true` olsaydı proxy'siz bir
+deployment "korumalı" görünürdü; `false` olsaydı proxy'li normal bir deployment tüm trafiği tek
+sayaca sıkıştırıp gerçek kullanıcıları birbirine bağlardı. `"true"`/`"false"` dışındaki değerler
+de reddedilir — gevşek ayrıştırma (`value !== "false"`) yazım hatasını sessizce "güveniyoruz"a
+çevirirdi.
+
+### `node:net` neden bağımlılık sayılmaz
+
+`isIP()` Node'un yerleşik modülüdür; şifre hash'i için `node:crypto` kullanmakla aynı duruş.
+IPv6 ayrıştırmasını elle yazmak (`::` kısaltması, IPv4-mapped biçimler, zone id'ler) hem uzun
+hem hataya açıktır ve yanlış bir doğrulayıcı meşru IP'leri `unknown`'a düşürüp gerçek
+kullanıcıları birbirine bağlardı — yani güvenlik düzeltmesi bir kullanılabilirlik hatasına
+dönüşürdü.
+
+### `TRUSTED_PROXY=false` iken uzak adres kullanılmıyor
+
+Issue, bu durumda "bağlantının kendi uzak adresi"nin kullanılmasını öngörüyordu. **Next.js
+16'da bu adres bir Route Handler'a açılmıyor**: `NextRequest.ip` bu sürümde yok ve uygulama
+edge/middleware kullanmıyor (doğrulandı:
+`node_modules/next/dist/server/web/spec-extension/request.d.ts`). Bu yüzden issue'nun
+"bulunamıyorsa ortak `unknown` bucket'ına düşülür" dalı bugün tek geçerli daldır. Kalan risk
+kayda geçmiştir: `false` seçen bir kurulumda tüm kullanıcılar aynı sayacı paylaşır ve meşru
+trafik 429 alabilir. Doğru cevap `false` seçmek değil, proxy'yi kurmaktır.
+
+### Test yardımcısı da değişti
+
+`e2e/support/rate-limit.ts`'teki `uniqueTestClientIp()` eskiden `test-<uuid>` döndürüyordu — bu
+değerler tam olarak yeni doğrulayıcının reddettiği biçimdeydi. Helper artık RFC 3849'un
+dokümantasyon bloğundan (`2001:db8::/32`) benzersiz ve **geçerli** IPv6 adresleri üretir.
+Değiştirilmeseydi ~20 test dosyası ortak `unknown` bucket'ına düşüp birbirini 429'a
+düşürürdü. `integration/trusted-proxy.spec.ts` bu ayrışmayı kalıcı olarak yakalar.
 ## E-posta sağlayıcısı (Issue #180)
 
 Şifre sıfırlama ve tenant daveti akışları, bu issue'ya kadar production'da **gerçekten
@@ -2551,3 +2672,79 @@ Lua script'inin Redis içindeki davranışı (pencerenin gerçekten kayması, `Z
 yazması) **gerçek bir Upstash örneği gerektirir** ve bu repoda otomatik test edilmemiştir.
 Otomatik testler bu sınıfın sözleşmesini doğrular: tek round-trip (atomiklik iddiasının kanıtı),
 argüman şekli, yanıt çevrimi ve fail-open davranışı.
+## Tüm oturumları kapatma (Issue #186)
+
+Stateless JWT mimarisinde sign-out yalnızca istemcinin cookie'sini temizler — **çalınmış bir
+token 8 saat boyunca geçerli kalmaya devam eder**. Bu, "CSRF Duruşu" ve "Session Revocation"
+bölümlerinde kayda geçmiş bilinçli bir kabuldü, ama kullanıcının "şüpheli bir durum var, tüm
+oturumlarımı kapatayım" diyebileceği hiçbir yol yoktu. Finansal bir üründe kurumsal müşterinin
+soracağı ilk sorulardan biridir.
+
+Çözüm ucuzdu: revocation altyapısı (#26) **zaten vardı**; tek eksik, şifre değişimi dışında da
+tetiklenebilen bir zaman damgasıydı.
+
+### İki zaman damgası, tek eşik
+
+`User.sessionsRevokedAt` eklendi. `null` = hiç toplu iptal yapılmadı; mevcut kullanıcılar
+migration'dan **etkilenmez** (`credentialsChangedAt` ile aynı mantık).
+
+`isSessionRevoked()` artık ikisinin **en büyüğüne** bakar. Alanlar şemada **ayrı tutulur** ve bu
+bilinçlidir: şifre değişimi ile kullanıcının kendi iradesiyle yaptığı toplu iptal farklı
+olaylardır. Tek alana yazmak, "bu kullanıcının şifresi değişti mi" sorusunun cevabını bozardı —
+audit kaydı ve ileride eklenecek "şifreniz değişti" bildirimi bu ayrımı ister.
+
+`Math.max()` **kullanılmadı**: `Math.max(null, x)` `null`'ı `0`'a çevirir ve "hiç olmadı"yı
+"1970'te oldu" gibi davranarak sessizce yanlış sonuç üretebilirdi.
+
+**Hassasiyet kuralı aynen korundu.** `iat` saniye, zaman damgaları milisaniye; aynı saniyeye
+denk gelen token, yanlış pozitif revocation'ı önlemek için geçerli sayılmaya devam ediyor
+(`src/lib/auth/session-revocation.ts`'teki grace window). Yeni alan bu kuralı değiştirmez;
+`integration/revoke-sessions.spec.ts` bunu duyarlılık testiyle birlikte sabitler.
+
+**Ek DB maliyeti yok.** `jwt` callback'indeki sorgu zaten her istekte bu satırı okuyordu; yapılan
+şey `select`'e bir alan eklemek — #113'teki `name` ile aynı gerekçe.
+
+### Çağıranın kendi oturumu da düşer
+
+`POST /api/auth/revoke-sessions` gövdesizdir ve hedef **yalnızca** trusted session'dan gelir
+(invariant #2). Body'de `userId` göndermek etkisizdir — aksi halde bu endpoint "istediğim
+kullanıcıyı sistemden at" aracına dönüşürdü; `security/revoke-sessions-security.spec.ts` bunu
+açıkça test eder.
+
+Kullanıcı **kendi** oturumundan da düşer. Stateless JWT'de "bu isteği yapan token"ı ayrıcalıklı
+kılmanın yolu yoktur (bunu yapmak sunucu tarafında oturum kaydı tutmayı gerektirir — ayrı bir
+mimari karar, #186 "Scope Dışı"). `change-password` de aynı nedenle aynı şekilde davranır ve
+yanıt bunu kullanıcıya açıkça söyler; sessizce 401'e düşürmek, hatayı ürün hatası sanmasına yol
+açardı.
+
+### POST, GET değil
+
+State değiştiren işlem (invariant #4). Bir `GET` olsaydı `SameSite=Lax` top-level cross-site
+GET'leri engellemediği için herhangi bir sitedeki `<img src>` etiketi kullanıcıyı tüm
+cihazlarından atabilirdi.
+
+### Rate limit: 5/15dk
+
+Endpoint authenticated ve idempotent olmasına rağmen limit gerekir: çalınmış bir cookie ile
+tekrar tekrar çağrılırsa meşru kullanıcı sürekli dışarı atılır (kendine DoS). Kimse 15 dakikada
+beşten fazla kez tüm cihazlarından çıkmaz.
+
+### Ekran
+
+`/settings/security` — menüde "Güvenlik". Sayfa `requirePageUser()` ile korunur ve
+`resolveActiveTenantForUser()` **çağırmaz**: buradaki işlem kullanıcıya aittir, çalışma alanına
+değil. Hiçbir çalışma alanına üye olmayan bir kullanıcı da oturumlarını kapatabilmelidir — aksi
+halde en çok ihtiyaç duyulan düğme erişilemez bir ekranın arkasında kalırdı. Rol kontrolü de
+yoktur; MEMBER dahil herkes kendi oturumlarını kapatır.
+
+Onay iki adımlıdır (`window.confirm()` değil — `module-toggle.tsx` ile aynı duruş) ve onay metni
+kullanıcının kendi cihazından da düşeceğini **önceden** söyler. Başarıdan sonra
+`router.refresh()` değil **tam sayfa yönlendirme** yapılır: o noktada elimizdeki cookie artık
+geçersizdir, `refresh()` 401 alıp kullanıcıyı yarı bozuk bir ekranda bırakırdı.
+
+### Kapsam dışı
+
+- **Aktif oturumların listelenmesi** ("şu cihazlardan giriş yapıldı") sunucu tarafında oturum
+  kaydı tutmayı gerektirir ve mimariyi değiştirir. Ekranda bu sınır kullanıcıya açıkça yazılır;
+  var olmayan bir özelliği ima etmemek için.
+- **Yöneticinin başka bir kullanıcının oturumlarını düşürmesi** ayrı bir issue.

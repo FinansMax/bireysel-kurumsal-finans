@@ -16,6 +16,9 @@ export const AUDIT_ACTIONS = {
   // tahmin etme girişiminin en doğrudan göstergesidir.
   AUTH_PASSWORD_CHANGED: "AUTH_PASSWORD_CHANGED",
   AUTH_PASSWORD_CHANGE_FAILURE: "AUTH_PASSWORD_CHANGE_FAILURE",
+  // Kullanıcının kendi iradesiyle tüm oturumlarını kapatması (Issue #186). Güvenlik açısından
+  // kritik bir olaydır: "hesabım ele geçirildi mi" araştırmasında zaman çizelgesinin parçasıdır.
+  AUTH_SESSIONS_REVOKED: "AUTH_SESSIONS_REVOKED",
   TENANT_CREATED: "TENANT_CREATED",
   MEMBERSHIP_ROLE_CHANGED: "MEMBERSHIP_ROLE_CHANGED",
   // Finansal hesap yaşam döngüsü (Issue #46). Bir hesabın oluşturulması/silinmesi ve

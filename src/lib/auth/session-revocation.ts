@@ -25,12 +25,33 @@
 export function isSessionRevoked(
   tokenIssuedAtSeconds: number | null | undefined,
   credentialsChangedAt: Date | null | undefined,
+  sessionsRevokedAt?: Date | null | undefined,
 ): boolean {
-  if (!credentialsChangedAt) {
-    // Kullanıcı hiç credential değiştirmemiş (migration sonrası mevcut kullanıcılar dahil) —
-    // hiçbir session revoke edilmez.
+  /**
+   * İKİ AYRI OLAY, TEK EŞİK (Issue #186).
+   *
+   * `credentialsChangedAt` şifre değişimini, `sessionsRevokedAt` ise kullanıcının kendi
+   * iradesiyle yaptığı "tüm oturumları kapat" işlemini taşır. İkisi ŞEMADA ayrı tutulur
+   * (farklı olaylardır; audit ve ileride bildirim bu ayrımı ister) ama revocation kararı
+   * ikisinin EN BÜYÜĞÜNE bakar: hangisi daha yeniyse, ondan önceki her token geçersizdir.
+   *
+   * `Math.max` KULLANILMAZ, `null` olabilen iki değer açıkça ele alınır: `Math.max(null, x)`
+   * `null`'ı 0'a çevirir ve "hiç olmadı"yı "1970'te oldu" gibi davranarak sessizce yanlış
+   * sonuç üretebilir.
+   */
+  const thresholds = [credentialsChangedAt, sessionsRevokedAt].filter(
+    (value): value is Date => value instanceof Date,
+  );
+
+  if (thresholds.length === 0) {
+    // Kullanıcı ne credential değiştirmiş ne de toplu iptal yapmış (migration sonrası mevcut
+    // kullanıcılar dahil) — hiçbir session revoke edilmez.
     return false;
   }
+
+  const revokedAt = thresholds.reduce((latest, current) =>
+    current.getTime() > latest.getTime() ? current : latest,
+  );
 
   if (typeof tokenIssuedAtSeconds !== "number" || !Number.isFinite(tokenIssuedAtSeconds)) {
     // Auth.js'in ürettiği her JWT'de `iat` her zaman set edilir (bkz. yukarıdaki dokümantasyon);
@@ -41,5 +62,5 @@ export function isSessionRevoked(
   }
 
   const tokenIssuedAtSecondEndMs = (tokenIssuedAtSeconds + 1) * 1000;
-  return credentialsChangedAt.getTime() >= tokenIssuedAtSecondEndMs;
+  return revokedAt.getTime() >= tokenIssuedAtSecondEndMs;
 }

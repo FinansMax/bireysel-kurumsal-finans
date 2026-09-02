@@ -96,10 +96,10 @@ export const authConfig: NextAuthConfig = {
 
       const dbUser = await prisma.user.findUnique({
         where: { id: token.sub },
-        select: { credentialsChangedAt: true, name: true },
+        select: { credentialsChangedAt: true, sessionsRevokedAt: true, name: true },
       });
 
-      if (isSessionRevoked(token.iat, dbUser?.credentialsChangedAt)) {
+      if (isSessionRevoked(token.iat, dbUser?.credentialsChangedAt, dbUser?.sessionsRevokedAt)) {
         return null;
       }
 

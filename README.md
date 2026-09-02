@@ -2752,3 +2752,71 @@ geçersizdir, `refresh()` 401 alıp kullanıcıyı yarı bozuk bir ekranda bıra
   kaydı tutmayı gerektirir ve mimariyi değiştirir. Ekranda bu sınır kullanıcıya açıkça yazılır;
   var olmayan bir özelliği ima etmemek için.
 - **Yöneticinin başka bir kullanıcının oturumlarını düşürmesi** ayrı bir issue.
+## Gözlemlenebilirlik: yapılandırılmış log ve istek kimliği (Issue #183)
+
+Production'da bir şey patladığında elimizde yalnızca `console.error` vardı. Hangi kullanıcının,
+hangi tenant'ta, hangi istekte hata aldığını öğrenmenin yolu yoktu; hatalar kullanıcı şikâyet
+edene kadar görünmezdi.
+
+### `x-request-id` — destek talebiyle log arasındaki tek bağ
+
+Her yanıt bir `x-request-id` taşır. Kullanıcı "hata aldım" dediğinde bu id'yi verir, biz log'da
+onu ararız. Gelen bir `x-request-id` varsa **korunur** (uygulamanın önündeki proxy zaten bir id
+üretiyor olabilir; ezmek iki sistemin loglarını birbirine bağlamayı imkânsız kılardı), yoksa
+üretilir.
+
+**Gelen değer doğrulanır.** Bu değer log satırlarına yazılıyor; doğrulamasız kabul etmek
+saldırganın satır sonu enjekte edip **sahte log kaydı** üretmesine izin verirdi (log injection).
+Güvenli olmayan bir değer reddedilmez, **yok sayılır** ve yerine yenisi üretilir — bu bir
+yetkilendirme aracı değil, izleme kolaylığıdır.
+
+### `proxy.ts`, `middleware.ts` değil
+
+Next.js 16'da `middleware` dosya konvansiyonu **kullanımdan kaldırıldı** ve `proxy` olarak
+yeniden adlandırıldı; dev sunucusu açık bir deprecation uyarısı veriyor
+(`node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/proxy.md`). Dışa
+aktarılan fonksiyonun adı da `proxy` olmak zorunda.
+
+**Proxy'nin tek sorumluluğu istek kimliğidir.** Kimlik doğrulama ve yetkilendirme **oraya
+taşınmadı** ve taşınmayacak: koruma `requireUser()`/`requirePermission()` guard'larındadır
+(invariant #3); ikiye bölmek hangisinin geçerli olduğunu belirsizleştirirdi. Ayrıca proxy Edge
+runtime'da çalışır ve Prisma'ya erişemez — canlı membership doğrulaması orada zaten mümkün değil.
+
+Alternatif — `x-request-id`'yi her route handler'a elle eklemek — 20+ dosyaya tekrar eden kod
+koyar ve yeni bir route yazıldığında **unutulur**.
+
+### Yapılandırılmış log
+
+`src/lib/observability/logger.ts` tek satır JSON üretir: `level`, `msg`, `time`, `requestId`,
+`tenantId`, `userId`, `route`, `durationMs`.
+
+**Bağımlılık eklenmedi.** `pino`/`winston`, burada ihtiyaç duyulanın (tek satır JSON) çok
+ötesinde bir yüzey getirir; modül `console`'un ince bir sarmalayıcısıdır.
+
+**Neden JSON:** `console.error("[audit] failed", {...})` insan okur, makine okuyamaz. "Şu
+tenant'ta son bir saatte hata alan istekler" sorusu ancak alan bazlı aramayla yanıtlanır.
+
+**`error` stderr'e, diğerleri stdout'a** yazar: log toplayıcıların uyarı/hata filtrelemesi bu
+ayrıma dayanır.
+
+**Bağlam alanları serbest bir `Record` değil, açık alanlardır** — hangi bilginin loglanabilir
+olduğu tip düzeyinde belli olsun ve kimse oraya yanlışlıkla bir token koymasın. `extra` içinde
+hassas veri bulunmaması **çağıranın sorumluluğudur**; `sanitizeMetadata()` gibi ikinci bir
+savunma katmanı burada bilinçli olarak YOKTUR: log yazımı sıcak yolda çalışır ve her satırda
+derin nesne taraması ölçülebilir bir maliyettir.
+
+Mevcut üç `console.error` çağrısı (audit yazımı, e-posta gönderimi) bu logger'a taşındı.
+
+### Bu PR'da YAPILMAYAN — Sentry
+
+`SENTRY_DSN` `.env.example`'a yer tutucu olarak eklendi ama **SDK bağlanmadı**. İki ayrı engel
+var ve ikisi de karar gerektirir:
+
+1. `@sentry/nextjs` **yeni bir npm bağımlılığıdır** ve `CLAUDE.md` gereği açık onay ister.
+2. Sentry hesabı/DSN gerekir.
+
+Issue #183 bu ayrımı zaten öngörüyor: *"Loglama Sentry'ye bağımlı olmaz... `SENTRY_DSN` tanımlı
+değilken yapılandırılmış loglama TAM olarak çalışmaya devam eder."* Bugünkü durum tam olarak
+budur. SDK bağlandığında `beforeSend` içinde `sanitizeMetadata()` mantığı uygulanmalı,
+`sendDefaultPii: false` olmalı ve raw token taşıyan URL'lerin query string'i atılmalıdır (issue'da
+yazılı). Kritik olay alarmları (#183 madde 3) kod değil, Sentry panosu yapılandırmasıdır.

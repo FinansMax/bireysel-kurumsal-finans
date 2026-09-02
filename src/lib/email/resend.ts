@@ -1,4 +1,5 @@
 import { EMAIL_PROVIDERS, resolveEmailConfig } from "@/lib/config/email";
+import { logger } from "@/lib/observability/logger";
 
 /**
  * Resend HTTP API transport'u (Issue #180).
@@ -76,10 +77,8 @@ export async function sendViaResend(email: OutgoingEmail): Promise<boolean> {
     if (!response.ok) {
       // Yanıt gövdesi OKUNMAZ ve loglanmaz: sağlayıcılar hata gövdesinde isteğin bir kısmını
       // yankılayabilir ve bu, raw token taşıyan linki loga taşıyabilirdi.
-      console.error("[email:resend] provider rejected the message", {
-        to: email.to,
-        subject: email.subject,
-        status: response.status,
+      logger.error("email provider rejected the message", {
+        extra: { to: email.to, subject: email.subject, status: response.status },
       });
       return false;
     }
@@ -88,10 +87,12 @@ export async function sendViaResend(email: OutgoingEmail): Promise<boolean> {
   } catch (error) {
     // Ağ hatası, DNS, zaman aşımı. `error` nesnesi istek gövdesini taşımaz, ama yine de
     // yalnızca adı/mesajı loglanır.
-    console.error("[email:resend] send failed", {
-      to: email.to,
-      subject: email.subject,
-      error: error instanceof Error ? error.message : "unknown error",
+    logger.error("email send failed", {
+      extra: {
+        to: email.to,
+        subject: email.subject,
+        error: error instanceof Error ? error.message : "unknown error",
+      },
     });
     return false;
   }

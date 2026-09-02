@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { uniqueTestClientIp } from "../e2e/support/rate-limit";
 import {
   invalidTrustedProxyError,
   isTrustedProxy,
@@ -208,13 +209,16 @@ test.describe("getClientIp() — TRUSTED_PROXY=false", () => {
 });
 
 test.describe("Test yardımcısı gerçekten geçerli IP üretiyor", () => {
-  test("uniqueTestClientIp() değerleri getClientIp() tarafından kabul edilir", async () => {
+  test("uniqueTestClientIp() değerleri getClientIp() tarafından kabul edilir", () => {
     /**
      * `e2e/support/rate-limit.ts` eskiden `test-<uuid>` üretiyordu — biçim doğrulaması
      * eklendiğinde bu değerlerin hepsi `unknown`'a düşerdi ve ~20 test dosyası birbirinin
      * bucket'ını tüketmeye başlardı. Bu test, helper ile doğrulayıcının ayrışmasını engeller.
+     *
+     * Helper STATİK olarak import edilir (dosyanın başında). Dinamik `await import()` yerelde
+     * çalışıyordu ama CI'da `SyntaxError: Cannot use import statement outside a module` ile
+     * düştü; suite'in geri kalanı da zaten statik import kullanıyor.
      */
-    const { uniqueTestClientIp } = await import("../e2e/support/rate-limit");
     mutableEnv.TRUSTED_PROXY = "true";
 
     const seen = new Set<string>();

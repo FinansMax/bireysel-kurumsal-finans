@@ -384,13 +384,12 @@ bazlı bir sliding-window rate limiter ile korunur (`src/lib/rate-limit/`).
   çalışmaz. Diğer auth action'ları (signout, csrf, vb.) etkilenmez.
 - **User enumeration:** `forgot-password` limiti yalnızca IP + endpoint'e bakar, e-postaya hiç
   bakmaz; kayıtlı/kayıtsız e-posta arasında davranış farkı yaratmaz (Issue #7 koruması korunur).
-- **⚠️ Proxy trust varsayımı:** İstemci IP'si `x-forwarded-for` header'ının İLK segmentinden
-  okunur (`src/lib/rate-limit/request-key.ts`). Bu, uygulamanın önünde bu header'ı kendisi set
-  eden güvenilir bir reverse-proxy / load balancer (ör. Vercel, nginx) olduğunu varsayar — tıpkı
-  `authConfig.trustHost: true`'nun zaten varsaydığı gibi. **Güvenilir bir proxy olmadan doğrudan
-  internete açılırsa**, istemci bu header'ı sahteleyerek kendi bucket'ını değiştirebilir ve rate
-  limit'i etkisiz kılabilir. Header eksik veya malformed ise tüm bu istekler ortak bir `unknown`
-  bucket'ını paylaşır — IP bulunamaması limiter'ı bypass ETMEZ.
+- **Proxy trust artık bir varsayım değil, bir yapılandırma (Issue #182):** İstemci IP'si
+  `x-forwarded-for`'un İLK segmentinden okunur (`src/lib/rate-limit/request-key.ts`), ama
+  **yalnızca `TRUSTED_PROXY=true` ise**. Ayrıntı ve deployment gereklilikleri:
+  [`docs/deployment.md`](docs/deployment.md). Header eksik, geçersiz biçimli veya
+  `TRUSTED_PROXY=false` ise tüm bu istekler ortak bir `unknown` bucket'ını paylaşır — IP
+  bulunamaması limiter'ı bypass ETMEZ.
 - **Kapsam dışı:** Limiter process-local'dir; çok instance'lı bir deployment'ta her instance kendi
   sayacını tutar. Distributed rate limiting (Redis vb.) bu issue'nun kapsamı dışındadır —
   `RateLimiter` interface'i (`src/lib/rate-limit/types.ts`) tam da bu yüzden vardır: route
@@ -2405,6 +2404,66 @@ saf fonksiyon olarak test edildi; ekran gelince e2e'nin bu yarısı da yazılaca
 E2E bugün şunu doğruluyor: aç/kapat, onay metni, vazgeçme, iki yönlü bağımlılık hatası (adıyla),
 ADMIN'in sayfaya erişememesi + linki görmemesi + API'den 403 alması, ve OWNER kontrol grubu.
 
+## Güvenilir proxy zorunluluğu (Issue #182)
+
+Rate limiting'in tamamı, istemcileri IP'ye göre ayırmaya dayanır ve IP `x-forwarded-for`
+header'ından okunur. Bu issue'ya kadar header **koşulsuz ve doğrulamasız** okunuyordu; "önümüzde
+güvenilir bir proxy var" varsayımı yalnızca yorumlarda ve bu dosyada yazılıydı, kodda hiçbir
+zorlayıcı yoktu.
+
+### İki ayrı açık kapatıldı
+
+**1. Proxy'siz deployment.** Uygulama doğrudan internete açılırsa `x-forwarded-for`'u istemcinin
+kendisi yazar; her istekte farklı bir değer göndererek her seferinde yeni bir bucket'a düşmek
+ve rate limit'i tamamen etkisiz kılmak mümkündü. Artık `TRUSTED_PROXY` **production'da açıkça
+yazılmak zorunda** (`src/lib/config/trusted-proxy.ts`) ve `false` iken header hiç okunmaz.
+
+**2. Biçim doğrulaması yokluğu.** Bu daha sinsiydi ve proxy VARKEN de sömürülebilirdi: çoğu
+proxy (`nginx`'in `$proxy_add_x_forwarded_for`'u dahil) istemcinin gönderdiği değeri **korur ve
+sonuna ekler**. Yani istemci `x-forwarded-for: aaaa1` gönderirse header `aaaa1, <gerçek-ip>`
+olur ve uygulama ilk segmenti — saldırganın uydurduğu değeri — okurdu. Doğrulama olmadığı için
+`aaaa1`, `aaaa2`, … **sınırsız sayıda geçerli bucket key'i** üretiyordu. Artık ilk segment
+`node:net`'in `isIP()`'siyle doğrulanır; uymayan her değer tek bir paylaşılan `unknown`
+bucket'ına çöker.
+
+Bu ikinci maddenin pratik sonucu: `docs/deployment.md`'deki nginx örneği
+`$proxy_add_x_forwarded_for` **değil** `$remote_addr` kullanır — header'ı korumak değil, ezmek
+gerekir.
+
+### Neden sessiz varsayılan yok
+
+`TRUSTED_PROXY` production'da tanımsızsa uygulama bilerek hata verir (`APP_BASE_URL` ile aynı
+duruş). İki yönde de sessizce yanlış olabilirdi: varsayılan `true` olsaydı proxy'siz bir
+deployment "korumalı" görünürdü; `false` olsaydı proxy'li normal bir deployment tüm trafiği tek
+sayaca sıkıştırıp gerçek kullanıcıları birbirine bağlardı. `"true"`/`"false"` dışındaki değerler
+de reddedilir — gevşek ayrıştırma (`value !== "false"`) yazım hatasını sessizce "güveniyoruz"a
+çevirirdi.
+
+### `node:net` neden bağımlılık sayılmaz
+
+`isIP()` Node'un yerleşik modülüdür; şifre hash'i için `node:crypto` kullanmakla aynı duruş.
+IPv6 ayrıştırmasını elle yazmak (`::` kısaltması, IPv4-mapped biçimler, zone id'ler) hem uzun
+hem hataya açıktır ve yanlış bir doğrulayıcı meşru IP'leri `unknown`'a düşürüp gerçek
+kullanıcıları birbirine bağlardı — yani güvenlik düzeltmesi bir kullanılabilirlik hatasına
+dönüşürdü.
+
+### `TRUSTED_PROXY=false` iken uzak adres kullanılmıyor
+
+Issue, bu durumda "bağlantının kendi uzak adresi"nin kullanılmasını öngörüyordu. **Next.js
+16'da bu adres bir Route Handler'a açılmıyor**: `NextRequest.ip` bu sürümde yok ve uygulama
+edge/middleware kullanmıyor (doğrulandı:
+`node_modules/next/dist/server/web/spec-extension/request.d.ts`). Bu yüzden issue'nun
+"bulunamıyorsa ortak `unknown` bucket'ına düşülür" dalı bugün tek geçerli daldır. Kalan risk
+kayda geçmiştir: `false` seçen bir kurulumda tüm kullanıcılar aynı sayacı paylaşır ve meşru
+trafik 429 alabilir. Doğru cevap `false` seçmek değil, proxy'yi kurmaktır.
+
+### Test yardımcısı da değişti
+
+`e2e/support/rate-limit.ts`'teki `uniqueTestClientIp()` eskiden `test-<uuid>` döndürüyordu — bu
+değerler tam olarak yeni doğrulayıcının reddettiği biçimdeydi. Helper artık RFC 3849'un
+dokümantasyon bloğundan (`2001:db8::/32`) benzersiz ve **geçerli** IPv6 adresleri üretir.
+Değiştirilmeseydi ~20 test dosyası ortak `unknown` bucket'ına düşüp birbirini 429'a
+düşürürdü. `integration/trusted-proxy.spec.ts` bu ayrışmayı kalıcı olarak yakalar.
 ## E-posta sağlayıcısı (Issue #180)
 
 Şifre sıfırlama ve tenant daveti akışları, bu issue'ya kadar production'da **gerçekten

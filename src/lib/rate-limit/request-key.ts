@@ -1,35 +1,77 @@
+import { isIP } from "node:net";
+
+import { isTrustedProxy } from "@/lib/config/trusted-proxy";
+
 /**
- * İstek → rate-limit bucket key türetimi (Issue #27).
+ * İstek → rate-limit bucket key türetimi (Issue #27, sertleştirme: Issue #182).
  *
- * PROXY TRUST VARSAYIMI: `x-forwarded-for` header'ı, uygulamanın ÖNÜNDE güvenilir bir
- * reverse-proxy/load-balancer (ör. Vercel, nginx) olduğu ve bu header'ı KENDİSİNİN set ettiği
- * varsayımıyla okunur — bu repo bu header'ı doğrulayan/imzalayan bir mekanizma İÇERMEZ. Eğer
- * uygulama arkasında güvenilir bir proxy YOKSA, istemci bu header'ı serbestçe sahteleyip
- * kendi bucket'ını değiştirebilir (kendi rate limit'ini "resetleyebilir"). Bu, tıpkı
- * `authConfig.trustHost: true`'nun (bkz. `src/lib/auth/config.ts`) zaten varsaydığı gibi,
- * production'da güvenilir bir reverse-proxy arkasında çalıştığı varsayılan bir deployment
- * modelidir — bu implementasyon bunu OLDUĞUNDAN GÜVENLİ GÖSTERMEZ, sadece belgeler (bkz. README
- * "Rate Limiting" bölümü).
+ * PROXY TRUST ARTIK BİR VARSAYIM DEĞİL, BİR YAPILANDIRMA. Önceki hâlinde `x-forwarded-for`
+ * koşulsuz okunuyordu ve "önümüzde güvenilir bir proxy var" varsayımı yalnızca yorumlarda
+ * yazılıydı. Varsayım tutmazsa (uygulama doğrudan internete açılırsa) istemci header'ı
+ * uydurup her istekte yeni bir bucket'a düşer ve rate limit TAMAMEN etkisiz kalırdı. Artık
+ * karar `TRUSTED_PROXY` ile açıkça verilir ve production'da yazılmak zorundadır
+ * (bkz. `src/lib/config/trusted-proxy.ts`, `docs/deployment.md`).
+ */
+
+/**
+ * IP çıkarılamadığında kullanılan PAYLAŞILAN bucket.
+ *
+ * Paylaşılan olması kritiktir ve bilinçlidir: IP bulunamaması limiter'ı BYPASS ETMEZ. IP'siz
+ * TÜM istekler AYNI bucket'ı tüketir; ayrı ayrı sınırsız deneme hakkı kazanmazlar. Bu, hatalı
+ * yapılandırmada "çok kısıtlayıcı" tarafa düşmek demektir — güvenlik açısından doğru yön budur
+ * (fail-closed).
  */
 const UNKNOWN_IP_BUCKET = "unknown";
 
 /**
- * `x-forwarded-for` header'ından istemci IP'sini çıkarır.
+ * Bir string'in geçerli bir IPv4/IPv6 adresi olup olmadığını söyler.
  *
- * Format: `client, proxy1, proxy2, ...` — standart davranış olarak İLK değer (asıl istemciye
- * en yakın olan) kullanılır. Whitespace temizlenir; header eksik/boşsa veya ilk segment boşsa
- * (malformed) ortak `"unknown"` bucket'ına düşülür — bu, IP bulunamamasının limiter'ı BYPASS
- * ETMESİNİ engeller: IP'siz TÜM istekler AYNI paylaşılan bucket'ı tüketir, ayrı ayrı sınırsız
- * deneme hakkı kazanmazlar.
+ * NEDEN BİÇİM DOĞRULAMASI GEREKLİ: doğrulama olmadan `x-forwarded-for: aaaa1`, `aaaa2`, …
+ * gibi rastgele stringler geçerli bucket key'leri üretiyordu. Yani proxy'nin arkasında bile,
+ * header'a ek bir segment yazabilen herhangi biri SINIRSIZ sayıda bucket üretip limiti
+ * eritebilirdi. Biçim kontrolü bu sonsuz bucket üretimini kırar: uymayan her değer tek bir
+ * paylaşılan bucket'a çöker.
+ *
+ * NEDEN `node:net`: bu bir bağımlılık DEĞİL, Node'un yerleşik modülüdür — şifre hash'i için
+ * `node:crypto` kullanmakla aynı duruş (`docs/conventions.md` → "Bağımlılıklar"). IPv6
+ * ayrıştırmasını elle yazmak (`::` kısaltması, IPv4-mapped biçimler, zone id'ler) hem uzun hem
+ * de hataya açıktır; yanlış bir doğrulayıcı meşru IP'leri `unknown`'a düşürüp gerçek
+ * kullanıcıları birbirine bağlardı.
+ */
+function isValidIpAddress(value: string): boolean {
+  return isIP(value) !== 0;
+}
+
+/**
+ * İstemci IP'sini çıkarır.
+ *
+ * `TRUSTED_PROXY=false` iken `x-forwarded-for` HİÇ OKUNMAZ. Issue #182 bu durumda
+ * "bağlantının kendi uzak adresi" kullanılmasını öngörüyordu; **Next.js 16'da bu adres bir
+ * Route Handler'a açılmıyor** (`NextRequest.ip` bu sürümde yok ve uygulama edge/middleware
+ * kullanmıyor — doğrulandı: `node_modules/next/dist/server/web/spec-extension/request.d.ts`).
+ * Dolayısıyla issue'nun "bulunamıyorsa ortak `unknown` bucket'ına düşülür" dalı bugün TEK
+ * geçerli daldır. Sonuç: proxy'siz bir kurulumda tüm istekler tek bir bucket'ı paylaşır —
+ * kısıtlayıcıdır ama sahtelenebilir bir header'a güvenmekten iyidir. Uzak adres ileride
+ * erişilebilir olursa değişecek tek yer burasıdır.
  */
 export function getClientIp(request: Request): string {
+  if (!isTrustedProxy()) {
+    return UNKNOWN_IP_BUCKET;
+  }
+
   const forwardedFor = request.headers.get("x-forwarded-for");
   if (!forwardedFor) {
     return UNKNOWN_IP_BUCKET;
   }
 
+  // Format: `client, proxy1, proxy2, ...` — standart davranış olarak İLK değer (asıl istemciye
+  // en yakın olan) kullanılır.
   const firstIp = forwardedFor.split(",")[0]?.trim();
-  return firstIp && firstIp.length > 0 ? firstIp : UNKNOWN_IP_BUCKET;
+  if (!firstIp || !isValidIpAddress(firstIp)) {
+    return UNKNOWN_IP_BUCKET;
+  }
+
+  return firstIp;
 }
 
 /**

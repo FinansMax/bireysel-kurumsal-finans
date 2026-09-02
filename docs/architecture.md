@@ -44,9 +44,11 @@ kaldırmadan doğrudan çağrılabilir.
 | `src/lib/db/` | Veritabanı seviyesi yardımcılar — `runSerializable()` (Serializable + retry) |
 | `src/lib/config/` | Ortam değişkeni çözümleyicileri — her biri tek bir değişken grubunun TEK kaynağı (`app-url`, `email`, `trusted-proxy`, `rate-limit-store`) |
 | `src/lib/health/` | Readiness kontrolü — DB ve migration yoklaması (Issue #184) |
+| `src/lib/observability/` | Yapılandırılmış JSON log ve istek kimliği (Issue #183) |
 | `src/lib/audit/` | Audit action sabitleri, sanitization, `writeAuditLog()` |
 | `src/lib/email/` | E-posta transport'u (Resend HTTP API) ve şablonlar; `EmailSender`/`InvitationSender` arayüzleri kendi domain'lerinde kalır |
 | `src/lib/rate-limit/` | `RateLimiter` interface'i, in-memory limiter, policy kataloğu, guard |
+| `src/proxy.ts` | Next.js proxy (eski adıyla middleware) — TEK sorumluluğu `x-request-id`; auth/yetki BURAYA KONMAZ (Issue #183) |
 | `src/lib/prisma.ts` | PrismaClient singleton (dev'de hot-reload güvenli) |
 | `prisma/schema.prisma` | Veri modeli; `prisma/migrations/` versiyonlu şema geçmişi |
 | `e2e/`, `integration/`, `security/` | Üç ayrı test suite'i (bkz. `docs/testing.md`) |

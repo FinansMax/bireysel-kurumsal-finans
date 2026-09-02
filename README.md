@@ -59,6 +59,7 @@ cp .env.example .env
 | `RATE_LIMIT_STORE` | Hayır | `memory` (varsayılan) \| `redis`. Çok instance'lı deployment'ta `redis` gerekir (Issue #181). |
 | `UPSTASH_REDIS_REST_URL` | `redis` ise | Upstash REST adresi. Eksikse uygulama sessizce `memory`'ye DÜŞMEZ, hata verir. |
 | `UPSTASH_REDIS_REST_TOKEN` | `redis` ise | Upstash REST token'ı. **Secret** — loglanmaz, `NEXT_PUBLIC_` olamaz. |
+| `SENTRY_DSN` | Hayır | Sentry hata izleme. **HENÜZ BAĞLANMADI** — SDK onayı + hesap bekliyor (Issue #183). Yokken loglama tam çalışır. |
 | `POSTGRES_*` | Lokal | Yalnızca `docker-compose.yml`'in lokal PostgreSQL container'ını kurmak için. |
 
 **`APP_BASE_URL` neden production'da zorunlu:** Şifre sıfırlama ve tenant daveti

@@ -6,6 +6,7 @@ import { registerUser } from "../src/lib/auth/signup";
 import { prisma } from "../src/lib/prisma";
 import { RATE_LIMIT_POLICIES } from "../src/lib/rate-limit/policies";
 
+import { markEmailVerified } from "../e2e/support/email-verification";
 import { uniqueTestClientIp } from "../e2e/support/rate-limit";
 import { createSessionCookieHeader } from "./support/session";
 
@@ -25,8 +26,17 @@ test.afterAll(async () => {
   await prisma.$disconnect();
 });
 
-function signUpWithIp(request: APIRequestContext, email: string, password: string, ip: string) {
-  return request.post("/api/auth/signup", { data: { email, password }, headers: { "x-forwarded-for": ip } });
+async function signUpWithIp(request: APIRequestContext, email: string, password: string, ip: string) {
+  const response = await request.post("/api/auth/signup", {
+    data: { email, password },
+    headers: { "x-forwarded-for": ip },
+  });
+
+  // #190: doğrulanmamış hesap çalışma alanı kuramaz. Bu spec'in konusu rate limit;
+  // 429 alan denemelerde kullanıcı hiç oluşmadığı için çağrı zaten etkisizdir.
+  await markEmailVerified(email);
+
+  return response;
 }
 
 function forgotPasswordWithIp(request: APIRequestContext, email: string, ip: string) {
@@ -191,6 +201,11 @@ test.describe("Rate limiting — tenant creation", () => {
       password: "S3curePassw0rd!",
     });
     if (!signup.ok) throw new Error("test setup failed");
+
+    // #190: doğrulanmamış hesap çalışma alanı kuramaz. Bu testin konusu rate limit;
+    // doğrulama onun ÖN KOŞULU.
+    await markEmailVerified(signup.user.email);
+
     const cookie = await createSessionCookieHeader({ sub: signup.user.id, email: signup.user.email });
 
     const tenantIds: string[] = [];

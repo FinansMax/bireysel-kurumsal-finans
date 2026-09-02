@@ -62,6 +62,15 @@ model Tenant {
   id        String   @id @default(cuid())
   name      String
   slug      String   @unique
+
+  // Tenant'ın saat dilimi (IANA, Issue #134). TÜM gün/dönem hesaplarının referansı budur:
+  // "bugün", "bu ay", "vadesi geçti". Kullanıcının tarayıcısı referans ALINMAZ — aynı
+  // tenant'ın iki üyesi farklı şehirlerdeyse aynı raporun farklı çıkması, çözdüğünden büyük
+  // bir sorun yaratırdı (bkz. src/lib/time/tenant-time.ts).
+  //
+  // VARSAYILAN GEÇMİŞİ DE DOĞRU YORUMLAR: bugüne kadarki tüm kayıtlar tek saat diliminde
+  // girildi, bu yüzden migration mevcut satırlara dokunmaz ve veri dönüşümü gerekmez.
+  timeZone  String   @default("Europe/Istanbul")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

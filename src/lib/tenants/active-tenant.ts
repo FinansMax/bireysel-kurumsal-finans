@@ -22,7 +22,11 @@ export const ACTIVE_TENANT_MAX_AGE_SECONDS = 60 * 60 * 8;
 
 type ActiveTenantPayload = { tenantId: string };
 
-export type ActiveTenant = { id: string; name: string; slug: string };
+// `timeZone` BURADA taşınır (Issue #134): gün/dönem hesabı yapan her ekran zaten aktif
+// tenant'ı çözüyor. Ayrı bir sorgu eklemek yerine mevcut select'e bir alan koymak, hem
+// maliyetsizdir hem de referansın UNUTULMASINI zorlaştırır — tarih gösteren bir ekran
+// yazan kişi elinde hazır bulur.
+export type ActiveTenant = { id: string; name: string; slug: string; timeZone: string };
 
 function getSecret(): string {
   const secret = process.env.AUTH_SECRET;
@@ -93,7 +97,7 @@ export async function resolveActiveTenant(
     where: { userId_tenantId: { userId, tenantId } },
     select: {
       role: true,
-      tenant: { select: { id: true, name: true, slug: true } },
+      tenant: { select: { id: true, name: true, slug: true, timeZone: true } },
     },
   });
 

@@ -2821,3 +2821,68 @@ değilken yapılandırılmış loglama TAM olarak çalışmaya devam eder."* Bug
 budur. SDK bağlandığında `beforeSend` içinde `sanitizeMetadata()` mantığı uygulanmalı,
 `sendDefaultPii: false` olmalı ve raw token taşıyan URL'lerin query string'i atılmalıdır (issue'da
 yazılı). Kritik olay alarmları (#183 madde 3) kod değil, Sentry panosu yapılandırmasıdır.
+
+## Saat dilimi: referans tenant'tır (Issue #134)
+
+Üründe hiçbir saat dilimi katmanı yoktu ve **üç ayrı yer üç farklı referans** kullanıyordu:
+
+| Yer | Eski referans |
+| --- | --- |
+| İşlem formu varsayılanı | Sunucunun **yerel** günü |
+| Liste gösterimi (`toISOString().slice(0,10)`) | **UTC** günü |
+| `Transaction.occurredAt` varsayılanı | Sunucunun **anı** |
+
+Sunucu UTC ise fark görünmez — bu yüzden hata hem CI'da hem geliştirme makinesinde **sessiz**
+kalıyordu. Sunucu UTC+3 ise gece yarısı civarındaki kayıtlar listede **bir gün kaymış**
+görünüyordu.
+
+Finansal bir üründe bunun bedeli görüntü hatası değildir: bir işlemin hangi **güne**, dolayısıyla
+hangi **döneme** düştüğü raporlamanın doğrudan girdisidir.
+
+### Karar: referans `Tenant.timeZone`
+
+Kullanıcının tarayıcısı referans **alınmaz**: aynı tenant'ın iki üyesi farklı şehirlerdeyse aynı
+raporun farklı çıkması, çözdüğü sorundan büyük bir sorun yaratırdı.
+
+"Her şey UTC, gösterim de UTC" alternatifi daha basitti ama Türkiye'de UTC+3 ile çalışan bir ekip
+için gece 01:00'de girilen kayıt UTC'de "dün" olur — kullanıcıya "benim girdiğim tarih bu değildi"
+dedirtir.
+
+### Karar: `occurredAt` bir AN olarak kalır
+
+`@db.Date`'e çevirmek geri dönüşü olmayan bir migration'dır ve ileride saatli kayıt (ör. tahsilat
+anı, Epic 15) gerektiğinde yolu kapatır. Gün hesabı, saklanan **anın** tenant saat diliminde
+yorumlanmasıyla yapılır.
+
+### Mevcut kayıtlar dönüştürülmedi
+
+Varsayılan `Europe/Istanbul`; bugüne kadarki tüm kayıtlar tek saat diliminde girildiği için bu
+varsayılan **geçmişi de doğru yorumlar**. Migration mevcut satırlara dokunmaz.
+
+### Tek yardımcı modül
+
+`src/lib/time/tenant-time.ts` — `formatDateInTimeZone()`, `todayInTimeZone()`,
+`isValidTimeZone()`, `resolveTenantTimeZone()`. Ekranlar tarih aritmetiğini elle yapmaz.
+
+`timeZone`, `ActiveTenant` tipine eklendi: gün/dönem hesabı yapan her ekran zaten aktif tenant'ı
+çözüyor, dolayısıyla ek sorgu yok ve referansın **unutulması** zorlaşıyor.
+
+**Bağımlılık eklenmedi.** `date-fns-tz`/`luxon` yerine platformun `Intl` API'si; IANA veritabanı
+zaten Node'un içinde. Saat dilimi doğrulaması da elle tutulan bir allowlist değil, `Intl`'e
+sorarak yapılıyor — liste yıl içinde değişir ve kopyası bir sonraki tzdata güncellemesinde yanlış
+olurdu.
+
+**Okuma tarafında geçersiz değer varsayılana düşer, yazma tarafında reddedilir.** DB'deki değer
+teoride geçersiz olabilir; o durumda `Intl` fırlatır ve tüm liste sayfası çökerdi — bir ayar
+yüzünden veriye erişimin tamamen kaybolması kabul edilemez.
+
+### Kalan risk / kapsam dışı
+
+- **Ayar ekranı yok.** `Tenant.timeZone` şemada ve okuma yolunda var, ama **değiştirilebilir bir
+  arayüzü yok** — tenant ayarları ekranı #86'nın konusudur. Bugün değer yalnızca varsayılandır.
+- **Rapor dönem sınırları hâlâ UTC.** `src/lib/finance/aggregation.ts` ay başı/sonu sınırlarını
+  `Date.UTC` ile kuruyor. Bu PR işlem listesi ve form varsayılanını hizaladı; raporlama
+  tarafının aynı referansa taşınması ayrı bir adımdır ve Epic 7 ekranlarıyla birlikte ele
+  alınmalıdır.
+- **Dashboard ve borç/alacak listelerindeki tarih gösterimi** hâlâ `toISOString().slice(0,10)`
+  kullanıyor; aynı sebeple ayrı adıma bırakıldı.

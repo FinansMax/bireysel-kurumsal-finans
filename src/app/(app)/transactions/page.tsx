@@ -7,6 +7,7 @@ import { listAccounts } from "@/lib/finance/account";
 import { listCategories } from "@/lib/finance/category";
 import { listTransactions } from "@/lib/finance/transaction";
 import { FILTER_ERRORS, parseTransactionFilters } from "@/lib/finance/transaction-filters";
+import { formatDateInTimeZone, todayInTimeZone } from "@/lib/time/tenant-time";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 
 import { DeleteWithConfirm } from "@/components/delete-with-confirm";
@@ -37,19 +38,10 @@ const TYPE_LABELS: Record<string, string> = {
   EXPENSE: "Gider",
 };
 
-/**
- * Form tarihinin varsayılanı — sunucunun yerel tarihi, `YYYY-MM-DD`.
- *
- * `toISOString().slice(0, 10)` KULLANILMAZ: o UTC'ye çevirir ve UTC+3 bir sunucuda gece
- * yarısından sonra "dün"ü varsayılan yapardı. Değerin istemcide değil burada üretilmesinin
- * gerekçesi `TransactionForm`'un `today` prop'unda yazılıdır.
- */
-function serverTodayIsoDate(): string {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${now.getFullYear()}-${month}-${day}`;
-}
+// Form varsayılanı ve liste gösterimi ARTIK AYNI referansı kullanır: tenant'ın saat dilimi
+// (Issue #134). Önceden form varsayılanı SUNUCUNUN yerel gününü, liste ise UTC gününü
+// kullanıyordu; sunucu UTC değilse gece yarısı civarındaki kayıtlar bir gün kaymış görünüyordu.
+// Tek kaynak: `src/lib/time/tenant-time.ts`.
 
 /**
  * Bir arama parametresinin form alanına geri yazılacak hâli.
@@ -305,7 +297,7 @@ export default async function TransactionsPage({
                         görünebilirdi. Saat dilimi yönetimi bu üründe henüz hiç yok; ayrı bir
                         issue'nun konusudur (bkz. README). */}
                     <Td className="tabular-nums whitespace-nowrap">
-                      {transaction.occurredAt.toISOString().slice(0, 10)}
+                      {formatDateInTimeZone(transaction.occurredAt, tenant.timeZone)}
                     </Td>
                     <Td emphasis>
                       <span className="flex items-center gap-2.5">
@@ -354,14 +346,14 @@ export default async function TransactionsPage({
                           >
                             <span aria-hidden="true">Düzenle</span>
                             <span className="sr-only">
-                              {transaction.occurredAt.toISOString().slice(0, 10)} tarihli{" "}
+                              {formatDateInTimeZone(transaction.occurredAt, tenant.timeZone)} tarihli{" "}
                               {transaction.amount} tutarlı işlemi düzenle
                             </span>
                           </Link>
 
                           <DeleteWithConfirm
                             endpoint={`/api/tenants/${tenant.id}/transactions/${transaction.id}`}
-                            itemLabel={`${transaction.occurredAt.toISOString().slice(0, 10)} tarihli ${transaction.amount} tutarlı işlemi sil`}
+                            itemLabel={`${formatDateInTimeZone(transaction.occurredAt, tenant.timeZone)} tarihli ${transaction.amount} tutarlı işlemi sil`}
                             confirmQuestion={`${transaction.amount} tutarlı bu işlemi silmek istiyor musunuz?`}
                             /* Silme, hesabın BAKİYESİNİ değiştirir (#53: etki geri alınır).
                                Kullanıcı bunu onaylamadan ÖNCE görmelidir — diğer iki ekranda
@@ -442,7 +434,7 @@ export default async function TransactionsPage({
                 name: category.name,
                 type: category.type,
               }))}
-              today={serverTodayIsoDate()}
+              today={todayInTimeZone(tenant.timeZone)}
               transaction={
                 editingTransaction
                   ? {
@@ -454,7 +446,7 @@ export default async function TransactionsPage({
                       description: editingTransaction.description,
                       // Tarih alanı `YYYY-MM-DD` bekler; listedeki gösterimle AYNI dönüşüm
                       // kullanılır ki kullanıcı formda başka bir gün görmesin.
-                      occurredAt: editingTransaction.occurredAt.toISOString().slice(0, 10),
+                      occurredAt: formatDateInTimeZone(editingTransaction.occurredAt, tenant.timeZone),
                     }
                   : undefined
               }

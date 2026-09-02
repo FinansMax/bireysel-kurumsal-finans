@@ -7,7 +7,7 @@ import { getAppBaseUrl } from "@/lib/config/app-url";
 import { runSerializable, SerializationConflictError } from "@/lib/db/serializable";
 import { prisma } from "@/lib/prisma";
 
-import { consoleInvitationSender, type InvitationSender } from "./invitation-email";
+import { getInvitationSender, type InvitationSender } from "./invitation-email";
 import { isValidRole } from "./validation";
 
 // 256 bit entropi — brute-force ile tahmin edilmesi hesaplama açısından imkansız
@@ -106,10 +106,11 @@ export async function createInvitation(
     return { ok: false, status: 403, error: "Forbidden" };
   }
 
-  const sender = options.invitationSender ?? consoleInvitationSender;
-  // Transaction BAŞLAMADAN önce çözülür: yanlış yapılandırma durumunda hata, davet satırı
-  // oluşturulmadan fırlar ve geride linki üretilememiş (kabul edilemez) bir davet kalmaz.
+  // İkisi de transaction BAŞLAMADAN önce çözülür: yanlış yapılandırma durumunda hata, davet
+  // satırı oluşturulmadan fırlar ve geride linki üretilememiş (kabul edilemez) bir davet
+  // kalmaz. Sıra `requestPasswordReset()` ile aynı gerekçeyle sabittir (belirlenimli hata).
   const baseUrl = options.baseUrl ?? getAppBaseUrl();
+  const sender = options.invitationSender ?? getInvitationSender();
 
   const rawToken = generateInvitationToken();
   const tokenHash = hashInvitationToken(rawToken);

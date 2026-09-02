@@ -1,0 +1,21 @@
+# CODEOWNERS — main branch icin zorunlu inceleme sahipligi
+#
+# NEDEN: Bu depo cok kiracili finansal bir SaaS'tir; tenant izolasyonu, authz,
+# token yasam dongusu ve audit log gibi invariant'lar (docs/security-invariants.md)
+# yanlis bir merge ile sessizce bozulabilir. "En az 1 approval" tek basina yeterli
+# degildir: iki katkici birbirinin PR'ini onaylayip main'e merge edebilir.
+# Code owner zorunlulugu, onay yetkisini depo sahibine baglar.
+#
+# Kapsam bilerek "*" (tum dosyalar) tutuldu. Dosya bazli daraltma (ornegin yalniz
+# src/lib/authz/**) reddedildi: guvenlik etkisi olan degisiklikler migration,
+# middleware, CI workflow ve test dosyalarina da dagilir; daraltilmis bir liste
+# bu yollari kapsam disi birakip yanlis bir guven hissi yaratirdi.
+#
+# NOT: Bu dosyanin PR uzerinde etkili olan surumu HER ZAMAN base branch'teki
+# (main) surumdur. Buradaki bir degisiklik, main'e merge edilmeden gecerli olmaz.
+#
+# NOT: Code owner olarak yazilan kullanici/takimin depoda en az "Write" yetkisi
+# olmak zorundadir; aksi halde GitHub bu satiri yok sayar.
+
+# Depodaki tum dosyalar
+* @sudebegumyksl

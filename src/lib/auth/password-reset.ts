@@ -4,7 +4,7 @@ import { getAppBaseUrl } from "@/lib/config/app-url";
 import { prisma } from "@/lib/prisma";
 
 import { updateUserPassword } from "./credentials";
-import { consoleEmailSender, type EmailSender } from "./email";
+import { getEmailSender, type EmailSender } from "./email";
 import { hashPassword } from "./password";
 import { isValidPassword, normalizeEmail } from "./validation";
 
@@ -46,12 +46,18 @@ export async function requestPasswordReset(
   email: unknown,
   options: RequestPasswordResetOptions = {},
 ): Promise<void> {
-  const sender = options.emailSender ?? consoleEmailSender;
-  // `getAppBaseUrl()` her DB erişiminden ÖNCE çağrılır: yanlış yapılandırılmış bir production
-  // ortamında hata, kullanıcının kayıtlı olup olmamasından BAĞIMSIZ olarak aynı noktada oluşur.
-  // Aksi halde "kayıtlı e-posta → 500, kayıtsız → 200" farkı, Issue #7'de kapatılan
-  // user-enumeration oracle'ını geri getirirdi (bkz. `src/lib/config/app-url.ts`).
+  // HER İKİ yapılandırma çözümlemesi de her DB erişiminden ÖNCE yapılır: yanlış
+  // yapılandırılmış bir production ortamında hata, kullanıcının kayıtlı olup olmamasından
+  // BAĞIMSIZ olarak aynı noktada oluşur. Aksi halde "kayıtlı e-posta → 500, kayıtsız → 200"
+  // farkı, Issue #7'de kapatılan user-enumeration oracle'ını geri getirirdi
+  // (bkz. `src/lib/config/app-url.ts` ve `src/lib/config/email.ts`).
+  //
+  // SIRA SABİTTİR — önce `getAppBaseUrl()`, sonra `getEmailSender()`: ikisi de eksikse hangi
+  // hatanın çıkacağı belirlenimli olsun. Rastgele bir sıra, yapılandırma hatası mesajını
+  // ortama göre değiştirir ve hata ayıklamayı zorlaştırırdı. Güvenlik açısından ikisi de
+  // DB'den önce olduğu sürece fark yoktur; belirlenimlilik operasyonel bir tercihtir.
   const baseUrl = options.baseUrl ?? getAppBaseUrl();
+  const sender = options.emailSender ?? getEmailSender();
 
   if (typeof email !== "string") {
     return;

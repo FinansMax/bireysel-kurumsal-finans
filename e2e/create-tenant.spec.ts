@@ -6,6 +6,7 @@ import { registerUser } from "../src/lib/auth/signup";
 import { prisma } from "../src/lib/prisma";
 
 import { createSessionCookieHeader } from "../security/support/session";
+import { markEmailVerified } from "./support/email-verification";
 import { uniqueTestClientIp } from "./support/rate-limit";
 
 test.afterAll(async () => {
@@ -27,6 +28,10 @@ test.describe("POST /api/tenants", () => {
     const email = `e2e-tenant-${randomUUID()}@example.com`;
     const signup = await registerUser({ email, password: "S3curePassw0rd!" });
     if (!signup.ok) throw new Error("test setup failed");
+
+    // #190: doğrulanmamış hesap çalışma alanı kuramaz; bu testin konusu doğrulama DEĞİL,
+    // onun ÖN KOŞULU (bkz. e2e/support/email-verification.ts).
+    await markEmailVerified(email);
 
     const cookie = await createSessionCookieHeader({ sub: signup.user.id, email });
     const slug = `e2e-acme-${randomUUID()}`;

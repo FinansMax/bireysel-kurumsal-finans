@@ -4,6 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { prisma } from "../src/lib/prisma";
 
+import { markEmailVerified } from "./support/email-verification";
 import { getSetCookieValues, signInWithCredentials } from "./support/auth";
 import { uniqueTestClientIp } from "./support/rate-limit";
 
@@ -67,6 +68,9 @@ async function createUser(page: Page) {
     data: { email, password },
     headers: { "x-forwarded-for": uniqueTestClientIp() },
   });
+  // #190: doğrulanmamış hesap çalışma alanı kuramaz; bu testin konusu doğrulama DEĞİL,
+  // onun ÖN KOŞULU (bkz. e2e/support/email-verification.ts).
+  await markEmailVerified(email);
   expect(response.status()).toBe(201);
   return { email, password };
 }

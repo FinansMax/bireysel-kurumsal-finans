@@ -122,3 +122,33 @@ export function invitationEmail(to: string, role: MembershipRole, acceptUrl: str
     html: htmlDocument("Çalışma alanı daveti", paragraphs, "Daveti kabul et", acceptUrl),
   };
 }
+
+/**
+ * E-posta doğrulama (Issue #190).
+ *
+ * Süre (24 saat) metne YAZILIR — kullanıcı linke geç tıklayıp "çalışmıyor" sanmasın.
+ * Şifre sıfırlamanın 30 dakikasından uzun olmasının gerekçesi
+ * `src/lib/auth/email-verification.ts`'te yazılıdır.
+ */
+export function emailVerificationEmail(to: string, verifyUrl: string): OutgoingEmail {
+  const paragraphs = [
+    "FinansMax hesabınızı oluşturdunuz. E-posta adresinizi doğrulamak için aşağıdaki bağlantıya tıklayın.",
+    "Bağlantı 24 saat boyunca geçerlidir ve yalnızca bir kez kullanılabilir.",
+    "Bu hesabı siz oluşturmadıysanız bu e-postayı yok sayabilirsiniz.",
+  ];
+
+  return {
+    to,
+    subject: "FinansMax — e-posta adresinizi doğrulayın",
+    text: [
+      "FinansMax hesabınızı oluşturdunuz.",
+      "",
+      "E-posta adresinizi doğrulamak için:",
+      verifyUrl,
+      "",
+      "Bu bağlantı 24 saat boyunca geçerlidir ve yalnızca bir kez kullanılabilir.",
+      "Bu hesabı siz oluşturmadıysanız bu e-postayı yok sayabilirsiniz.",
+    ].join("\n"),
+    html: htmlDocument("E-posta doğrulama", paragraphs, "E-postamı doğrula", verifyUrl),
+  };
+}

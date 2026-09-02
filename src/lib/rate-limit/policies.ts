@@ -51,6 +51,15 @@ export const RATE_LIMIT_POLICIES = {
   // fazlasıyla karşılar; kimse 15 dakikada beşten fazla kez tüm cihazlarından çıkmaz.
   REVOKE_SESSIONS: { limit: 5, windowMs: 15 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
+  // VERIFY_EMAIL 10/15dk (Issue #190): token 256 bit olduğu için brute-force birincil tehdit
+  // DEĞİLDİR; amaç, kimlik istemeyen ve her çağrıda DB'ye yazan bu endpoint'in sınırsız
+  // çağrılmasını engellemektir (RESET_PASSWORD ile aynı gerekçe ve aynı değerler).
+  VERIFY_EMAIL: { limit: 10, windowMs: 15 * MINUTES },
+  // RESEND_VERIFICATION 3/15dk: her çağrı bir e-posta GÖNDERİR (gerçek sağlayıcıda
+  // maliyetli) ve aynı adrese tekrar tekrar mesaj göndermek hedef kullanıcı açısından
+  // tacize dönüşebilir. FORGOT_PASSWORD'dan (5) daha dar: doğrulama linki 24 saat yaşıyor,
+  // tekrar isteme ihtiyacı çok daha nadir.
+  RESEND_VERIFICATION: { limit: 3, windowMs: 15 * MINUTES },
 } as const satisfies Record<string, RateLimitPolicy>;
 
 /**
@@ -66,4 +75,6 @@ export const RATE_LIMIT_BUCKETS = {
   CHANGE_PASSWORD: "auth:change-password",
   REVOKE_SESSIONS: "auth:revoke-sessions",
   TENANT_CREATE: "tenant:create",
+  VERIFY_EMAIL: "auth:verify-email",
+  RESEND_VERIFICATION: "auth:resend-verification",
 } as const;

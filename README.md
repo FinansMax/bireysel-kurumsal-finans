@@ -109,7 +109,69 @@ npm run test:e2e          # Playwright E2E (gerçek Chromium)
 
 ## Health Check
 
-Uygulama ayaktayken `GET /api/health` endpoint'i `{ "status": "ok" }` döner.
+İki ayrı endpoint vardır ve bu ayrım bilinçlidir (Issue #184): **liveness** ("süreç ayakta mı")
+ile **readiness** ("istek karşılayabilir mi") farklı sorulardır.
+
+| Endpoint | Ne sorar | Kim kullanır |
+| --- | --- | --- |
+| `GET /api/health` | Süreç ayakta mı? | Load balancer / restart politikası |
+| `GET /api/health/ready` | DB erişilebilir ve migration'lar uygulanmış mı? | Uptime izleme, trafik yönlendirme |
+
+`GET /api/health` sabit `{ status: "ok", timestamp }` döner ve **DB'ye bakmaz** — davranışı
+değişmedi.
+
+`GET /api/health/ready` sağlıklıysa `200`, değilse `503` döner:
+
+```json
+{ "status": "ok", "checks": { "database": "ok", "migrations": "ok" } }
+```
+
+### Neden gerekliydi
+
+Önceki tek endpoint sabit `{ status: "ok" }` dönüyordu: veritabanı düşmüş, migration
+uygulanmamış veya bağlantı havuzu tükenmiş olsa bile **yine "ok" diyordu**. Yani load balancer
+ve uptime izleme, gerçekte bozuk olan bir instance'a trafik göndermeye devam ediyordu.
+
+### Neyi kontrol eder
+
+- **Veritabanı:** `SELECT 1`. Ham SQL burada bilinçli bir istisnadır (`docs/conventions.md`):
+  yoklanan şey bir Prisma modeli değil, bağlantının kendisidir. Bir model üzerinden `count()`
+  yapmak reddedildi — o sorgu tabloya, index'e ve satır sayısına bağlıdır; ölçmek istediğimiz
+  ise yalnızca bağlantının canlılığı.
+- **Migration'lar:** iki ayrı arıza sınıfı. (1) yarım kalmış veya geri alınmış migration
+  (`finished_at IS NULL` ya da `rolled_back_at IS NOT NULL`) — şema belirsiz durumdadır;
+  (2) diskte olup DB'de kaydı olmayan migration — yani "yeni kod eski şemaya deploy edildi",
+  en sık görülen ve en sessiz bozulma biçimi.
+
+Migration dizini okunamıyorsa kontrol **başarısız** sayılır, "sorun yok" değil: bilmiyor olmak
+iyi haber değildir.
+
+### Kararlar
+
+**2 saniyelik zaman aşımı, fail-closed.** Askıda kalan bir health check hiç olmamasından
+kötüdür: bağlantı havuzu tükendiğinde `SELECT 1` dakikalarca bekleyebilir ve izleme sistemi
+instance'ı ne sağlıklı ne sağlıksız sayar — trafik akmaya devam eder. Süre dolarsa kontrol
+başarısızdır.
+
+**503, 500 değil.** 500 endpoint'in kendisinin bozuk olduğunu ima ederdi; izleme sistemi
+"uygulama bozuk" ile "health endpoint'i bozuk" durumlarını ayırt edemezdi.
+
+**Kimlik doğrulaması yok, bu yüzden yanıt bilinçli olarak fakir.** İzleme sistemleri kimlik
+taşıyamaz; endpoint internete açık olabilir. Bu yüzden yanıtta bağlantı dizesi, host, sürüm,
+SQL veya stack trace **yoktur** — yalnızca kontrol adı ve `ok`/`fail` (invariant #7). Ayrıntı
+sunucu logunda kalır. Regresyon bariyeri: `security/health-security.spec.ts` yanıtın alan
+kümesini sabitler; yeni bir alan eklenirse kırmızıya döner.
+
+**Rate limit yok ve bu gerekçelidir** (invariant #9 gerekçe yazılmasını ister): endpoint state
+değiştirmez ve ucuzdur, yani #9'un hedeflediği "public veya pahalı state değiştiren" sınıfına
+girmez. Dahası limit koymak zararlı olurdu — sağlık kontrolü 429 alan bir load balancer,
+sağlıklı bir instance'ı ölü sayardı. Kötüye kullanım riski deployment tarafında (probe'u iç ağa
+kısıtlayarak) ele alınır.
+
+### Kapsam dışı
+
+Bağımlı dış servislerin (e-posta sağlayıcısı, paylaşılan rate-limit store'u) sağlığı bu
+kontrole **dahil değildir**; #180 ve #181 tamamlandıktan sonra ayrı bir issue ile eklenir.
 
 ## Authentication
 

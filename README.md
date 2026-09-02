@@ -2348,3 +2348,56 @@ kurumları) birlikte yazılacak ve #152'nin kendi kabul kriterini orada tamamlay
 
 Alternatif — guard'ı test etmek için sahte bir endpoint eklemek — üretim kodunda yalnızca test
 için var olan bir yüzey bırakırdı; reddedildi.
+
+## Modül yönetim ekranı (Issue #153)
+
+`/settings/modules` — OWNER'ın tenant'ında hangi modüllerin açık olduğunu görüp değiştirdiği
+ekran. Menüde "Yönetim" grubunda, **yalnızca yetkisi olana** görünen bir "Modüller" öğesi var.
+
+### Açma onay istemez, kapatma ister
+
+Asimetri bilinçli: **açmak geri alınabilir** ve bir şey kaybettirmez; **kapatmak** bir ekibin
+çalıştığı yüzeyi ortadan kaldırır. Onay metni, kullanıcının en çok korktuğu soruyu önceden
+yanıtlar: *"Modül kapatıldığında verileriniz silinmez; yalnızca erişim kapanır."*
+
+Onay iki adımlıdır, `window.confirm()` **değil** (`delete-with-confirm.tsx` ile aynı duruş):
+tarayıcı diyaloğu stillenemez, ekran okuyucuda bağlam taşımaz ve sonucu anlatacak yer bırakmaz.
+
+### Bağımlılık hatası ENGELİN ADIYLA gösterilir
+
+Backend'in İngilizce iç metni kullanıcıya **gösterilmez** (auth ekranlarındaki duruş). 409
+durumunda mesaj engeli adıyla yazar — *"Bu modülü açmak için önce şunları açın: CRM & Süreç
+Takibi."* Bunun için gereken etiketler **sunucudan prop olarak** gelir; istemci katalogdan bilgi
+türetmez.
+
+Kartlar bağımlılığı **kapalıyken de** gösterir ("Gerektirir: …", "Şunlar buna bağlı: …"):
+kullanıcı "Aç"a basmadan önce neyin gerektiğini bilmeli, 409'u deneyerek öğrenmemeli.
+
+`503` de ayrı ele alınır ("Şu anda yoğunluk var, birkaç saniye sonra tekrar deneyin") — geçici
+bir yazma çakışmasıdır (`runSerializable`), iş kuralı ihlali değil.
+
+### Yetki üç katmanda
+
+1. **Menü**: link yalnızca `MANAGE_MODULES` olana gösterilir — ADMIN/MEMBER'ı kesin bir
+   yönlendirmeye davet etmemek için (`EmptyState`in "yetkisi olmayana eylem gösterme" kuralı).
+2. **Sayfa**: izni olmayan `/dashboard`'a yönlendirilir.
+3. **API**: `PATCH .../modules/:moduleKey` zaten `requirePermission(MANAGE_MODULES)` ile korunur.
+
+İlk ikisi **UX kararıdır** (invariant #3); asıl koruma üçüncüsüdür ve E2E bunu ayrıca doğrular —
+ADMIN'in elle yaptığı `PATCH` **403** alır.
+
+### Neden `/settings/modules`, menüde ayrı bir öğe
+
+"Ayarlar" öğesi tenant ayarları ekranının (#86) placeholder'ı olarak duruyor; modülleri oraya
+bağlamak, henüz yazılmamış bir ekranın yerini işgal etmek olurdu. "Modüller" öğesi o
+placeholder'ın **önüne** eklenir: gerçek bir ekranı olan öğe, olmayanın üstünde durmalı.
+
+### Bilinen sınır: e2e'nin "menüde görün" yarısı #160'a kaldı
+
+#153'ün kabul kriteri *"modül aç → menüde görün → kapat → menüden kaybol"* diyor. Menü tarafı
+bugün **doğrulanamaz**: katalogdaki modüllerin `nav` listeleri hâlâ boş (ekranlar #160+ ile
+gelecek), dolayısıyla açık bir modül menüye hiçbir link eklemiyor. Mekanizmanın kendisi #152'de
+saf fonksiyon olarak test edildi; ekran gelince e2e'nin bu yarısı da yazılacak.
+
+E2E bugün şunu doğruluyor: aç/kapat, onay metni, vazgeçme, iki yönlü bağımlılık hatası (adıyla),
+ADMIN'in sayfaya erişememesi + linki görmemesi + API'den 403 alması, ve OWNER kontrol grubu.

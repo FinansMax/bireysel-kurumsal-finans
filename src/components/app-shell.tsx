@@ -21,6 +21,7 @@ export function AppShell({
   tenants,
   activeTenantId,
   moduleLinks,
+  canManageModules,
   children,
 }: {
   userEmail: string;
@@ -28,6 +29,8 @@ export function AppShell({
   activeTenantId: string | null;
   /** Açık modüllerin menü linkleri (#152); sunucuda hesaplanır, kabuk yalnızca taşır. */
   moduleLinks: readonly ModuleNavLink[];
+  /** `MANAGE_MODULES` izni (#153) — modül yönetimi linkini göstermek için. */
+  canManageModules: boolean;
   children: ReactNode;
 }) {
   return (
@@ -37,6 +40,7 @@ export function AppShell({
         tenants={tenants}
         activeTenantId={activeTenantId}
         moduleLinks={moduleLinks}
+        canManageModules={canManageModules}
       />
 
       {/*

@@ -52,6 +52,9 @@ cp .env.example .env
 | `DATABASE_URL` | Her ortamda | PostgreSQL bağlantı adresi (Prisma). |
 | `AUTH_SECRET` | Her ortamda | JWT session token'larını imzalar/şifreler. `npx auth secret` ile üretilir. |
 | `APP_BASE_URL` | **Production'da** | Uygulamanın dışarıya görünen kök adresi. |
+| `EMAIL_PROVIDER` | **Production'da** | `console` \| `resend`. Production'da `console` olamaz. |
+| `EMAIL_API_KEY` | `resend` ise | Sağlayıcı API anahtarı. **Secret** — loglanmaz, `NEXT_PUBLIC_` olamaz. |
+| `EMAIL_FROM` | `resend` ise | Gönderen adresi, ör. `FinansMax <no-reply@example.com>`. |
 | `POSTGRES_*` | Lokal | Yalnızca `docker-compose.yml`'in lokal PostgreSQL container'ını kurmak için. |
 
 **`APP_BASE_URL` neden production'da zorunlu:** Şifre sıfırlama ve tenant daveti
@@ -2401,3 +2404,79 @@ saf fonksiyon olarak test edildi; ekran gelince e2e'nin bu yarısı da yazılaca
 
 E2E bugün şunu doğruluyor: aç/kapat, onay metni, vazgeçme, iki yönlü bağımlılık hatası (adıyla),
 ADMIN'in sayfaya erişememesi + linki görmemesi + API'den 403 alması, ve OWNER kontrol grubu.
+
+## E-posta sağlayıcısı (Issue #180)
+
+Şifre sıfırlama ve tenant daveti akışları, bu issue'ya kadar production'da **gerçekten
+çalışmıyordu**: `consoleEmailSender` yalnızca alıcıyı logluyordu. Kullanıcı "e-postanı kontrol
+et" mesajını görüyor, hiçbir şey gelmiyordu. Bu, ürünü tek başına satılamaz kılan boşluktu.
+
+### Sağlayıcı kararı: Resend, HTTP API üzerinden, SDK'sız
+
+**Seçilen:** [Resend](https://resend.com) — HTTP API, SMTP credential gerektirmez, ücretsiz
+katmanı geliştirme için yeterli.
+
+**SDK (`resend` npm paketi) REDDEDİLDİ.** Paketin bu kullanım için yaptığı tek şey tek bir
+POST isteğini sarmalamak. Bu repo şifre hash'i için `bcrypt` yerine Node `crypto`, doğrulama
+için `zod` yerine elle yazılmış saf fonksiyonlar kullanıyor (`docs/conventions.md` →
+"Bağımlılıklar"); on beş satırlık bir `fetch` çağrısı için bağımlılık eklemek bu duruşla
+çelişirdi. **Bu PR hiçbir npm bağımlılığı eklemez.**
+
+**SMTP + `nodemailer` REDDEDİLDİ.** Bir kütüphane ve credential yönetimi gerektirir; ayrıca
+serverless/PaaS ortamlarında giden 587/465 portu sık sık kapalıdır. HTTP API her yerde çalışır.
+
+**AWS SES DEĞERLENDİRİLDİ.** Ölçekte daha ucuz, ama kurulumu (IAM, domain doğrulama, sandbox'tan
+çıkma talebi) ilk müşteriye giden yolu uzatıyor. `EmailSender` arayüzü zaten yerinde olduğu
+için SES'e geçmek yeni bir dosya ve bir `EMAIL_PROVIDER` değeri eklemekten ibarettir.
+
+### Yanlış yapılandırma production'da GÜRÜLTÜLÜ başarısız olur
+
+`APP_BASE_URL` ile **birebir aynı** karar ve aynı gerekçe: production'da `EMAIL_PROVIDER`
+eksikse veya `console` ise uygulama bilerek hata verir (`src/lib/config/email.ts`). Sessizce
+`console`'a düşmek, "e-posta gönderdim" diyen ama göndermeyen bir sistem üretir ve bu **fark
+edilmez**. Aynı sertlik tanınmayan sağlayıcı adları için de geçerlidir: `EMAIL_PROVIDER=resned`
+her ortamda hata verir, çünkü yazım hatası olan bir production yapılandırmasının sessizce
+çalışıyor görünmesi tam olarak engellenmek istenen şeydir.
+
+### Çağrı sırası bir güvenlik gerekliliğidir
+
+`getEmailSender()` de `getAppBaseUrl()` gibi **her DB erişiminden önce** çözülür. Kullanıcı
+okunduktan sonra çağrılsaydı, yanlış yapılandırılmış bir production'da "kayıtlı e-posta → 500,
+kayıtsız e-posta → 200" farkı oluşur ve Issue #7'de kapatılan user-enumeration oracle'ı geri
+gelirdi. İkisinin **birbirine göre** sırası da sabittir (önce `APP_BASE_URL`, sonra sağlayıcı):
+güvenlik açısından fark yok, ama hangi hatanın çıkacağı belirlenimli olsun diye. Regresyon
+testi: `integration/email-config.spec.ts`.
+
+### Gönderim best-effort'tur, akışı düşürmez
+
+`sendViaResend()` **throw etmez**, `boolean` döner. Sağlayıcı hata verse bile
+`forgot-password` aynı 200'ü ve aynı genel mesajı döndürmeye devam eder — aksi halde
+enumeration koruması (invariant #7) sağlayıcının durumuna bağlı hale gelirdi. Hata yalnızca
+sunucuda loglanır. Kuyruk/retry **kurulmadı** (issue "Scope Dışı"); gönderim tek denemeliktir
+ve 10 saniyelik bir zaman aşımı vardır, çünkü bu çağrı kullanıcının beklediği bir isteğin
+ortasında yapılır.
+
+### Raw token log kuralı gerçek sağlayıcıda DAHA katı
+
+`consoleEmailSender` production dışında `resetUrl`'i logluyor — testlerin token'ı outbox'tan
+okuyabilmesi için. `resendEmailSender` bunu **hiçbir ortamda** yapmaz: gerçek sağlayıcı
+seçildiğinde token'ı loga yazmanın meşru bir gerekçesi kalmaz. Hata logları da sağlayıcının
+yanıt gövdesini okumaz — sağlayıcılar hata gövdesinde isteğin bir kısmını yankılayabilir ve bu,
+raw token taşıyan linki loga taşıyabilirdi. Regresyon testi:
+`integration/email-sender-logging.spec.ts`.
+
+### Test davranışı korundu
+
+`.test-outbox` / `.test-outbox-invitations` dosya tabanlı akışı **değişmedi** ve yalnızca
+`NODE_ENV !== "production"` içindir. Testler `EMAIL_PROVIDER=console` ile çalışır; gerçek
+sağlayıcı CI'da hiç çağrılmaz. `resendEmailSender`'ı test eden yerlerde `fetch` stub'lanır —
+stub'lanan şey bir güvenlik mekanizması değil, üçüncü taraf bir HTTP sınırıdır.
+
+### Kalan riskler ve kapsam dışı
+
+- **Manuel doğrulama gerekir:** gerçek bir Resend anahtarıyla uçtan uca teslim, bu PR'da
+  otomatik test edilemez (ücretli/ağa bağımlı). PR açıklamasında belirtilir.
+- **SPF/DKIM/DMARC ve özel alan adı** bir deployment adımıdır, kod değişikliği değil — #90'a
+  aittir.
+- **Bounce/complaint yönetimi, gönderim istatistikleri, e-posta kuyruğu** kapsam dışıdır.
+- **Bildirim e-postaları** Epic 9'un (#74), **e-posta doğrulama akışı** #190'ın konusudur.

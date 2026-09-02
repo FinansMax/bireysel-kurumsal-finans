@@ -495,3 +495,64 @@ test.describe("Rate limiting — change-password", () => {
     expect(responseB.status()).toBe(401); // rate limit DEĞİL, normal "authentication yok"
   });
 });
+
+/**
+ * Issue #182 — sahte/bozuk `x-forwarded-for` sınırsız bucket üretemez.
+ *
+ * NEDEN BU TESTLER VAR: `getClientIp()` eskiden header'ın ilk segmentini OPAK bir string olarak
+ * kabul ediyordu. Yani `x-forwarded-for: aaaa1`, `aaaa2`, ... gönderen bir istemci her istekte
+ * YENİ bir bucket'a düşüyor ve rate limit'i tamamen etkisiz kılıyordu — üstelik önünde
+ * güvenilir bir proxy olsa bile, çünkü çoğu proxy istemcinin gönderdiği değere kendi
+ * segmentini EKLER, onu silmez. Biçim doğrulaması bu sonsuz bucket üretimini kırar: geçersiz
+ * her değer paylaşılan `unknown` bucket'ına çöker.
+ *
+ * Bu iki test, `forgot-password` bucket'ını kullanır (`signup`'ın `unknown` bucket'ı yukarıdaki
+ * "x-forwarded-for eksikse..." testine ait; aynı bucket'ı iki test paylaşırsa sıraya bağımlı
+ * hale gelirler).
+ */
+test.describe("Rate limiting — geçersiz x-forwarded-for (Issue #182)", () => {
+  test("her istekte FARKLI ve geçersiz bir IP göndermek limiti bypass ETMEZ", async ({ request }) => {
+    const statuses: number[] = [];
+
+    // Her istek benzersiz ve GEÇERSİZ bir "IP" gönderir. Düzeltme öncesi bunların her biri
+    // kendi bucket'ını alırdı ve hiçbir zaman 429 görülmezdi.
+    for (let i = 0; i < RATE_LIMIT_POLICIES.FORGOT_PASSWORD.limit + 1; i++) {
+      const response = await forgotPasswordWithIp(
+        request,
+        `rl-badip-${randomUUID()}@example.com`,
+        `not-an-ip-${randomUUID()}`,
+      );
+      statuses.push(response.status());
+    }
+
+    // Bucket başlangıçta boş olsa bile limit + 1 deneme mutlaka bir 429 üretir.
+    expect(statuses).toContain(429);
+
+    // Bloklandıktan sonra yeni bir uydurma IP ile tekrar geçilemez (bypass yok).
+    const firstBlockedIndex = statuses.indexOf(429);
+    expect(statuses.slice(firstBlockedIndex).every((status) => status === 429)).toBe(true);
+  });
+
+  test("KONTROL GRUBU: aynı sayıda istek GEÇERLİ ve benzersiz IP'lerle 429 üretmez", async ({
+    request,
+  }) => {
+    /**
+     * Bu test olmadan yukarıdaki iddia değersiz olurdu: 429'lar "geçersiz IP'ler aynı bucket'ı
+     * paylaşıyor"dan değil, sadece "çok fazla istek attık"tan da kaynaklanabilirdi. Burada
+     * istek SAYISI aynı, tek fark IP'lerin geçerli olması — ve 429 GÖRÜLMEMESİ gerekir.
+     */
+    const statuses: number[] = [];
+
+    for (let i = 0; i < RATE_LIMIT_POLICIES.FORGOT_PASSWORD.limit + 1; i++) {
+      const response = await forgotPasswordWithIp(
+        request,
+        `rl-goodip-${randomUUID()}@example.com`,
+        uniqueTestClientIp(),
+      );
+      statuses.push(response.status());
+    }
+
+    expect(statuses).not.toContain(429);
+    expect(statuses.every((status) => status === 200)).toBe(true);
+  });
+});

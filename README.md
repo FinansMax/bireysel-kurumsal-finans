@@ -3002,3 +3002,60 @@ uzanıyor).
 3. Bu üç advisory'yi gerekçesiyle allowlist'e almak.
 
 Karar verilene kadar job **eklenmedi**; eklemek, CI'ı yeşil tutma kuralını ihlal ederdi.
+
+## Modül seed mekanizması (Issue #154)
+
+Bir modül bir tenant'ta **ilk kez** açıldığında, kullanılabilir olması için gereken varsayılan
+verinin kurulması. Kapatıp tekrar açmak veri **kopyalamamalıdır**.
+
+### Seed, modülü açan transaction'ın İÇİNDE çalışır
+
+`ModuleSeed` imzası `prisma` değil **`tx`** alır. Ayrı bir bağlantıda çalıştırmak, seed başarılı
+olup modülün açılmaması (ya da tersi) durumunu mümkün kılardı — ikisi **tek bir atomik
+karardır**.
+
+`seededAt` **aynı yazmada** doldurulur. Ayrı bir yazmada doldurmak, arada düşen bir istekte
+**çift seed** üretirdi.
+
+### Eşzamanlılık
+
+Tüm işlem zaten `runSerializable()` içinde (bağımlılık kuralı nedeniyle, #151). `seededAt`
+okuması ve seed yazması aynı serializable transaction'da olduğu için, eşzamanlı iki "aç"
+isteğinden biri serialization hatası alıp yeniden dener ve ikinci denemede `seededAt` dolu
+bulur. `integration/module-seed.spec.ts` bunu kanıtlıyor.
+
+**İkinci savunma katmanı:** seed fonksiyonları kendi başlarına da idempotent yazılır — unique
+constraint'lere dayanır, "önce say sonra ekle" **yapmaz**.
+
+### Seed başarısız olursa
+
+Transaction **rollback** olur: modül açılmaz, yarım veri kalmaz. Servis `503` döner — **500
+değil** (kullanıcı bir sunucu çökmesi değil, tamamlanmamış bir işlem görmeli; durum tutarlı
+olduğu için tekrar denemek mantıklı) ve **409 değil** (bu bir iş kuralı ihlali değil, kurulum
+hatası).
+
+**Bilinen sınır:** kalıcı olarak başarısız olan bir seed her denemede aynı `503`'ü döndürür;
+gerçek neden yalnızca sunucu logundadır.
+
+### Kapatma seed'i geri almaz
+
+`seededAt` bir kez dolduktan sonra hiç temizlenmez ve kapatma veri silmez.
+
+### Bugün hiçbir modülde seed TANIMLI DEĞİL
+
+Mekanizma hazır, ama kurulacak veri henüz yok: CRM'in aşama şablonu kendi modellerini bekliyor
+(#157), tahsilatın varsayılanı yok. Uydurma bir seed yazmak, var olmayan tablolara referans
+veren ve derlenmeyen bir katalog üretirdi — `permissions` ve `nav` alanlarının başlangıçta boş
+bırakılmasıyla aynı gerekçe.
+
+Bu yüzden `setModuleEnabled()` bir `seeds` **enjeksiyon seam'i** taşır: mekanizmayı gerçek bir
+domain seed'i olmadan test edebilmek için. Katalogu test içinde mutasyona uğratmak reddedildi —
+paylaşılan global durumu değiştirir ve testler arası sızıntı üretirdi. Bu bir **bypass
+değildir**: seed'i atlamaz, yalnızca kaynağını değiştirir; `seededAt` mantığı, transaction
+sınırı ve rollback davranışı aynen çalışır (`emailSender` ve `probeDatabase` seam'leriyle aynı
+desen).
+
+### Kapsam dışı
+
+- Var olan tenant'lara toplu seed basan CLI/migration script'i.
+- Seed'in kullanıcı tarafından "sıfırla" ile yeniden çalıştırılması.

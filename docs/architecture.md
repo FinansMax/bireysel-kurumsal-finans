@@ -43,6 +43,7 @@ kaldırmadan doğrudan çağrılabilir.
 | `src/lib/finance/` | Finansal modeller (`Account`, `Category`, sonraki issue'larda `Transaction`, ...) |
 | `src/lib/db/` | Veritabanı seviyesi yardımcılar — `runSerializable()` (Serializable + retry) |
 | `src/lib/audit/` | Audit action sabitleri, sanitization, `writeAuditLog()` |
+| `src/lib/email/` | E-posta transport'u (Resend HTTP API) ve şablonlar; `EmailSender`/`InvitationSender` arayüzleri kendi domain'lerinde kalır |
 | `src/lib/rate-limit/` | `RateLimiter` interface'i, in-memory limiter, policy kataloğu, guard |
 | `src/lib/prisma.ts` | PrismaClient singleton (dev'de hot-reload güvenli) |
 | `prisma/schema.prisma` | Veri modeli; `prisma/migrations/` versiyonlu şema geçmişi |

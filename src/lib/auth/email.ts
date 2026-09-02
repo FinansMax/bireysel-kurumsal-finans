@@ -1,15 +1,19 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+import { EMAIL_PROVIDERS, resolveEmailConfig } from "@/lib/config/email";
+import { sendViaResend } from "@/lib/email/resend";
+import { passwordResetEmail } from "@/lib/email/templates";
+
 export type PasswordResetEmailPayload = {
   to: string;
   resetUrl: string;
 };
 
 /**
- * Gerçek bir e-posta sağlayıcısı entegrasyonu Issue #7'nin kapsamı dışındadır. Bu interface,
- * ileride gerçek bir sağlayıcının (ör. SMTP/SES) mevcut şifre sıfırlama mantığına dokunmadan
- * takılabilmesi için minimum bir abstraction sağlar.
+ * Gerçek bir e-posta sağlayıcısı entegrasyonu Issue #7'nin kapsamı dışındaydı; Issue #180 ile
+ * `resendEmailSender` eklendi. Bu interface DEĞİŞMEDİ — zaten tam bu iş için tasarlanmıştı ve
+ * çağıran taraf (`requestPasswordReset`) hangi sağlayıcının kullanıldığını bilmez.
  */
 export interface EmailSender {
   sendPasswordResetEmail(payload: PasswordResetEmailPayload): Promise<void>;
@@ -54,3 +58,36 @@ export const consoleEmailSender: EmailSender = {
     }
   },
 };
+
+/**
+ * Gerçek gönderim yapan implementasyon (Issue #180).
+ *
+ * `consoleEmailSender`'daki raw-token log kuralı BURADA DA GEÇERLİDİR ve aslında daha katıdır:
+ * `resetUrl` hiçbir ortamda loglanmaz. Dev'de token'a ihtiyaç duyan testler zaten `console`
+ * sağlayıcısıyla (ve dosya tabanlı outbox ile) çalışır; gerçek sağlayıcı seçildiğinde token'ı
+ * loga yazmanın hiçbir meşru gerekçesi kalmaz.
+ *
+ * Gönderim başarısız olursa THROW ETMEZ: `sendViaResend()` `false` döner, biz de akışı
+ * bozmadan devam ederiz. Nedeni `resend.ts`'te yazılı — `forgot-password` kayıtlı/kayıtsız
+ * e-posta için aynı yanıtı dönmek zorundadır (invariant #7).
+ */
+export const resendEmailSender: EmailSender = {
+  async sendPasswordResetEmail({ to, resetUrl }) {
+    const sent = await sendViaResend(passwordResetEmail(to, resetUrl));
+    console.log(`[email:password-reset] to=${to} provider=resend delivered=${sent}`);
+  },
+};
+
+/**
+ * Yapılandırmaya göre kullanılacak sender'ı seçer (Issue #180).
+ *
+ * ÇAĞRI SIRASI KRİTİK: bu fonksiyon yanlış yapılandırılmış production'da THROW EDER
+ * (bkz. `src/lib/config/email.ts`). Bu yüzden e-posta gönderen akışlarda her DB erişiminden
+ * ÖNCE çağrılmalıdır — aksi halde "kayıtlı e-posta → 500, kayıtsız → 200" farkı oluşur ve
+ * Issue #7'de kapatılan user-enumeration oracle'ı geri gelir. `requestPasswordReset()` bu
+ * çağrıyı ilk satırında yapar; regresyon testi `integration/email-config.spec.ts`.
+ */
+export function getEmailSender(): EmailSender {
+  const config = resolveEmailConfig();
+  return config.provider === EMAIL_PROVIDERS.RESEND ? resendEmailSender : consoleEmailSender;
+}

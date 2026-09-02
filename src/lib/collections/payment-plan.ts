@@ -89,7 +89,11 @@ export type CollectionServiceResult<T> =
  */
 function addMonths(date: Date, months: number): Date {
   const d = new Date(date);
+  const day = d.getDate();
+  d.setDate(1);
   d.setMonth(d.getMonth() + months);
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDay));
   return d;
 }
 
@@ -371,26 +375,51 @@ export async function updateInstallment(
     notes?: string | null;
   }
 ): Promise<CollectionServiceResult<PaymentInstallmentRecord>> {
-  const updateData: Prisma.PaymentInstallmentUpdateInput = {};
+  try {
+    const result = await runSerializable(async (tx) => {
+      const installment = await tx.paymentInstallment.findFirst({
+        where: tenantScoped(tenantId, { id: installmentId }),
+        select: { status: true, paidAmount: true },
+      });
 
-  if (params.dueDate !== undefined) updateData.dueDate = params.dueDate;
-  if (params.amount !== undefined) updateData.amount = new Prisma.Decimal(params.amount);
-  if (params.method !== undefined) updateData.method = params.method;
-  if (params.notes !== undefined) updateData.notes = params.notes;
+      if (!installment) {
+        return { ok: false as const, status: 404 as const, error: "Taksit bulunamadı." };
+      }
+      if (installment.status === InstallmentStatus.PAID || installment.status === InstallmentStatus.CANCELLED) {
+        return { ok: false as const, status: 409 as const, error: "Bu durumdaki taksit düzenlenemez." };
+      }
 
-  const updateResult = await prisma.paymentInstallment.updateMany({
-    where: tenantScoped(tenantId, { id: installmentId }),
-    data: updateData,
-  });
+      const updateData: Prisma.PaymentInstallmentUpdateInput = {};
+      if (params.dueDate !== undefined) updateData.dueDate = params.dueDate;
+      if (params.amount !== undefined) {
+        const amount = new Prisma.Decimal(params.amount);
+        if (amount.lt(installment.paidAmount)) {
+          return { ok: false as const, status: 409 as const, error: "Taksit tutarı ödenen tutardan düşük olamaz." };
+        }
+        updateData.amount = amount;
+      }
+      if (params.method !== undefined) updateData.method = params.method;
+      if (params.notes !== undefined) updateData.notes = params.notes;
 
-  if (updateResult.count === 0) {
-    return { ok: false, status: 404, error: "Taksit bulunamadı." };
+      const updateResult = await tx.paymentInstallment.updateMany({
+        where: tenantScoped(tenantId, { id: installmentId }),
+        data: updateData,
+      });
+      if (updateResult.count !== 1) {
+        return { ok: false as const, status: 404 as const, error: "Taksit bulunamadı." };
+      }
+
+      const updated = await tx.paymentInstallment.findFirst({
+        where: tenantScoped(tenantId, { id: installmentId }),
+        select: PAYMENT_INSTALLMENT_SELECT,
+      });
+      return { ok: true as const, data: updated! };
+    });
+    return result;
+  } catch (error) {
+    if (error instanceof SerializationConflictError) {
+      return { ok: false, status: 503, error: "İşlem çakışması nedeniyle taksit güncellenemedi." };
+    }
+    throw error;
   }
-
-  const updated = await prisma.paymentInstallment.findFirst({
-    where: tenantScoped(tenantId, { id: installmentId }),
-    select: PAYMENT_INSTALLMENT_SELECT,
-  });
-
-  return { ok: true, data: updated! };
 }

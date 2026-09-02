@@ -8,22 +8,6 @@ CREATE TYPE "PaymentPlanStatus" AS ENUM ('ACTIVE', 'COMPLETED', 'CANCELLED');
 CREATE TYPE "InstallmentStatus" AS ENUM ('PENDING', 'PARTIAL', 'PAID', 'CANCELLED');
 
 -- CreateTable
-CREATE TABLE "TenantModule" (
-    "id" TEXT NOT NULL,
-    "moduleKey" TEXT NOT NULL,
-    "enabled" BOOLEAN NOT NULL DEFAULT true,
-    "settings" JSONB,
-    "seededAt" TIMESTAMP(3),
-    "enabledAt" TIMESTAMP(3),
-    "disabledAt" TIMESTAMP(3),
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-    "tenantId" TEXT NOT NULL,
-
-    CONSTRAINT "TenantModule_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
 CREATE TABLE "Deal" (
     "id" TEXT NOT NULL,
     "title" TEXT NOT NULL,
@@ -91,25 +75,52 @@ CREATE TABLE "Cheque" (
 );
 
 -- CreateIndex
-CREATE INDEX "TenantModule_tenantId_idx" ON "TenantModule"("tenantId");
-CREATE UNIQUE INDEX "TenantModule_tenantId_moduleKey_key" ON "TenantModule"("tenantId", "moduleKey");
 CREATE INDEX "Deal_tenantId_idx" ON "Deal"("tenantId");
+
+-- CreateIndex
 CREATE INDEX "PaymentPlan_tenantId_idx" ON "PaymentPlan"("tenantId");
+
+-- CreateIndex
 CREATE INDEX "PaymentPlan_dealId_idx" ON "PaymentPlan"("dealId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "PaymentInstallment_transactionId_key" ON "PaymentInstallment"("transactionId");
-CREATE UNIQUE INDEX "Cheque_installmentId_key" ON "Cheque"("installmentId");
+
+-- CreateIndex
 CREATE INDEX "PaymentInstallment_tenantId_dueDate_idx" ON "PaymentInstallment"("tenantId", "dueDate");
+
+-- CreateIndex
 CREATE INDEX "PaymentInstallment_tenantId_status_idx" ON "PaymentInstallment"("tenantId", "status");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "PaymentInstallment_planId_sequence_key" ON "PaymentInstallment"("planId", "sequence");
+
+-- CreateIndex
+CREATE INDEX "Cheque_installmentId_idx" ON "Cheque"("installmentId");
+
+-- CreateIndex
 CREATE INDEX "Cheque_tenantId_idx" ON "Cheque"("tenantId");
 
 -- AddForeignKey
-ALTER TABLE "TenantModule" ADD CONSTRAINT "TenantModule_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "Deal" ADD CONSTRAINT "Deal_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "PaymentPlan" ADD CONSTRAINT "PaymentPlan_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "PaymentPlan" ADD CONSTRAINT "PaymentPlan_dealId_fkey" FOREIGN KEY ("dealId") REFERENCES "Deal"("id") ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "PaymentInstallment" ADD CONSTRAINT "PaymentInstallment_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "PaymentInstallment" ADD CONSTRAINT "PaymentInstallment_planId_fkey" FOREIGN KEY ("planId") REFERENCES "PaymentPlan"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Cheque" ADD CONSTRAINT "Cheque_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Cheque" ADD CONSTRAINT "Cheque_planId_fkey" FOREIGN KEY ("planId") REFERENCES "PaymentPlan"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Cheque" ADD CONSTRAINT "Cheque_installmentId_fkey" FOREIGN KEY ("installmentId") REFERENCES "PaymentInstallment"("id") ON DELETE SET NULL ON UPDATE CASCADE;

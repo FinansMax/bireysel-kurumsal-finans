@@ -17,11 +17,11 @@ async function createTenant(label: string, crmEnabled = true) {
     data: {
       name: label,
       slug: `${label.toLowerCase()}-${randomUUID()}`,
-      tenantModules: {
+      modules: {
         createMany: {
           data: [
             { moduleKey: "crm", enabled: crmEnabled },
-            { moduleKey: "collections", enabled: true },
+            { moduleKey: "collections", enabled: crmEnabled },
           ],
         },
       },
@@ -142,6 +142,11 @@ test.describe("Tahsilat ve Ödeme Planı Güvenlik Testleri", () => {
     });
 
     expect(crossRes.status()).toBe(403);
+
+    const scopedRes = await request.get(`/api/tenants/${tenantB.id}/collections/plans/${planA.id}`, {
+      headers: { cookie: ownerB.cookie },
+    });
+    expect(scopedRes.status()).toBe(404);
   });
 
   test("crm modülü devre dışıyken collections endpoint'leri 404 döner", async ({ request }) => {

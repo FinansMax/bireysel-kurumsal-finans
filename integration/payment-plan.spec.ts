@@ -6,6 +6,7 @@ import {
   createPaymentPlan,
   cancelPaymentPlan,
   listInstallments,
+  updateInstallment,
 } from "../src/lib/collections/payment-plan";
 
 const createdTenantIds: string[] = [];
@@ -69,7 +70,7 @@ test.describe("PaymentPlan + PaymentInstallment İş Kuralları", () => {
       (acc, inst) => acc.add(inst.amount),
       new Prisma.Decimal(0)
     );
-    expect(sum.toString()).toBe("100.0000");
+    expect(sum.toFixed(4)).toBe("100.0000");
 
     // Son taksitin kuruş farkını aldığını doğrula
     expect(plan.installments.slice(0, 11).every((inst) => inst.amount.toString() === "8.3333")).toBe(true);
@@ -215,5 +216,70 @@ test.describe("PaymentPlan + PaymentInstallment İş Kuralları", () => {
       const match = overdueList.data.find((inst) => inst.planId === createdPlanId);
       expect(match).toBeDefined();
     }
+  });
+
+  test("taksit vadesi ay sonunda taşmadan hesaplanır", async () => {
+    const tenantId = await seedTenant();
+    const dealId = await seedDeal(tenantId);
+    const result = await createPaymentPlan(tenantId, {
+      dealId,
+      totalAmount: "200.00",
+      currency: "TRY",
+      method: PaymentMethod.CASH,
+      downPayment: "0.00",
+      installmentCount: 2,
+      firstDueDate: new Date("2026-01-31"),
+      intervalMonths: 1,
+      notes: null,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.installments[1].dueDate.toISOString().slice(0, 10)).toBe("2026-02-28");
+    }
+  });
+
+  test("ödenen tutarın altına veya terminal durumdaki taksite güncelleme yapılamaz", async () => {
+    const tenantId = await seedTenant();
+    const dealId = await seedDeal(tenantId);
+    const result = await createPaymentPlan(tenantId, {
+      dealId,
+      totalAmount: "200.00",
+      currency: "TRY",
+      method: PaymentMethod.CASH,
+      downPayment: "0.00",
+      installmentCount: 2,
+      firstDueDate: new Date("2026-10-01"),
+      intervalMonths: 1,
+      notes: null,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const installmentId = result.data.installments[0].id;
+    await prisma.paymentInstallment.updateMany({
+      where: { id: installmentId, tenantId },
+      data: { paidAmount: new Prisma.Decimal("60.00"), status: "PARTIAL" },
+    });
+
+    const belowPaid = await updateInstallment(tenantId, installmentId, { amount: "50.00" });
+    expect(belowPaid.ok).toBe(false);
+    if (!belowPaid.ok) expect(belowPaid.status).toBe(409);
+
+    await prisma.paymentInstallment.updateMany({
+      where: { id: installmentId, tenantId },
+      data: { status: "PAID" },
+    });
+    const paidUpdate = await updateInstallment(tenantId, installmentId, { notes: "değişmemeli" });
+    expect(paidUpdate.ok).toBe(false);
+    if (!paidUpdate.ok) expect(paidUpdate.status).toBe(409);
+
+    await prisma.paymentInstallment.updateMany({
+      where: { id: installmentId, tenantId },
+      data: { status: "CANCELLED" },
+    });
+    const cancelledUpdate = await updateInstallment(tenantId, installmentId, { notes: "değişmemeli" });
+    expect(cancelledUpdate.ok).toBe(false);
+    if (!cancelledUpdate.ok) expect(cancelledUpdate.status).toBe(409);
   });
 });

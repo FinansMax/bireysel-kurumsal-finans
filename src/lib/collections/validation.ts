@@ -62,14 +62,14 @@ export function validateCreatePaymentPlan(input: unknown): {
   }
 
   // currency
-  const currencyStr = String(raw.currency ?? "").trim().toUpperCase();
+  const currencyStr = typeof raw.currency === "string" ? raw.currency.trim().toUpperCase() : "";
   if (!/^[A-Z]{3}$/.test(currencyStr) || !ISO_4217_CODES.has(currencyStr)) {
     errors.push({ field: "currency", message: "Para birimi 3 harfli geçerli ISO 4217 kodu olmalıdır (ör. TRY, USD)." });
   }
 
   // method
   const validMethods = Object.values(PaymentMethod);
-  if (!raw.method || !validMethods.includes(raw.method as PaymentMethod)) {
+  if (typeof raw.method !== "string" || !validMethods.includes(raw.method as PaymentMethod)) {
     errors.push({ field: "method", message: "Geçersiz ödeme yöntemi seçildi." });
   }
 
@@ -82,7 +82,7 @@ export function validateCreatePaymentPlan(input: unknown): {
   }
 
   // installmentCount
-  const installmentCountNum = Number(raw.installmentCount);
+  const installmentCountNum = typeof raw.installmentCount === "number" ? raw.installmentCount : NaN;
   if (!Number.isInteger(installmentCountNum) || installmentCountNum < 1) {
     errors.push({ field: "installmentCount", message: "Taksit sayısı en az 1 olmalıdır." });
   } else if (totalAmount && downPayment) {
@@ -94,7 +94,7 @@ export function validateCreatePaymentPlan(input: unknown): {
   }
 
   // firstDueDate
-  const firstDueDateStr = String(raw.firstDueDate ?? "").trim();
+  const firstDueDateStr = typeof raw.firstDueDate === "string" ? raw.firstDueDate.trim() : "";
   const firstDueDateParsed = new Date(firstDueDateStr);
   if (!firstDueDateStr || isNaN(firstDueDateParsed.getTime())) {
     errors.push({ field: "firstDueDate", message: "İlk taksit vadesi geçerli bir tarih olmalıdır." });
@@ -103,7 +103,7 @@ export function validateCreatePaymentPlan(input: unknown): {
   // intervalMonths
   let intervalMonthsNum = 1;
   if (raw.intervalMonths !== undefined && raw.intervalMonths !== null) {
-    intervalMonthsNum = Number(raw.intervalMonths);
+    intervalMonthsNum = typeof raw.intervalMonths === "number" ? raw.intervalMonths : NaN;
     if (!Number.isInteger(intervalMonthsNum) || intervalMonthsNum < 1) {
       errors.push({ field: "intervalMonths", message: "Taksit aralığı en az 1 ay olmalıdır." });
     }
@@ -187,11 +187,15 @@ export function validateUpdateInstallment(input: unknown): {
   } = {};
 
   if (raw.dueDate !== undefined) {
-    const parsed = new Date(String(raw.dueDate));
-    if (isNaN(parsed.getTime())) {
+    if (typeof raw.dueDate !== "string") {
       errors.push({ field: "dueDate", message: "Geçersiz tarih formatı." });
     } else {
-      result.dueDate = parsed;
+      const parsed = new Date(raw.dueDate);
+      if (isNaN(parsed.getTime())) {
+        errors.push({ field: "dueDate", message: "Geçersiz tarih formatı." });
+      } else {
+        result.dueDate = parsed;
+      }
     }
   }
 
@@ -209,7 +213,7 @@ export function validateUpdateInstallment(input: unknown): {
       result.method = null;
     } else {
       const validMethods = Object.values(PaymentMethod);
-      if (!validMethods.includes(raw.method as PaymentMethod)) {
+      if (typeof raw.method !== "string" || !validMethods.includes(raw.method as PaymentMethod)) {
         errors.push({ field: "method", message: "Geçersiz ödeme yöntemi." });
       } else {
         result.method = raw.method as PaymentMethod;

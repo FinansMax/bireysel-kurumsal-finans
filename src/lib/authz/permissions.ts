@@ -45,6 +45,8 @@ export const PERMISSIONS = {
   // tahsilat ve ödeme planı (Issue #165). Okuma (OWNER/ADMIN/MEMBER), Yönetim (OWNER/ADMIN).
   VIEW_COLLECTIONS: "collections:view",
   MANAGE_COLLECTIONS: "collections:manage",
+  VIEW_MODULES: "modules:view",
+  MANAGE_MODULES: "modules:manage",
 } as const;
 
 /** Geçerli permission string literal'lerinin union tipi — rastgele string kabul edilmez. */
@@ -82,6 +84,8 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.MANAGE_DEBT_CREDITS,
     PERMISSIONS.VIEW_COLLECTIONS,
     PERMISSIONS.MANAGE_COLLECTIONS,
+    PERMISSIONS.VIEW_MODULES,
+    PERMISSIONS.MANAGE_MODULES,
   ],
   [MembershipRole.ADMIN]: [
     PERMISSIONS.VIEW_TENANT,
@@ -101,6 +105,7 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.MANAGE_DEBT_CREDITS,
     PERMISSIONS.VIEW_COLLECTIONS,
     PERMISSIONS.MANAGE_COLLECTIONS,
+    PERMISSIONS.VIEW_MODULES,
   ],
   // MEMBER hesapları GÖRÜR ama yönetemez (Issue #46): finansal kayıtları okumak ekibin
   // günlük işidir; hesap açmak/silmek ve bakiyeyi elle değiştirmek yönetim işidir.
@@ -112,6 +117,7 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.VIEW_TRANSACTIONS,
     PERMISSIONS.VIEW_DEBT_CREDITS,
     PERMISSIONS.VIEW_COLLECTIONS,
+    PERMISSIONS.VIEW_MODULES,
   ],
 };
 

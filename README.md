@@ -2480,3 +2480,80 @@ stub'lanan şey bir güvenlik mekanizması değil, üçüncü taraf bir HTTP sı
   aittir.
 - **Bounce/complaint yönetimi, gönderim istatistikleri, e-posta kuyruğu** kapsam dışıdır.
 - **Bildirim e-postaları** Epic 9'un (#74), **e-posta doğrulama akışı** #190'ın konusudur.
+
+## Tüm oturumları kapatma (Issue #186)
+
+Stateless JWT mimarisinde sign-out yalnızca istemcinin cookie'sini temizler — **çalınmış bir
+token 8 saat boyunca geçerli kalmaya devam eder**. Bu, "CSRF Duruşu" ve "Session Revocation"
+bölümlerinde kayda geçmiş bilinçli bir kabuldü, ama kullanıcının "şüpheli bir durum var, tüm
+oturumlarımı kapatayım" diyebileceği hiçbir yol yoktu. Finansal bir üründe kurumsal müşterinin
+soracağı ilk sorulardan biridir.
+
+Çözüm ucuzdu: revocation altyapısı (#26) **zaten vardı**; tek eksik, şifre değişimi dışında da
+tetiklenebilen bir zaman damgasıydı.
+
+### İki zaman damgası, tek eşik
+
+`User.sessionsRevokedAt` eklendi. `null` = hiç toplu iptal yapılmadı; mevcut kullanıcılar
+migration'dan **etkilenmez** (`credentialsChangedAt` ile aynı mantık).
+
+`isSessionRevoked()` artık ikisinin **en büyüğüne** bakar. Alanlar şemada **ayrı tutulur** ve bu
+bilinçlidir: şifre değişimi ile kullanıcının kendi iradesiyle yaptığı toplu iptal farklı
+olaylardır. Tek alana yazmak, "bu kullanıcının şifresi değişti mi" sorusunun cevabını bozardı —
+audit kaydı ve ileride eklenecek "şifreniz değişti" bildirimi bu ayrımı ister.
+
+`Math.max()` **kullanılmadı**: `Math.max(null, x)` `null`'ı `0`'a çevirir ve "hiç olmadı"yı
+"1970'te oldu" gibi davranarak sessizce yanlış sonuç üretebilirdi.
+
+**Hassasiyet kuralı aynen korundu.** `iat` saniye, zaman damgaları milisaniye; aynı saniyeye
+denk gelen token, yanlış pozitif revocation'ı önlemek için geçerli sayılmaya devam ediyor
+(`src/lib/auth/session-revocation.ts`'teki grace window). Yeni alan bu kuralı değiştirmez;
+`integration/revoke-sessions.spec.ts` bunu duyarlılık testiyle birlikte sabitler.
+
+**Ek DB maliyeti yok.** `jwt` callback'indeki sorgu zaten her istekte bu satırı okuyordu; yapılan
+şey `select`'e bir alan eklemek — #113'teki `name` ile aynı gerekçe.
+
+### Çağıranın kendi oturumu da düşer
+
+`POST /api/auth/revoke-sessions` gövdesizdir ve hedef **yalnızca** trusted session'dan gelir
+(invariant #2). Body'de `userId` göndermek etkisizdir — aksi halde bu endpoint "istediğim
+kullanıcıyı sistemden at" aracına dönüşürdü; `security/revoke-sessions-security.spec.ts` bunu
+açıkça test eder.
+
+Kullanıcı **kendi** oturumundan da düşer. Stateless JWT'de "bu isteği yapan token"ı ayrıcalıklı
+kılmanın yolu yoktur (bunu yapmak sunucu tarafında oturum kaydı tutmayı gerektirir — ayrı bir
+mimari karar, #186 "Scope Dışı"). `change-password` de aynı nedenle aynı şekilde davranır ve
+yanıt bunu kullanıcıya açıkça söyler; sessizce 401'e düşürmek, hatayı ürün hatası sanmasına yol
+açardı.
+
+### POST, GET değil
+
+State değiştiren işlem (invariant #4). Bir `GET` olsaydı `SameSite=Lax` top-level cross-site
+GET'leri engellemediği için herhangi bir sitedeki `<img src>` etiketi kullanıcıyı tüm
+cihazlarından atabilirdi.
+
+### Rate limit: 5/15dk
+
+Endpoint authenticated ve idempotent olmasına rağmen limit gerekir: çalınmış bir cookie ile
+tekrar tekrar çağrılırsa meşru kullanıcı sürekli dışarı atılır (kendine DoS). Kimse 15 dakikada
+beşten fazla kez tüm cihazlarından çıkmaz.
+
+### Ekran
+
+`/settings/security` — menüde "Güvenlik". Sayfa `requirePageUser()` ile korunur ve
+`resolveActiveTenantForUser()` **çağırmaz**: buradaki işlem kullanıcıya aittir, çalışma alanına
+değil. Hiçbir çalışma alanına üye olmayan bir kullanıcı da oturumlarını kapatabilmelidir — aksi
+halde en çok ihtiyaç duyulan düğme erişilemez bir ekranın arkasında kalırdı. Rol kontrolü de
+yoktur; MEMBER dahil herkes kendi oturumlarını kapatır.
+
+Onay iki adımlıdır (`window.confirm()` değil — `module-toggle.tsx` ile aynı duruş) ve onay metni
+kullanıcının kendi cihazından da düşeceğini **önceden** söyler. Başarıdan sonra
+`router.refresh()` değil **tam sayfa yönlendirme** yapılır: o noktada elimizdeki cookie artık
+geçersizdir, `refresh()` 401 alıp kullanıcıyı yarı bozuk bir ekranda bırakırdı.
+
+### Kapsam dışı
+
+- **Aktif oturumların listelenmesi** ("şu cihazlardan giriş yapıldı") sunucu tarafında oturum
+  kaydı tutmayı gerektirir ve mimariyi değiştirir. Ekranda bu sınır kullanıcıya açıkça yazılır;
+  var olmayan bir özelliği ima etmemek için.
+- **Yöneticinin başka bir kullanıcının oturumlarını düşürmesi** ayrı bir issue.

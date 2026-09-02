@@ -55,6 +55,10 @@ cp .env.example .env
 | `EMAIL_PROVIDER` | **Production'da** | `console` \| `resend`. Production'da `console` olamaz. |
 | `EMAIL_API_KEY` | `resend` ise | Sağlayıcı API anahtarı. **Secret** — loglanmaz, `NEXT_PUBLIC_` olamaz. |
 | `EMAIL_FROM` | `resend` ise | Gönderen adresi, ör. `FinansMax <no-reply@example.com>`. |
+| `TRUSTED_PROXY` | **Production'da** | `true` \| `false`. `x-forwarded-for` güvenilir mi? Sessiz varsayılan YOK (Issue #182). |
+| `RATE_LIMIT_STORE` | Hayır | `memory` (varsayılan) \| `redis`. Çok instance'lı deployment'ta `redis` gerekir (Issue #181). |
+| `UPSTASH_REDIS_REST_URL` | `redis` ise | Upstash REST adresi. Eksikse uygulama sessizce `memory`'ye DÜŞMEZ, hata verir. |
+| `UPSTASH_REDIS_REST_TOKEN` | `redis` ise | Upstash REST token'ı. **Secret** — loglanmaz, `NEXT_PUBLIC_` olamaz. |
 | `POSTGRES_*` | Lokal | Yalnızca `docker-compose.yml`'in lokal PostgreSQL container'ını kurmak için. |
 
 **`APP_BASE_URL` neden production'da zorunlu:** Şifre sıfırlama ve tenant daveti

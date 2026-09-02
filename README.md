@@ -2952,3 +2952,53 @@ kullanıcıyı tüm oturumlarından düşürmek (#26/#186) burada yanlış olurd
   bilerek değiştirmiyor.
 - Gerçek sağlayıcıyla uçtan uca teslim **manuel doğrulanmadı** — #180'in Resend anahtarı hâlâ
   bekliyor. `EMAIL_PROVIDER=console` ile tüm akış test edildi.
+
+## Bağımlılık güvenliği (Issue #189)
+
+### `next-auth` tam sürüme sabitlendi
+
+`^5.0.0-beta.32` → `5.0.0-beta.32`. Kütüphane **beta** sürümde ve `^` ile açık bırakılması, bir
+`npm install`'ın beta'nın yeni bir sürümünü çekip **auth davranışını sessizce değiştirmesi**
+anlamına geliyordu.
+
+Bu repo'nun session revocation duruşu Auth.js'in **iç davranışına** dayanıyor: `jwt`
+callback'inde `null` dönüldüğünde session action'ın token'ı yeniden imzalamak yerine cookie'yi
+temizlemesi (bkz. "Session Revocation"). Beta sürümler arasında bu değişebilir ve fark
+edilmeden revocation devre dışı kalabilirdi. Finansal bir üründe auth katmanının kontrolsüz
+güncellenmesi kabul edilebilir bir risk değil.
+
+**Kabul edilen kalan risk:** sabitleme, güvenlik yamalarını da otomatik almamak demektir.
+Bunun karşılığı Dependabot'un uyarı üretmesi ve güncellemenin **elle, testlerle** yapılmasıdır.
+
+### Dependabot
+
+`.github/dependabot.yml` — npm ve github-actions için haftalık. `next-auth`, `prisma` ve
+`@prisma/client` **otomatik PR dışında** bırakıldı: üçü de sessizce güncellenmesi kabul
+edilemeyecek katmanlar (auth davranışı, şema/migration uyumu).
+
+Açık PR sayısı 5 ile sınırlı — sınırsız bırakmak, incelenmeyen PR'ların birikip hepsinin
+görmezden gelinmesiyle sonuçlanır.
+
+### `npm audit` CI job'ı EKLENMEDİ — karar bekliyor
+
+Issue bir `npm audit --audit-level=high` job'ı istiyor. **Bugün eklenirse CI anında kırmızıya
+döner:** mevcut ağaçta üç yüksek seviye açık var.
+
+```
+@prisma/config  high
+deepmerge-ts    high   GHSA-ggr8-5vv4-36mx (stack exhaustion)
+prisma          high
+```
+
+`npm audit` bunlar için tek bir çözüm öneriyor: **`prisma@6.12.0`** — yani 6.19.3'ten
+**kırıcı bir düşürme** (`isSemVerMajor: true`). Ölçüldü: `--audit-level=high` exit **1**,
+`--audit-level=critical` exit **0**; `--omit=dev` de temiz **değil** (açık üretim ağacına
+uzanıyor).
+
+Üç seçenek var ve üçü de bir karar gerektiriyor:
+
+1. Prisma'yı 6.12.0'a düşürmek (şema/migration uyumu yeniden doğrulanmalı),
+2. Eşiği `critical`'a çekmek (issue'nun istediğinden zayıf),
+3. Bu üç advisory'yi gerekçesiyle allowlist'e almak.
+
+Karar verilene kadar job **eklenmedi**; eklemek, CI'ı yeşil tutma kuralını ihlal ederdi.

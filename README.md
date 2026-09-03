@@ -2886,3 +2886,69 @@ yüzünden veriye erişimin tamamen kaybolması kabul edilemez.
   alınmalıdır.
 - **Dashboard ve borç/alacak listelerindeki tarih gösterimi** hâlâ `toISOString().slice(0,10)`
   kullanıyor; aynı sebeple ayrı adıma bırakıldı.
+
+## E-posta doğrulama (Issue #190)
+
+`User.emailVerified` şemada vardı ama **hiçbir yerde yazılmıyor ve okunmuyordu**. Kullanıcı
+yanlış yazdığı bir e-postayla kayıt olabiliyordu; şifre sıfırlama akışı o hesaba sonsuza dek
+erişilemez hâle geliyor ve destek yükü doğuruyordu. Sahte hesap üretimi de serbestti.
+
+### Token deseni: `PasswordResetToken` ile birebir aynı
+
+`randomBytes(32)`, DB'de yalnız SHA-256 hash'i, `expiresAt`, tek kullanımlık, tüketim **tek
+atomik `updateMany`** ile (invariant #6). Yeni bir desen icat edilmedi.
+
+**Neden ayrı bir model** (`PasswordResetToken`'ı yeniden kullanmak yerine): iki akışın ömürleri
+ve iptal kuralları farklıdır — sıfırlama 30 dakika, doğrulama **24 saat**. Tek modele
+sıkıştırmak "bu token hangi akışa ait" ayrımını bir `type` kolonuyla çözmeyi ve **her sorguya o
+filtreyi eklemeyi** gerektirirdi; unutulduğu anda bir akışın token'ı diğerinde geçerli olurdu.
+
+**Neden 24 saat:** doğrulama linki kullanıcının o an online olmasını gerektirmez ve e-posta
+gecikmeleri saatler sürebilir. Aciliyet farkı da var — sızmış bir doğrulama token'ı en fazla
+"e-posta doğrulandı" der, **hesabı devralmaz**.
+
+### Doğrulanmamış hesap ne yapabilir?
+
+**Giriş yapabilir ve kendi profilini görebilir; ama çalışma alanı oluşturamaz ve davet kabul
+edemez** (403).
+
+Doğrulama, hesabın sahibine gerçekten ulaşılabildiğini kanıtlar; **para ve ekip verisi ancak o
+noktadan sonra** devreye girmelidir. Girişi tamamen engellemek **reddedildi**: e-posta
+gecikmesinde (spam kutusu, kurumsal gateway) kullanıcıyı hesabından kilitlerdi.
+
+Kontrol tek bir yerden okunur (`isEmailVerified()`) — iki ayrı yerde uygulandığı için
+kopyalanan bir kontrol, birinin unutulmasıyla sonuçlanırdı.
+
+### Enumeration duruşu korundu
+
+`resend-verification` **daima aynı yanıtı** döner: e-posta kayıtlı olsun olmasın, hesap
+doğrulanmış olsun olmasın. Aksi halde endpoint "şu e-posta kayıtlı mı" **ve** "doğrulanmış mı"
+sorularının ücretsiz bir oracle'ı olurdu. Token hatası da ayrıştırılmaz — bulunamadı / süresi
+doldu / zaten kullanıldı hepsi aynı `400` (invariant #7).
+
+### POST, GET değil
+
+`verify-email` bir `GET` olsaydı, **e-posta istemcisinin link ön-getirmesi** token'ı kullanıcı
+tıklamadan tüketebilirdi (invariant #4, `/reset-password` ile aynı gerekçe). Sayfa token'ı
+otomatik POST eder; `useRef` ile tek çağrı garantilenir çünkü React geliştirme modunda efektler
+iki kez çalışır ve token tek kullanımlıktır.
+
+### Gönderim best-effort
+
+Doğrulama e-postası gönderilemese de **kayıt başarılı sayılır** (201). Aksi halde sağlayıcı
+kesintisi, kullanıcının hiç hesap açamaması anlamına gelirdi; kullanıcı "tekrar gönder" ile
+ilerleyebilir.
+
+`credentialsChangedAt` **bumplanmaz**: e-posta doğrulamak bir credential değişikliği değildir ve
+kullanıcıyı tüm oturumlarından düşürmek (#26/#186) burada yanlış olurdu.
+
+### Kalan risk / kapsam dışı
+
+- **Arayüzde kalıcı uyarı şeridi yok.** Issue "doğrulanmamış kullanıcıya arayüzde kalıcı bir
+  uyarı şeridi ve tekrar gönder bağlantısı" istiyor; bu PR **API + doğrulama sayfasını**
+  getiriyor, kabuğa şerit eklemiyor. Kullanıcı bugün 403 mesajıyla karşılaşıyor ve mesaj ne
+  yapması gerektiğini söylüyor. Şerit ayrı bir adım.
+- **E-posta adresi değiştirme akışı** kapsam dışı (issue'da yazılı); `/api/users/me` e-postayı
+  bilerek değiştirmiyor.
+- Gerçek sağlayıcıyla uçtan uca teslim **manuel doğrulanmadı** — #180'in Resend anahtarı hâlâ
+  bekliyor. `EMAIL_PROVIDER=console` ile tüm akış test edildi.

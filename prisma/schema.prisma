@@ -54,6 +54,7 @@ model User {
 
   memberships         Membership[]
   passwordResetTokens PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
   sentInvitations     TenantInvitation[]   @relation("InvitationInviter")
   auditLogs           AuditLog[]
 }
@@ -349,6 +350,26 @@ model Membership {
   @@index([tenantId])
 }
 
+/// E-posta dogrulama token'i (Issue #190).
+///
+/// `PasswordResetToken` ile BIREBIR AYNI desen ve ayni gerekcelerle: raw token asla saklanmaz,
+/// yalnizca SHA-256 hash'i; `expiresAt` var; tek kullanimliktir ve tuketimi TEK atomik
+/// `updateMany` ile yapilir (invariant #6). Ayri bir model olmasinin nedeni, iki akisin
+/// omurlerinin ve iptal kurallarinin farkli olmasidir: sifre sifirlama 30 dakika ve her yeni
+/// talepte eskisini iptal ederken, dogrulama 24 saat yasar ve kullanici "tekrar gonder"
+/// dedikce yenilenir.
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  // null = henuz kullanilmadi. Dolu = tuketildi (veya yeni talep geldigi icin iptal edildi).
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
 model PasswordResetToken {
   id        String    @id @default(cuid())
   // Raw token asla saklanmaz; sadece SHA-256 hash'i saklanır (bkz. src/lib/auth/password-reset.ts).

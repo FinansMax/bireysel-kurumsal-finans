@@ -35,6 +35,8 @@ async function requestResetAndCaptureUrl(email: string): Promise<string> {
       async sendPasswordResetEmail({ resetUrl }) {
         capturedUrl = resetUrl;
       },
+      // Arayüz #190 ile genişledi; bu test doğrulama akışını ölçmüyor, no-op yeterli.
+      async sendEmailVerificationEmail() {},
     },
   });
   return capturedUrl;
@@ -49,7 +51,10 @@ function extractToken(resetUrl: string): string {
 // Integration testleri dosya sistemine (test outbox) dokunmadan hermetik kalsın diye,
 // gerçek e-posta içeriğini önemsemeyen çağrılarda varsayılan `consoleEmailSender` yerine
 // bu no-op sender kullanılır.
-const noOpEmailSender = { async sendPasswordResetEmail() {} };
+const noOpEmailSender = {
+  async sendPasswordResetEmail() {},
+  async sendEmailVerificationEmail() {},
+};
 
 test.describe("requestPasswordReset()", () => {
   test("kayıtlı e-posta için bir PasswordResetToken oluşturuluyor", async () => {

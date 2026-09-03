@@ -4,6 +4,7 @@ import { MembershipRole } from "@prisma/client";
 import { expect, test } from "@playwright/test";
 
 import { signInWithCredentials } from "../e2e/support/auth";
+import { markEmailVerified } from "../e2e/support/email-verification";
 import { uniqueTestClientIp } from "../e2e/support/rate-limit";
 import { prisma } from "../src/lib/prisma";
 
@@ -18,11 +19,17 @@ test.afterAll(async () => {
 });
 
 /** Her çağrı kendi sahte istemci IP'sini kullanır (bkz. `e2e/support/rate-limit.ts`, Issue #27). */
-function signUp(request: import("@playwright/test").APIRequestContext, email: string, password: string) {
-  return request.post("/api/auth/signup", {
+async function signUp(request: import("@playwright/test").APIRequestContext, email: string, password: string) {
+  const response = await request.post("/api/auth/signup", {
     data: { email, password },
     headers: { "x-forwarded-for": uniqueTestClientIp() },
   });
+
+  // #190: doğrulanmamış hesap çalışma alanı kuramaz. Bu spec'in konusu audit log;
+  // doğrulama onun ÖN KOŞULU (bkz. e2e/support/email-verification.ts).
+  await markEmailVerified(email);
+
+  return response;
 }
 
 async function createUserWithMembership(role: MembershipRole, tenantId: string, email?: string) {

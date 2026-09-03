@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { EMAIL_PROVIDERS, resolveEmailConfig } from "@/lib/config/email";
 import { sendViaResend } from "@/lib/email/resend";
-import { passwordResetEmail } from "@/lib/email/templates";
+import { emailVerificationEmail, passwordResetEmail } from "@/lib/email/templates";
 
 export type PasswordResetEmailPayload = {
   to: string;
@@ -15,11 +15,28 @@ export type PasswordResetEmailPayload = {
  * `resendEmailSender` eklendi. Bu interface DEĞİŞMEDİ — zaten tam bu iş için tasarlanmıştı ve
  * çağıran taraf (`requestPasswordReset`) hangi sağlayıcının kullanıldığını bilmez.
  */
+export type EmailVerificationEmailPayload = {
+  to: string;
+  verifyUrl: string;
+};
+
 export interface EmailSender {
   sendPasswordResetEmail(payload: PasswordResetEmailPayload): Promise<void>;
+  /** E-posta doğrulama (Issue #190). Aynı arayüzde durur: sağlayıcı seçimi tek yerde kalsın. */
+  sendEmailVerificationEmail(payload: EmailVerificationEmailPayload): Promise<void>;
 }
 
 const TEST_OUTBOX_DIR = path.join(process.cwd(), ".test-outbox");
+
+// Şifre sıfırlama outbox'ından AYRI dizin: aynı e-posta adresi aynı testte hem sıfırlama
+// hem doğrulama alabilir; ayrı namespace ikisinin birbirinin dosyasını ezmesini engeller
+// (davet outbox'ındaki aynı gerekçe).
+const VERIFICATION_OUTBOX_DIR = path.join(process.cwd(), ".test-outbox-verifications");
+
+function verificationOutboxFilePath(email: string): string {
+  const safeName = Buffer.from(email.toLowerCase()).toString("hex");
+  return path.join(VERIFICATION_OUTBOX_DIR, `${safeName}.json`);
+}
 
 function outboxFilePath(email: string): string {
   // E-posta adresini dosya sistemi için güvenli, çakışmasız bir dosya adına çevirir.
@@ -35,6 +52,27 @@ function outboxFilePath(email: string): string {
  * bir sağlayıcı entegre edilirken kaldırılmalıdır.
  */
 export const consoleEmailSender: EmailSender = {
+  // Doğrulama e-postası şifre sıfırlamayla AYNI kuralları izler: raw token production
+  // loglarına yazılmaz; dev/test'te outbox dosyasına yazılır ki e2e/security testleri linki
+  // deterministik okuyabilsin.
+  async sendEmailVerificationEmail({ to, verifyUrl }) {
+    if (process.env.NODE_ENV === "production") {
+      console.log(`[email:verify-email] to=${to}`);
+      return;
+    }
+
+    console.log(`[email:verify-email] to=${to} verifyUrl=${verifyUrl}`);
+
+    try {
+      mkdirSync(VERIFICATION_OUTBOX_DIR, { recursive: true });
+      writeFileSync(
+        verificationOutboxFilePath(to),
+        JSON.stringify({ to, verifyUrl, sentAt: new Date().toISOString() }),
+      );
+    } catch {
+      // Outbox yazımı best-effort; ana akışı bloklamaz.
+    }
+  },
   async sendPasswordResetEmail({ to, resetUrl }) {
     // GÜVENLİK: `resetUrl` raw reset token'ını İÇERİR. Production loglarına asla yazılmaz —
     // log erişimi olan biri, son 30 dakika içinde şifre sıfırlama talebinde bulunmuş herhangi
@@ -72,6 +110,10 @@ export const consoleEmailSender: EmailSender = {
  * e-posta için aynı yanıtı dönmek zorundadır (invariant #7).
  */
 export const resendEmailSender: EmailSender = {
+  async sendEmailVerificationEmail({ to, verifyUrl }) {
+    const sent = await sendViaResend(emailVerificationEmail(to, verifyUrl));
+    console.log(`[email:verify-email] to=${to} provider=resend delivered=${sent}`);
+  },
   async sendPasswordResetEmail({ to, resetUrl }) {
     const sent = await sendViaResend(passwordResetEmail(to, resetUrl));
     console.log(`[email:password-reset] to=${to} provider=resend delivered=${sent}`);

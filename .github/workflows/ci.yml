@@ -30,6 +30,42 @@ jobs:
       - name: Lint
         run: npm run lint
 
+  # Bagimlilik taramasi (Issue #189).
+  #
+  # ESIK NEDEN "critical", "high" DEGIL: bugun uc yuksek advisory (deepmerge-ts ve onu
+  # cekan @prisma/config + prisma) production agacinda GORUNUYOR, cunku @prisma/client
+  # 'prisma'yi peerDependency olarak ilan eder ve --omit=dev zinciri kesmez. Ama olculdu:
+  # bu paketler DEPLOY EDILEN KODA ULASMIYOR. Agacta duran, cagrilmayan bir paket icin
+  # CI'i kalici kirmizi tutmak, bir sure sonra herkesin audit ciktisini gormezden
+  # gelmesiyle biter. Tam gerekce ve olcumun tekrarlanabilir komutlari:
+  # README "Bagimlilik guvenligi (Issue #189)".
+  #
+  # KABUL EDILEN KALAN RISK: bu esik yuzunden, ileride kod yolunda GERCEKTEN bulunan
+  # yuksek seviyeli bir acik da CI'i kirmayacak. Karsi onlem: cikti her kosuda basilir (#227)
+  # (asagiya bakin) ve takip issue'su acik tutulur.
+  #
+  # TEK ADIM YETER, OLCULDU: --audit-level YALNIZCA CIKIS KODUNU degistirir, ciktiyi
+  # degil. Bu adim uc 'high' bulguyu her kosuda tam olarak basar ve yine de yesil kalir;
+  # yani gorunurluk icin ayri bir '|| true' adimina gerek yoktur.
+  #
+  # 'npm ci' BILEREK YOK: 'npm audit' package-lock.json'dan calisir, node_modules'a
+  # ihtiyac duymaz (dogrulandi). Kurulum eklemek isi dakikalarca uzatir, taramaya hicbir
+  # sey katmaz.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # --omit=dev: gelistirme araclarindaki bir acik deploy edilen koda ulasmaz.
+      - name: Bagimlilik taramasi (critical CI'i kirar, high raporlanir)
+        run: npm audit --omit=dev --audit-level=critical
+
   typecheck:
     runs-on: ubuntu-latest
     steps:

@@ -56,11 +56,13 @@ model User {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  memberships         Membership[]
-  passwordResetTokens PasswordResetToken[]
+  memberships             Membership[]
+  passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
-  sentInvitations     TenantInvitation[]   @relation("InvitationInviter")
-  auditLogs           AuditLog[]
+  totpSecret              UserTotpSecret?
+  recoveryCodes           UserRecoveryCode[]
+  sentInvitations         TenantInvitation[]       @relation("InvitationInviter")
+  auditLogs               AuditLog[]
 }
 
 model Tenant {
@@ -382,6 +384,65 @@ model PasswordResetToken {
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
   // null = henüz kullanılmadı. Dolu = tek kullanımlık token tüketildi (veya iptal edildi).
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+/// Iki faktorlu dogrulama - TOTP (Issue #193).
+///
+/// KULLANICI BASINA TEK KAYIT (`userId @unique`): "birden fazla authenticator" ozelligi
+/// kapsamda degil ve tekil olmasi, kurulum akisini idempotent yapar - yarim kalmis bir
+/// kurulum yeni bir satir birakmaz, mevcut satirin uzerine yazilir.
+model UserTotpSecret {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// TOTP sirri DUZ METIN OLARAK SAKLANMAZ. AES-256-GCM ile sifrelenir; anahtar
+  /// `AUTH_SECRET`ten HKDF ile turetilir (bkz. src/lib/auth/totp-crypto.ts).
+  ///
+  /// NEDEN HASH DEGIL SIFRELEME: sifre ve token'larin aksine TOTP sirri DOGRULAMA ANINDA
+  /// GERI OKUNMAK ZORUNDADIR - kod, sirdan hesaplanir. Bu yuzden tek yonlu hash
+  /// kullanilamaz; yapilabilecek en iyi sey, DB dump'i sizdiginda sirlarin AUTH_SECRET
+  /// olmadan ise yaramaz olmasidir.
+  secretCipher String
+
+  /// null = kurulum baslatildi ama kullanici ilk kodu DOGRULAMADI. Bu durumda 2FA AKTIF
+  /// DEGILDIR ve giris akisi hic degismez. Dolu = 2FA aktif.
+  ///
+  /// Bu ayrim zorunludur: aksi halde QR'i okuyamamis bir kullanici kendi hesabindan
+  /// kalici olarak kilitlenirdi.
+  confirmedAt DateTime?
+
+  /// Son BASARIYLA kullanilan zaman penceresi (Unix zamani / 30). Ayni kodun ikinci kez
+  /// kabul edilmesini engeller: bir kod 30 saniye boyunca gecerlidir ve o pencerede
+  /// yakalanan bir kod, aksi halde tekrar oynatilabilirdi (replay).
+  ///
+  /// Int DEGIL BigInt: 2038 sonrasinda Unix zamani / 30 hala 32 bit'e sigar, ama sinirda
+  /// bir tipi bilerek secmenin bir faydasi yok.
+  lastUsedStep BigInt?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Kurtarma kodlari (Issue #193).
+///
+/// TELEFONUNU KAYBEDEN KULLANICI KILITLENMEMELIDIR. 2FA, kurtarma kodlari uretilmeden
+/// AKTIFLESTIRILEMEZ (bkz. src/lib/auth/totp-enrollment.ts).
+model UserRecoveryCode {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Raw kod asla saklanmaz; yalnizca SHA-256 hash'i - PasswordResetToken ile AYNI desen.
+  /// Kodlar kriptografik olarak rastgeledir, bu yuzden yavas/salt'li bir hash gerekmez.
+  codeHash String @unique
+
+  /// null = kullanilmadi. Dolu = TEK KULLANIMLIK kod tuketildi. Silme yerine isaretleme:
+  /// "kac kodum kaldi" sorusu ve audit izi icin kayit korunur.
   usedAt    DateTime?
   createdAt DateTime  @default(now())
 

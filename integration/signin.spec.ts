@@ -19,35 +19,37 @@ test.describe("authenticateUser()", () => {
     if (!signup.ok) return;
 
     try {
-      const user = await authenticateUser({ email, password });
-      expect(user).not.toBeNull();
-      expect(user?.id).toBe(signup.user.id);
-      expect(user?.email).toBe(email);
+      const result = await authenticateUser({ email, password });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.user.id).toBe(signup.user.id);
+      expect(result.user.email).toBe(email);
     } finally {
       await prisma.user.delete({ where: { id: signup.user.id } });
     }
   });
 
-  test("yanlış şifre reddediliyor (null döner)", async () => {
+  test("yanlış şifre reddediliyor (invalid_credentials)", async () => {
     const email = `signin-wrong-${randomUUID()}@example.com`;
     const signup = await registerUser({ email, password: "S3curePassw0rd!" });
     expect(signup.ok).toBe(true);
     if (!signup.ok) return;
 
     try {
-      const user = await authenticateUser({ email, password: "WrongPassword!" });
-      expect(user).toBeNull();
+      const result = await authenticateUser({ email, password: "WrongPassword!" });
+      expect(result).toEqual({ ok: false, reason: "invalid_credentials" });
     } finally {
       await prisma.user.delete({ where: { id: signup.user.id } });
     }
   });
 
-  test("bilinmeyen e-posta reddediliyor (null döner)", async () => {
-    const user = await authenticateUser({
+  test("bilinmeyen e-posta reddediliyor (invalid_credentials)", async () => {
+    const result = await authenticateUser({
       email: `unknown-${randomUUID()}@example.com`,
       password: "WhateverPassword!",
     });
-    expect(user).toBeNull();
+    // YANLIŞ ŞİFREYLE AYNI SONUÇ: bir e-postanın kayıtlı olup olmadığı sızdırılmaz.
+    expect(result).toEqual({ ok: false, reason: "invalid_credentials" });
   });
 
   test("email büyük/küçük harf ve boşluk farkına rağmen giriş yapılabiliyor (normalization)", async () => {
@@ -58,20 +60,21 @@ test.describe("authenticateUser()", () => {
     if (!signup.ok) return;
 
     try {
-      const user = await authenticateUser({
+      const result = await authenticateUser({
         email: `  Case-Signin-${suffix}@Example.COM  `,
         password: "S3curePassw0rd!",
       });
-      expect(user).not.toBeNull();
-      expect(user?.email).toBe(email);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.user.email).toBe(email);
     } finally {
       await prisma.user.delete({ where: { id: signup.user.id } });
     }
   });
 
   test("boş/eksik credential'lar reddediliyor", async () => {
-    const user = await authenticateUser({ email: undefined, password: undefined });
-    expect(user).toBeNull();
+    const result = await authenticateUser({ email: undefined, password: undefined });
+    expect(result).toEqual({ ok: false, reason: "invalid_credentials" });
   });
 
   test("dönen kullanıcı objesi passwordHash veya password alanı içermiyor", async () => {
@@ -82,11 +85,12 @@ test.describe("authenticateUser()", () => {
     if (!signup.ok) return;
 
     try {
-      const user = await authenticateUser({ email, password });
-      expect(user).not.toBeNull();
-      expect(user).not.toHaveProperty("passwordHash");
-      expect(user).not.toHaveProperty("password");
-      expect(Object.keys(user ?? {}).sort()).toEqual(["email", "id", "name"]);
+      const result = await authenticateUser({ email, password });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.user).not.toHaveProperty("passwordHash");
+      expect(result.user).not.toHaveProperty("password");
+      expect(Object.keys(result.user).sort()).toEqual(["email", "id", "name"]);
     } finally {
       await prisma.user.delete({ where: { id: signup.user.id } });
     }

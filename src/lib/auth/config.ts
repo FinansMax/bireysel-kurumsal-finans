@@ -1,3 +1,9 @@
+// `next-auth` KÖKÜNDEN DEĞİL `@auth/core/errors`'tan alınır. Kök giriş noktası bir DEĞER
+// import edildiğinde `next-auth/lib/env.js` üzerinden `next/server`'ı zincire sokar; bu modülü
+// doğrudan import eden testler (bkz. `integration/auth-config.spec.ts`) o zaman
+// "Cannot find module next/server" ile düşer. `@auth/core/errors`, `CredentialsSignin`'in
+// tanımlandığı yerdir ve Next.js'e hiç dokunmaz — ölçüldü, çözüm bu.
+import { CredentialsSignin } from "@auth/core/errors";
 import type { NextAuthConfig } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 
@@ -11,6 +17,20 @@ import { isSessionRevoked } from "./session-revocation";
 // session stratejisi olarak "jwt" seçildi. Bu, Account/Session/VerificationToken
 // Prisma modellerine ve bir DB adapter paketine ihtiyacı da ortadan kaldırır.
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 8; // 8 saat
+
+/**
+ * İkinci faktör sinyalleri (Issue #193).
+ *
+ * `code` alanı yanıt URL'sine yazılır, bu yüzden hassas bir şey içermez: yalnızca akışın
+ * hangi adımında olunduğunu söyler ve bu adıma ancak DOĞRU ŞİFREYLE gelinir.
+ */
+class TotpRequiredError extends CredentialsSignin {
+  code = "totp_required";
+}
+
+class TotpInvalidError extends CredentialsSignin {
+  code = "totp_invalid";
+}
 
 export const authConfig: NextAuthConfig = {
   session: {
@@ -27,12 +47,58 @@ export const authConfig: NextAuthConfig = {
       credentials: {
         email: { label: "E-posta", type: "email" },
         password: { label: "Şifre", type: "password" },
+        // İkinci faktör (Issue #193). İkisi de OPSİYONELDİR: 2FA kapalı kullanıcılar için
+        // giriş akışı bugünküyle birebir aynı kalır.
+        totp: { label: "Doğrulama kodu", type: "text" },
+        recoveryCode: { label: "Kurtarma kodu", type: "text" },
       },
+      /**
+       * GİRİŞ AKIŞININ EN KRİTİK NOKTASI (Issue #193).
+       *
+       * Auth.js'in Credentials provider'ı `authorize()`tan yalnızca `User | null` bekler;
+       * `null` genel bir `CredentialsSignin` hatasına dönüşür ve istemci
+       * `?error=CredentialsSignin&code=credentials` görür. Bu TEK kanal, "şifre yanlış" ile
+       * "şifre doğru ama kod gerekiyor" durumlarını AYIRT EDEMEZ — ve ayırt edilmezse 2FA'lı
+       * bir kullanıcıya, DOĞRU şifresini girdiği hâlde "şifreniz yanlış" denirdi.
+       *
+       * ÇÖZÜM: `CredentialsSignin` alt sınıfı fırlatmak. `@auth/core` bu sınıfın `code`
+       * alanını yanıt URL'sine yazar — doğrulandı: `node_modules/@auth/core/index.js` içinde
+       * `if (error instanceof CredentialsSignin) params.set("code", error.code)`. İstemci bu
+       * koda bakarak ikinci adımı gösterir.
+       *
+       * REDDEDİLEN ALTERNATİF — ayrı bir "2FA gerekiyor mu" endpoint'i: kimliksiz çağrılabilen
+       * böyle bir uç, bir e-postanın kayıtlı olup olmadığını sızdıran bir oracle olurdu.
+       * Şifreyi de isteseydi, bu akışın aynısını ikinci bir yerde tekrar etmek anlamına gelirdi.
+       *
+       * BU KOD BİR SIR SIZDIRMAZ: `totp_required` ve `totp_invalid` yanıtlarına YALNIZCA
+       * şifresi DOĞRU bir istekle ulaşılır. Şifreyi bilmeyen her zaman `credentials` kodunu
+       * alır; yani bu ayrım user enumeration için kullanılamaz.
+       *
+       * Rate limit bu noktadan ÖNCE, route seviyesinde uygulanır
+       * (`src/app/api/auth/[...nextauth]/route.ts`) — `authorize()` özel bir 429 döndüremez.
+       */
       async authorize(credentials) {
-        return authenticateUser({
+        const result = await authenticateUser({
           email: credentials?.email,
           password: credentials?.password,
+          totp: credentials?.totp,
+          recoveryCode: credentials?.recoveryCode,
         });
+
+        if (result.ok) {
+          return result.user;
+        }
+
+        if (result.reason === "totp_required") {
+          throw new TotpRequiredError();
+        }
+
+        if (result.reason === "totp_invalid") {
+          throw new TotpInvalidError();
+        }
+
+        // Şifre yanlış / kullanıcı yok / şifresiz hesap — hepsi AYNI genel hata.
+        return null;
       },
     }),
   ],

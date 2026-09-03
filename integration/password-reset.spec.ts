@@ -139,11 +139,12 @@ test.describe("resetPassword()", () => {
       expect(updatedUser.credentialsChangedAt!.getTime()).toBeLessThanOrEqual(Date.now());
 
       const oldAuth = await authenticateUser({ email, password: OLD_PASSWORD });
-      expect(oldAuth).toBeNull();
+      expect(oldAuth.ok).toBe(false);
 
       const newAuth = await authenticateUser({ email, password: "BrandNewPassw0rd!" });
-      expect(newAuth).not.toBeNull();
-      expect(newAuth?.id).toBe(userId);
+      expect(newAuth.ok).toBe(true);
+      if (!newAuth.ok) return;
+      expect(newAuth.user.id).toBe(userId);
     } finally {
       await prisma.user.delete({ where: { id: userId } });
     }
@@ -223,7 +224,7 @@ test.describe("resetPassword()", () => {
 
       // Şifre ilk (kazanan) denemedeki değerde kalmalı.
       const newAuth = await authenticateUser({ email, password: "FirstNewPassw0rd!" });
-      expect(newAuth).not.toBeNull();
+      expect(newAuth.ok).toBe(true);
 
       // Issue #26: reddedilen ikinci (used-token) deneme, credentialsChangedAt'i TEKRAR
       // güncellemez — ilk başarılı reset'teki değerde sabit kalır.

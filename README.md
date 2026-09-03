@@ -59,7 +59,7 @@ cp .env.example .env
 | `RATE_LIMIT_STORE` | Hayır | `memory` (varsayılan) \| `redis`. Çok instance'lı deployment'ta `redis` gerekir (Issue #181). |
 | `UPSTASH_REDIS_REST_URL` | `redis` ise | Upstash REST adresi. Eksikse uygulama sessizce `memory`'ye DÜŞMEZ, hata verir. |
 | `UPSTASH_REDIS_REST_TOKEN` | `redis` ise | Upstash REST token'ı. **Secret** — loglanmaz, `NEXT_PUBLIC_` olamaz. |
-| `SENTRY_DSN` | Hayır | Sentry hata izleme. **HENÜZ BAĞLANMADI** — SDK onayı + hesap bekliyor (Issue #183). Yokken loglama tam çalışır. |
+| `SENTRY_DSN` | Hayır | Sentry hata izleme (Issue #183). Tanımsızsa SDK hiç başlatılmaz; loglama tam çalışır. |
 | `POSTGRES_*` | Lokal | Yalnızca `docker-compose.yml`'in lokal PostgreSQL container'ını kurmak için. |
 
 **`APP_BASE_URL` neden production'da zorunlu:** Şifre sıfırlama ve tenant daveti
@@ -2808,19 +2808,53 @@ derin nesne taraması ölçülebilir bir maliyettir.
 
 Mevcut üç `console.error` çağrısı (audit yazımı, e-posta gönderimi) bu logger'a taşındı.
 
-### Bu PR'da YAPILMAYAN — Sentry
+### Sentry — hata izleme (BAĞLANDI)
 
-`SENTRY_DSN` `.env.example`'a yer tutucu olarak eklendi ama **SDK bağlanmadı**. İki ayrı engel
-var ve ikisi de karar gerektirir:
+`@sentry/nextjs` **onaylı bir bağımlılık olarak** eklendi (`CLAUDE.md` gereği açık onay alındı).
 
-1. `@sentry/nextjs` **yeni bir npm bağımlılığıdır** ve `CLAUDE.md` gereği açık onay ister.
-2. Sentry hesabı/DSN gerekir.
+**`SENTRY_DSN` tanımlı değilse SDK hiç başlatılmaz.** `Sentry.init({ dsn: undefined })` çağırmak
+da "kapalı" davranır ama SDK'nın global hook'larını (unhandled rejection, fetch sarmalayıcıları)
+yine de kurar; hiç çağırmamak lokal geliştirme ve test ortamını gerçekten dokunulmamış bırakır.
 
-Issue #183 bu ayrımı zaten öngörüyor: *"Loglama Sentry'ye bağımlı olmaz... `SENTRY_DSN` tanımlı
-değilken yapılandırılmış loglama TAM olarak çalışmaya devam eder."* Bugünkü durum tam olarak
-budur. SDK bağlandığında `beforeSend` içinde `sanitizeMetadata()` mantığı uygulanmalı,
-`sendDefaultPii: false` olmalı ve raw token taşıyan URL'lerin query string'i atılmalıdır (issue'da
-yazılı). Kritik olay alarmları (#183 madde 3) kod değil, Sentry panosu yapılandırmasıdır.
+**Yapılandırma tek kaynaktan gelir** (`src/lib/observability/sentry-config.ts`). Next.js üç ayrı
+runtime için üç başlatma dosyası ister (`src/instrumentation-client.ts`, `sentry.server.config.ts`,
+`sentry.edge.config.ts`); ayarları üç kez yazmak, birinde `sendDefaultPii`'yi veya `beforeSend`'i
+unutmak demekti — ve o unutma **sessizdir**: Sentry çalışmaya devam eder, sadece kişisel veri
+göndermeye başlar.
+
+#### Kişisel veri gönderilmez — iki katman
+
+1. **`sendDefaultPii: false`**, tipte `false` literal'i olarak sabitlendi: biri `true` yazmak
+   isterse bunun bilinçli bir değişiklik olduğu diff'te görünür.
+2. **`beforeSend` içinde `scrubEvent()`** — çünkü birincisi YETMEZ: uygulama kodunun kendi
+   eklediği `extra`/`contexts` alanları ve hata mesajlarına gömülü URL'ler o ayarın kapsamı
+   dışındadır. `writeAuditLog()`'un `sanitizeMetadata()` çağırmasıyla birebir aynı gerekçe.
+
+`scrubEvent()` şunları yapar:
+
+- **URL'lerin sorgu dizesini tamamen atar.** Şifre sıfırlama, davet ve e-posta doğrulama
+  linklerinin hepsi raw token'ı `?token=` içinde taşır; bir hata raporunda tam URL, o token'ı
+  Sentry'yi görebilen herkese verir. **Yalnızca `token` parametresi değil, sorgunun tamamı**
+  atılır: hangi parametrenin hassas olduğunu tek tek saymak, ileride eklenen birini unutmaktır.
+- **`cookie`, `authorization` ve `x-forwarded-for` başlıklarını atar.** Bir session cookie'si,
+  hata raporunu görebilen herkese hesap devri imkânı verir.
+- **`extra`, `contexts`, istek gövdesi ve breadcrumb verisini** `sanitizeMetadata()`'den geçirir.
+
+`sentry-scrub.ts` **`@sentry/nextjs` import etmez** — saf fonksiyonlardır ve Sentry hiç
+yapılandırılmamışken test edilirler. Testler ayrıca `beforeSend`'in gerçekten bağlandığını da
+doğrular: doğru çalışan ama hiç çağrılmayan bir temizleyici, hiç yokmuş gibidir.
+
+**`tracesSampleRate: 0`** — performans izleme kapalı. Trace'ler ayrı bir maliyet ve ayrı bir
+veri akışıdır (URL'ler, sorgu süreleri); açılması ayrı bir karardır.
+
+#### Kalan risk
+
+- **Gerçek bir DSN ile uçtan uca doğrulama yapılmadı.** "Bilerek fırlatılan bir hata Sentry'de
+  görünüyor ve içinde şifre/token/cookie yok" kriteri hesap gerektirdiği için manuel
+  doğrulamaya bırakıldı. Temizleme mantığı 12 testle doğrulanmıştır, ama SDK'nın olayı
+  gerçekten bu haliyle gönderdiği gözlenmedi.
+- **Kritik olay alarmları** (5xx oranı, `SerializationConflictError` eşiği) kod değil, Sentry
+  panosu yapılandırmasıdır.
 
 ## Saat dilimi: referans tenant'tır (Issue #134)
 

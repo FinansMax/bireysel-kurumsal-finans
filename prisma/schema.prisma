@@ -2,6 +2,10 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Bu blok BILEREK DATABASE_URL'e bagli kalir (Issue #187): migration'lar ve prisma generate
+// dogrudan baglanti ister. Havuzlanmis adres (DATABASE_POOL_URL) yalnizca calisma zamaninda,
+// PrismaClient yapicisina verilir - bkz. src/lib/config/database.ts ve src/lib/prisma.ts.
+// Buradaki url'i DATABASE_POOL_URL yapmayin; integration/db-connection.spec.ts bunu korur.
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")

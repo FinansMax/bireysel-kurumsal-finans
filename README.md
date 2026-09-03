@@ -55,6 +55,11 @@ cp .env.example .env
 | `EMAIL_PROVIDER` | **Production'da** | `console` \| `resend`. Production'da `console` olamaz. |
 | `EMAIL_API_KEY` | `resend` ise | Sağlayıcı API anahtarı. **Secret** — loglanmaz, `NEXT_PUBLIC_` olamaz. |
 | `EMAIL_FROM` | `resend` ise | Gönderen adresi, ör. `FinansMax <no-reply@example.com>`. |
+| `TRUSTED_PROXY` | **Production'da** | `true` \| `false`. `x-forwarded-for` güvenilir mi? Sessiz varsayılan YOK (Issue #182). |
+| `RATE_LIMIT_STORE` | Hayır | `memory` (varsayılan) \| `redis`. Çok instance'lı deployment'ta `redis` gerekir (Issue #181). |
+| `UPSTASH_REDIS_REST_URL` | `redis` ise | Upstash REST adresi. Eksikse uygulama sessizce `memory`'ye DÜŞMEZ, hata verir. |
+| `UPSTASH_REDIS_REST_TOKEN` | `redis` ise | Upstash REST token'ı. **Secret** — loglanmaz, `NEXT_PUBLIC_` olamaz. |
+| `SENTRY_DSN` | Hayır | Sentry hata izleme. **HENÜZ BAĞLANMADI** — SDK onayı + hesap bekliyor (Issue #183). Yokken loglama tam çalışır. |
 | `POSTGRES_*` | Lokal | Yalnızca `docker-compose.yml`'in lokal PostgreSQL container'ını kurmak için. |
 
 **`APP_BASE_URL` neden production'da zorunlu:** Şifre sıfırlama ve tenant daveti
@@ -109,7 +114,69 @@ npm run test:e2e          # Playwright E2E (gerçek Chromium)
 
 ## Health Check
 
-Uygulama ayaktayken `GET /api/health` endpoint'i `{ "status": "ok" }` döner.
+İki ayrı endpoint vardır ve bu ayrım bilinçlidir (Issue #184): **liveness** ("süreç ayakta mı")
+ile **readiness** ("istek karşılayabilir mi") farklı sorulardır.
+
+| Endpoint | Ne sorar | Kim kullanır |
+| --- | --- | --- |
+| `GET /api/health` | Süreç ayakta mı? | Load balancer / restart politikası |
+| `GET /api/health/ready` | DB erişilebilir ve migration'lar uygulanmış mı? | Uptime izleme, trafik yönlendirme |
+
+`GET /api/health` sabit `{ status: "ok", timestamp }` döner ve **DB'ye bakmaz** — davranışı
+değişmedi.
+
+`GET /api/health/ready` sağlıklıysa `200`, değilse `503` döner:
+
+```json
+{ "status": "ok", "checks": { "database": "ok", "migrations": "ok" } }
+```
+
+### Neden gerekliydi
+
+Önceki tek endpoint sabit `{ status: "ok" }` dönüyordu: veritabanı düşmüş, migration
+uygulanmamış veya bağlantı havuzu tükenmiş olsa bile **yine "ok" diyordu**. Yani load balancer
+ve uptime izleme, gerçekte bozuk olan bir instance'a trafik göndermeye devam ediyordu.
+
+### Neyi kontrol eder
+
+- **Veritabanı:** `SELECT 1`. Ham SQL burada bilinçli bir istisnadır (`docs/conventions.md`):
+  yoklanan şey bir Prisma modeli değil, bağlantının kendisidir. Bir model üzerinden `count()`
+  yapmak reddedildi — o sorgu tabloya, index'e ve satır sayısına bağlıdır; ölçmek istediğimiz
+  ise yalnızca bağlantının canlılığı.
+- **Migration'lar:** iki ayrı arıza sınıfı. (1) yarım kalmış veya geri alınmış migration
+  (`finished_at IS NULL` ya da `rolled_back_at IS NOT NULL`) — şema belirsiz durumdadır;
+  (2) diskte olup DB'de kaydı olmayan migration — yani "yeni kod eski şemaya deploy edildi",
+  en sık görülen ve en sessiz bozulma biçimi.
+
+Migration dizini okunamıyorsa kontrol **başarısız** sayılır, "sorun yok" değil: bilmiyor olmak
+iyi haber değildir.
+
+### Kararlar
+
+**2 saniyelik zaman aşımı, fail-closed.** Askıda kalan bir health check hiç olmamasından
+kötüdür: bağlantı havuzu tükendiğinde `SELECT 1` dakikalarca bekleyebilir ve izleme sistemi
+instance'ı ne sağlıklı ne sağlıksız sayar — trafik akmaya devam eder. Süre dolarsa kontrol
+başarısızdır.
+
+**503, 500 değil.** 500 endpoint'in kendisinin bozuk olduğunu ima ederdi; izleme sistemi
+"uygulama bozuk" ile "health endpoint'i bozuk" durumlarını ayırt edemezdi.
+
+**Kimlik doğrulaması yok, bu yüzden yanıt bilinçli olarak fakir.** İzleme sistemleri kimlik
+taşıyamaz; endpoint internete açık olabilir. Bu yüzden yanıtta bağlantı dizesi, host, sürüm,
+SQL veya stack trace **yoktur** — yalnızca kontrol adı ve `ok`/`fail` (invariant #7). Ayrıntı
+sunucu logunda kalır. Regresyon bariyeri: `security/health-security.spec.ts` yanıtın alan
+kümesini sabitler; yeni bir alan eklenirse kırmızıya döner.
+
+**Rate limit yok ve bu gerekçelidir** (invariant #9 gerekçe yazılmasını ister): endpoint state
+değiştirmez ve ucuzdur, yani #9'un hedeflediği "public veya pahalı state değiştiren" sınıfına
+girmez. Dahası limit koymak zararlı olurdu — sağlık kontrolü 429 alan bir load balancer,
+sağlıklı bir instance'ı ölü sayardı. Kötüye kullanım riski deployment tarafında (probe'u iç ağa
+kısıtlayarak) ele alınır.
+
+### Kapsam dışı
+
+Bağımlı dış servislerin (e-posta sağlayıcısı, paylaşılan rate-limit store'u) sağlığı bu
+kontrole **dahil değildir**; #180 ve #181 tamamlandıktan sonra ayrı bir issue ile eklenir.
 
 ## Authentication
 
@@ -2539,3 +2606,218 @@ stub'lanan şey bir güvenlik mekanizması değil, üçüncü taraf bir HTTP sı
   aittir.
 - **Bounce/complaint yönetimi, gönderim istatistikleri, e-posta kuyruğu** kapsam dışıdır.
 - **Bildirim e-postaları** Epic 9'un (#74), **e-posta doğrulama akışı** #190'ın konusudur.
+
+## Dağıtık rate limiting (Issue #181)
+
+`InMemoryRateLimiter` **process-local**'dir. Çok instance'lı veya serverless bir deployment'ta
+her instance kendi sayacını tutar (gerçek limit instance sayısıyla çarpılır) ve cold start
+sayacı sıfırlar — saldırgan yeni instance'lara dağılarak limiti pratikte etkisiz kılabilir.
+Yani brute-force koruması kodda **vardı** ama production'da **yok sayılabilirdi**.
+
+`RateLimiter` arayüzü (#27) tam bu değişim için yazılmıştı: **route kodu ve `checkRateLimit()`
+sözleşmesi hiç değişmedi**, yalnızca `limiter.ts`'teki seçim satırı genişledi.
+
+### Atomiklik — bu işin çekirdeği
+
+`InMemoryRateLimiter.consume()` içinde tek bir `await` yoktur; oku+hesapla+yaz tek senkron
+bloktur ve JavaScript'in tek thread'li event loop'unda bu **atomiktir**. Redis'e geçerken bu
+garanti kaybolur: "oku → hesapla → yaz" üç ayrı ağ çağrısı olur ve eşzamanlı istekler limiti
+aşabilir (klasik TOCTOU).
+
+Bu yüzden tüm sliding-window mantığı **tek bir Lua script'inde**, Redis'in kendi tek thread'li
+yürütmesi altında çalışır: `ZREMRANGEBYSCORE` → `ZCARD` → (koşullu) `ZADD` → `PEXPIRE`.
+
+**`MULTI/EXEC` reddedildi:** koşullu yazma (yalnızca izin verilirse `ZADD`) bir transaction
+içinde ifade edilemez — karar için önce `ZCARD` sonucunu okumak, yani transaction'ı bölmek
+gerekirdi.
+
+**Reddedilen deneme bucket'a yazılmaz** (in-memory davranışın aynısı). Aksi halde limiti aşan
+bir saldırgan, her reddedilen denemeyle pencereyi uzatıp meşru kullanıcıyı süresiz kilitleyebilirdi.
+
+**Üye adı benzersizdir** (`<ms>-<rastgele>`): aynı milisaniyedeki iki istek aynı üye adını
+paylaşsaydı `ZADD` ikincisini yeni bir giriş saymaz, üzerine yazardı — iki istek bir sayılır ve
+limit sessizce gevşerdi.
+
+### Store erişilemezse: FAIL-OPEN
+
+Redis'e ulaşılamadığında istek **geçirilir** ve hata loglanır.
+
+**Gerekçe:** rate limiter yardımcı bir korumadır; Redis kesintisinde tüm giriş/kayıt akışını
+kilitlemek, engellediği riskten daha büyük bir hasar üretir — tek bir üçüncü taraf servis,
+uygulamanın tamamını erişilemez kılardı.
+
+**Kabul edilen kalan risk:** kesinti süresince brute-force koruması yoktur. Fail-closed
+isteniyorsa bu **ayrı bir karardır** ve bu satırın değiştirilmesini gerektirir.
+
+Hata logu bucket key'ini (dolayısıyla istemci IP'sini) **içermez** (invariant #7).
+
+### `@upstash/redis` paketi kullanılmadı
+
+Paketin buradaki tek işi tek bir POST isteğini sarmalamak olurdu. Repo `bcrypt` yerine
+`node:crypto`, `zod` yerine elle yazılmış doğrulama kullanıyor; **bu değişiklik hiçbir npm
+bağımlılığı eklemez**. TCP yerine HTTP tercihi de bilinçli: serverless'ta kalıcı TCP havuzu her
+cold start'ta yeniden kurulur ve bağlantı sayısı instance sayısıyla çarpılır.
+
+### Yapılandırma sessizce zayıflamaz
+
+`RATE_LIMIT_STORE` tanımsızsa `memory` kullanılır (lokal geliştirme ve testler bugünkü gibi
+çalışır). Ama:
+
+- Tanınmayan bir değer (`rediss` gibi bir yazım hatası) **her ortamda hata verir** — sessizce
+  in-memory'ye düşmek, tam da bu issue'nun kapatmak istediği "koruma var sanılıyor ama yok"
+  durumudur.
+- `redis` seçiliyken credential eksikse **fırlatır**, sessizce in-memory'ye düşmez: operatör
+  açıkça "paylaşılan store istiyorum" dedi.
+- Seçilen store **başlangıçta bir kez loglanır** (`[rate-limit] store=...`). Production'da
+  yanlışlıkla in-memory'ye düşmüş bir kurulumun bunu fark etmesinin tek yolu budur.
+
+### Doğrulanmamış kalan
+
+Lua script'inin Redis içindeki davranışı (pencerenin gerçekten kayması, `ZADD`'in gerçekten
+yazması) **gerçek bir Upstash örneği gerektirir** ve bu repoda otomatik test edilmemiştir.
+Otomatik testler bu sınıfın sözleşmesini doğrular: tek round-trip (atomiklik iddiasının kanıtı),
+argüman şekli, yanıt çevrimi ve fail-open davranışı.
+## Tüm oturumları kapatma (Issue #186)
+
+Stateless JWT mimarisinde sign-out yalnızca istemcinin cookie'sini temizler — **çalınmış bir
+token 8 saat boyunca geçerli kalmaya devam eder**. Bu, "CSRF Duruşu" ve "Session Revocation"
+bölümlerinde kayda geçmiş bilinçli bir kabuldü, ama kullanıcının "şüpheli bir durum var, tüm
+oturumlarımı kapatayım" diyebileceği hiçbir yol yoktu. Finansal bir üründe kurumsal müşterinin
+soracağı ilk sorulardan biridir.
+
+Çözüm ucuzdu: revocation altyapısı (#26) **zaten vardı**; tek eksik, şifre değişimi dışında da
+tetiklenebilen bir zaman damgasıydı.
+
+### İki zaman damgası, tek eşik
+
+`User.sessionsRevokedAt` eklendi. `null` = hiç toplu iptal yapılmadı; mevcut kullanıcılar
+migration'dan **etkilenmez** (`credentialsChangedAt` ile aynı mantık).
+
+`isSessionRevoked()` artık ikisinin **en büyüğüne** bakar. Alanlar şemada **ayrı tutulur** ve bu
+bilinçlidir: şifre değişimi ile kullanıcının kendi iradesiyle yaptığı toplu iptal farklı
+olaylardır. Tek alana yazmak, "bu kullanıcının şifresi değişti mi" sorusunun cevabını bozardı —
+audit kaydı ve ileride eklenecek "şifreniz değişti" bildirimi bu ayrımı ister.
+
+`Math.max()` **kullanılmadı**: `Math.max(null, x)` `null`'ı `0`'a çevirir ve "hiç olmadı"yı
+"1970'te oldu" gibi davranarak sessizce yanlış sonuç üretebilirdi.
+
+**Hassasiyet kuralı aynen korundu.** `iat` saniye, zaman damgaları milisaniye; aynı saniyeye
+denk gelen token, yanlış pozitif revocation'ı önlemek için geçerli sayılmaya devam ediyor
+(`src/lib/auth/session-revocation.ts`'teki grace window). Yeni alan bu kuralı değiştirmez;
+`integration/revoke-sessions.spec.ts` bunu duyarlılık testiyle birlikte sabitler.
+
+**Ek DB maliyeti yok.** `jwt` callback'indeki sorgu zaten her istekte bu satırı okuyordu; yapılan
+şey `select`'e bir alan eklemek — #113'teki `name` ile aynı gerekçe.
+
+### Çağıranın kendi oturumu da düşer
+
+`POST /api/auth/revoke-sessions` gövdesizdir ve hedef **yalnızca** trusted session'dan gelir
+(invariant #2). Body'de `userId` göndermek etkisizdir — aksi halde bu endpoint "istediğim
+kullanıcıyı sistemden at" aracına dönüşürdü; `security/revoke-sessions-security.spec.ts` bunu
+açıkça test eder.
+
+Kullanıcı **kendi** oturumundan da düşer. Stateless JWT'de "bu isteği yapan token"ı ayrıcalıklı
+kılmanın yolu yoktur (bunu yapmak sunucu tarafında oturum kaydı tutmayı gerektirir — ayrı bir
+mimari karar, #186 "Scope Dışı"). `change-password` de aynı nedenle aynı şekilde davranır ve
+yanıt bunu kullanıcıya açıkça söyler; sessizce 401'e düşürmek, hatayı ürün hatası sanmasına yol
+açardı.
+
+### POST, GET değil
+
+State değiştiren işlem (invariant #4). Bir `GET` olsaydı `SameSite=Lax` top-level cross-site
+GET'leri engellemediği için herhangi bir sitedeki `<img src>` etiketi kullanıcıyı tüm
+cihazlarından atabilirdi.
+
+### Rate limit: 5/15dk
+
+Endpoint authenticated ve idempotent olmasına rağmen limit gerekir: çalınmış bir cookie ile
+tekrar tekrar çağrılırsa meşru kullanıcı sürekli dışarı atılır (kendine DoS). Kimse 15 dakikada
+beşten fazla kez tüm cihazlarından çıkmaz.
+
+### Ekran
+
+`/settings/security` — menüde "Güvenlik". Sayfa `requirePageUser()` ile korunur ve
+`resolveActiveTenantForUser()` **çağırmaz**: buradaki işlem kullanıcıya aittir, çalışma alanına
+değil. Hiçbir çalışma alanına üye olmayan bir kullanıcı da oturumlarını kapatabilmelidir — aksi
+halde en çok ihtiyaç duyulan düğme erişilemez bir ekranın arkasında kalırdı. Rol kontrolü de
+yoktur; MEMBER dahil herkes kendi oturumlarını kapatır.
+
+Onay iki adımlıdır (`window.confirm()` değil — `module-toggle.tsx` ile aynı duruş) ve onay metni
+kullanıcının kendi cihazından da düşeceğini **önceden** söyler. Başarıdan sonra
+`router.refresh()` değil **tam sayfa yönlendirme** yapılır: o noktada elimizdeki cookie artık
+geçersizdir, `refresh()` 401 alıp kullanıcıyı yarı bozuk bir ekranda bırakırdı.
+
+### Kapsam dışı
+
+- **Aktif oturumların listelenmesi** ("şu cihazlardan giriş yapıldı") sunucu tarafında oturum
+  kaydı tutmayı gerektirir ve mimariyi değiştirir. Ekranda bu sınır kullanıcıya açıkça yazılır;
+  var olmayan bir özelliği ima etmemek için.
+- **Yöneticinin başka bir kullanıcının oturumlarını düşürmesi** ayrı bir issue.
+## Gözlemlenebilirlik: yapılandırılmış log ve istek kimliği (Issue #183)
+
+Production'da bir şey patladığında elimizde yalnızca `console.error` vardı. Hangi kullanıcının,
+hangi tenant'ta, hangi istekte hata aldığını öğrenmenin yolu yoktu; hatalar kullanıcı şikâyet
+edene kadar görünmezdi.
+
+### `x-request-id` — destek talebiyle log arasındaki tek bağ
+
+Her yanıt bir `x-request-id` taşır. Kullanıcı "hata aldım" dediğinde bu id'yi verir, biz log'da
+onu ararız. Gelen bir `x-request-id` varsa **korunur** (uygulamanın önündeki proxy zaten bir id
+üretiyor olabilir; ezmek iki sistemin loglarını birbirine bağlamayı imkânsız kılardı), yoksa
+üretilir.
+
+**Gelen değer doğrulanır.** Bu değer log satırlarına yazılıyor; doğrulamasız kabul etmek
+saldırganın satır sonu enjekte edip **sahte log kaydı** üretmesine izin verirdi (log injection).
+Güvenli olmayan bir değer reddedilmez, **yok sayılır** ve yerine yenisi üretilir — bu bir
+yetkilendirme aracı değil, izleme kolaylığıdır.
+
+### `proxy.ts`, `middleware.ts` değil
+
+Next.js 16'da `middleware` dosya konvansiyonu **kullanımdan kaldırıldı** ve `proxy` olarak
+yeniden adlandırıldı; dev sunucusu açık bir deprecation uyarısı veriyor
+(`node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/proxy.md`). Dışa
+aktarılan fonksiyonun adı da `proxy` olmak zorunda.
+
+**Proxy'nin tek sorumluluğu istek kimliğidir.** Kimlik doğrulama ve yetkilendirme **oraya
+taşınmadı** ve taşınmayacak: koruma `requireUser()`/`requirePermission()` guard'larındadır
+(invariant #3); ikiye bölmek hangisinin geçerli olduğunu belirsizleştirirdi. Ayrıca proxy Edge
+runtime'da çalışır ve Prisma'ya erişemez — canlı membership doğrulaması orada zaten mümkün değil.
+
+Alternatif — `x-request-id`'yi her route handler'a elle eklemek — 20+ dosyaya tekrar eden kod
+koyar ve yeni bir route yazıldığında **unutulur**.
+
+### Yapılandırılmış log
+
+`src/lib/observability/logger.ts` tek satır JSON üretir: `level`, `msg`, `time`, `requestId`,
+`tenantId`, `userId`, `route`, `durationMs`.
+
+**Bağımlılık eklenmedi.** `pino`/`winston`, burada ihtiyaç duyulanın (tek satır JSON) çok
+ötesinde bir yüzey getirir; modül `console`'un ince bir sarmalayıcısıdır.
+
+**Neden JSON:** `console.error("[audit] failed", {...})` insan okur, makine okuyamaz. "Şu
+tenant'ta son bir saatte hata alan istekler" sorusu ancak alan bazlı aramayla yanıtlanır.
+
+**`error` stderr'e, diğerleri stdout'a** yazar: log toplayıcıların uyarı/hata filtrelemesi bu
+ayrıma dayanır.
+
+**Bağlam alanları serbest bir `Record` değil, açık alanlardır** — hangi bilginin loglanabilir
+olduğu tip düzeyinde belli olsun ve kimse oraya yanlışlıkla bir token koymasın. `extra` içinde
+hassas veri bulunmaması **çağıranın sorumluluğudur**; `sanitizeMetadata()` gibi ikinci bir
+savunma katmanı burada bilinçli olarak YOKTUR: log yazımı sıcak yolda çalışır ve her satırda
+derin nesne taraması ölçülebilir bir maliyettir.
+
+Mevcut üç `console.error` çağrısı (audit yazımı, e-posta gönderimi) bu logger'a taşındı.
+
+### Bu PR'da YAPILMAYAN — Sentry
+
+`SENTRY_DSN` `.env.example`'a yer tutucu olarak eklendi ama **SDK bağlanmadı**. İki ayrı engel
+var ve ikisi de karar gerektirir:
+
+1. `@sentry/nextjs` **yeni bir npm bağımlılığıdır** ve `CLAUDE.md` gereği açık onay ister.
+2. Sentry hesabı/DSN gerekir.
+
+Issue #183 bu ayrımı zaten öngörüyor: *"Loglama Sentry'ye bağımlı olmaz... `SENTRY_DSN` tanımlı
+değilken yapılandırılmış loglama TAM olarak çalışmaya devam eder."* Bugünkü durum tam olarak
+budur. SDK bağlandığında `beforeSend` içinde `sanitizeMetadata()` mantığı uygulanmalı,
+`sendDefaultPii: false` olmalı ve raw token taşıyan URL'lerin query string'i atılmalıdır (issue'da
+yazılı). Kritik olay alarmları (#183 madde 3) kod değil, Sentry panosu yapılandırmasıdır.

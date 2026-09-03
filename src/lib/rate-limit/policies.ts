@@ -45,6 +45,11 @@ export const RATE_LIMIT_POLICIES = {
   FORGOT_PASSWORD: { limit: 5, windowMs: 15 * MINUTES },
   RESET_PASSWORD: { limit: 10, windowMs: 15 * MINUTES },
   CHANGE_PASSWORD: { limit: 10, windowMs: 15 * MINUTES },
+  // REVOKE_SESSIONS 5/15dk: authenticated ve idempotent bir işlemdir, ama her çağrı TÜM
+  // oturumları düşürür — çalınmış bir cookie ile tekrar tekrar çağrılırsa meşru kullanıcının
+  // sürekli dışarı atılmasına (kendine DoS) yol açar. 5, gerçek "her yerden çıkış" ihtiyacını
+  // fazlasıyla karşılar; kimse 15 dakikada beşten fazla kez tüm cihazlarından çıkmaz.
+  REVOKE_SESSIONS: { limit: 5, windowMs: 15 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
   COLLECTIONS_MANAGE: { limit: 60, windowMs: 1 * MINUTES },
 } as const satisfies Record<string, RateLimitPolicy>;
@@ -60,6 +65,7 @@ export const RATE_LIMIT_BUCKETS = {
   FORGOT_PASSWORD: "auth:forgot-password",
   RESET_PASSWORD: "auth:reset-password",
   CHANGE_PASSWORD: "auth:change-password",
+  REVOKE_SESSIONS: "auth:revoke-sessions",
   TENANT_CREATE: "tenant:create",
   COLLECTIONS_MANAGE: "collections:manage",
 } as const;

@@ -42,6 +42,13 @@ model User {
   // ve gelecekteki authenticated password change (Epic 3) tarafından ORTAK güncellenir
   // (bkz. src/lib/auth/credentials.ts).
   credentialsChangedAt DateTime?
+  // null = kullanıcı hiç "tüm oturumları kapat" demedi (Issue #186). Dolu = bu zamandan ÖNCE
+  // üretilmiş JWT'ler artık kabul edilmez. `credentialsChangedAt` ile AYNI mekanizmayı
+  // (bkz. src/lib/auth/session-revocation.ts) besler ama AYRI tutulur: şifre değişimi ile
+  // kullanıcının kendi iradesiyle yaptığı toplu iptal farklı olaylardır ve tek alana yazmak,
+  // "şifre değişti mi" sorusunun cevabını bozardı (audit ve ileride e-posta bildirimi bu ayrımı
+  // ister). Karşılaştırma ikisinin EN BÜYÜĞÜ ile yapılır.
+  sessionsRevokedAt    DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 

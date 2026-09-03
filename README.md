@@ -3059,3 +3059,89 @@ desen).
 
 - Var olan tenant'lara toplu seed basan CLI/migration script'i.
 - Seed'in kullanıcı tarafından "sıfırla" ile yeniden çalıştırılması.
+
+## AuditLog saklama ve arşivleme (Issue #188)
+
+`AuditLog` her state değiştiren işlemde bir satır yazıyor ve **hiçbir zaman silinmiyordu**. Bir
+yıl içinde veritabanının en büyük tablosu o olurdu; `@@index([createdAt])` ve `@@index([action])`
+de onunla birlikte büyürdü. Ayrıca "kişisel veriyi ne kadar süre tutuyorsunuz?" sorusunun bir
+cevabı yoktu.
+
+### Saklama süresi: 12 ay sıcak, öncesi arşiv
+
+Audit log'un iki tüketicisi var: **güvenlik incelemesi** (pratikte haftalar, en fazla aylar
+geriye bakar) ve **uyuşmazlık çözümü** (finansal bir üründe bir işlemin kim tarafından
+değiştirildiği bir mali yıl boyunca sorulabilir). 12 ay ikisini de karşılar ve **tam bir mali
+dönemi** kapsar.
+
+**Daha kısa (90 gün) reddedildi:** yıl sonu kapanışında geçmiş bir çeyreğin kayıtları kaybolurdu.
+**Daha uzun (7 yıl) reddedildi:** yasal saklama yükümlülüğü audit log'a değil **finansal
+kayıtlara** aittir; audit log onların yerine geçmez. Kişisel veriyi gereğinden uzun tutmak da
+bir yükümlülüktür, avantaj değil.
+
+"12 ay" verinin ömrü değil, **sıcak veritabanında kalma süresidir** — süresi dolan kayıtlar
+silinmeden önce arşivlenir.
+
+### Önce arşiv, sonra silme
+
+Süreç ikisinin arasında ölürse satırlar hâlâ veritabanındadır ve bir sonraki çalıştırma onları
+**yeniden** arşivler: sonuç, arşivde yinelenen kayıtlardır. Ters sıra (önce sil, sonra arşivle)
+**veri kaybı** üretirdi. Yinelenen arşiv kaydı geri dönülebilir bir sorundur; kaybolan denetim
+kaydı değildir.
+
+Arşiv **JSONL**'dir (satır başına bir JSON): tek dev bir dizinin aksine akış halinde okunabilir,
+milyonlarca satır belleğe alınmadan işlenebilir. Dosya önce `.tmp` yazılıp sonra `rename`
+edilir — `rename` aynı dosya sistemi içinde atomiktir; doğrudan hedefe yazarken süreç ölürse
+geride **yarım bir arşiv** kalır ve o dosya "silinen satırların tam kaydı" sanılırdı.
+
+### Partiler hâlinde, idempotent
+
+Tek dev `DELETE` **atılmaz**: milyonlarca satırlık tek bir ifade tabloyu uzun süre kilitler,
+WAL'ı şişirir ve replikasyon gecikmesi üretir — bakım işi üretimi durdurur hale gelirdi.
+
+Cutoff **mutlak bir tarihtir** (satır sayısına veya önceki çalıştırmaya bağlı değil), bu yüzden
+görev güvenle tekrarlanabilir ve yarıda kesilirse kaldığı yerden devam eder. İkinci çalıştırma
+hiçbir şey silmez ve dosya bile üretmez.
+
+Tek çalıştırmada azami parti sayısı sınırlıdır: ilk çalıştırma yılların birikmiş kaydını
+bulabilir ve sınırsız bir döngü, zamanlanmış işin platform zaman aşımına takılıp **her seferinde
+aynı yerde ölmesine** yol açardı. `hasMore` bir sonraki çalıştırmanın gerekli olduğunu söyler.
+
+### Silme audit log'a YAZMAZ
+
+Silme işlemi kendi `AuditLog` satırını üretseydi tablo hiçbir zaman tam boşalmaz ve görev **kendi
+kendini besleyen** bir döngüye girerdi. Sonuç yalnızca sunucu loguna yazılır — bakım işinin
+gerçekten çalıştığının tek görünür kanıtı budur.
+
+`tenantId`/`actorUserId` **null** olan kayıtlar da politikaya tabidir: tenant'ı veya kullanıcısı
+silinmiş kayıtlar (`onDelete: SetNull`) aksi halde sonsuza kadar birikirdi.
+
+### Tetikleme: platformun zamanlanmış işi
+
+`POST /api/maintenance/audit-retention`, `MAINTENANCE_SECRET` ile korunur. Uygulama içinde
+kalıcı bir zamanlayıcı **kurulmaz**: `setInterval` serverless/çok instance'lı bir deployment'ta
+ya hiç çalışmaz ya da her instance'ta ayrı ayrı çalışır.
+
+**Oturum değil, paylaşılan anahtar:** zamanlanmış bir işin oturumu yoktur; ona bir kullanıcı
+hesabı açmak, o hesabın çalınması hâlinde çok daha geniş bir yetki verirdi. Anahtar,
+karşılaştırmada **sabit zamanlıdır** (`timingSafeEqual`, önce SHA-256 ile eşit uzunluğa
+indirgenerek — farklı uzunlukta `timingSafeEqual` fırlatır ve fırlatmanın kendisi "uzunluk
+tutmadı" bilgisini sızdırırdı).
+
+**Anahtar yanlışsa da yapılandırılmamışsa da yanıt `404`'tür** — `401`/`403` değil. Kimliksiz bir
+çağıran, bu adreste bir bakım endpoint'i olup olmadığını ve yapılandırılmış olup olmadığını
+ayırt edemez. Yanlış yapılandırma yine de **görünürdür**: zamanlanmış iş 404 alır ve platformun
+cron kayıtlarında başarısız görünür.
+
+**Yanıt sayıları içerir, satırları değil:** silinen audit kayıtları kişisel veri taşır; onları
+HTTP yanıtına koymak arşiv dosyasının erişim kontrolünü anlamsız kılardı.
+
+### Kalan risk / kapsam dışı
+
+- **Arşiv bugün YEREL DİSKE yazılıyor.** Soğuk depolamaya taşımak **#185**'in konusudur ve o
+  issue veritabanı sağlayıcısı kararına bağlı olduğu için açık. `AUDIT_ARCHIVE_DIR` ile hedef
+  değiştirilebilir; production'da yedekleme deposuyla aynı yere işaret etmelidir.
+- **Zamanlanmış işin kendisi kurulmadı** — `.github/workflows` veya platform cron'u tanımlamak
+  bir deployment adımıdır ve `MAINTENANCE_SECRET`'ın ortama konmasını gerektirir.
+- **Doğru anahtarla 200 alındığı manuel doğrulanmadı**: `MAINTENANCE_SECRET` test ortamında
+  tanımlı değil, bu yüzden otomatik testler "özellik kapalı" (404) davranışını doğrular.

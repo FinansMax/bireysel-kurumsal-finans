@@ -3198,3 +3198,84 @@ HTTP yanıtına koymak arşiv dosyasının erişim kontrolünü anlamsız kılar
   bir deployment adımıdır ve `MAINTENANCE_SECRET`'ın ortama konmasını gerektirir.
 - **Doğru anahtarla 200 alındığı manuel doğrulanmadı**: `MAINTENANCE_SECRET` test ortamında
   tanımlı değil, bu yüzden otomatik testler "özellik kapalı" (404) davranışını doğrular.
+
+## Veritabanı bağlantı yönetimi (Issue #187)
+
+Sağlayıcı **Neon** olarak karara bağlandı. Neon iki ayrı endpoint sunar ve bu ikisi
+**farklı işler için** vardır; ikisini karıştırmak production'da iki ayrı şekilde canını yakar.
+
+### İki adres, iki iş
+
+| Değişken | Ne | Kim kullanır |
+| --- | --- | --- |
+| `DATABASE_URL` | **Doğrudan** bağlantı | `prisma migrate`, `prisma generate`, `prisma studio` |
+| `DATABASE_POOL_URL` | **Havuzlanmış** (PgBouncer) bağlantı — Neon'da host'unda `-pooler` geçen endpoint | Uygulama çalışma zamanı (`src/lib/prisma.ts`) |
+
+`DATABASE_POOL_URL` **opsiyoneldir**. Tanımsızsa uygulama `DATABASE_URL`'e düşer ve davranış
+bugünküyle **birebir** aynı kalır — lokal geliştirme ve CI hiç etkilenmez.
+
+### Neden bu ayrım gerekli
+
+Her istekte session revocation için bir `User` sorgusu atılıyor (bilinçli karar, bkz. "Session
+Revocation"). Bu, uygulamanın en sıcak sorgusudur. Serverless bir deployment'ta her instance
+**kendi Prisma havuzunu** açar; Prisma'nın varsayılanı `num_cpus * 2 + 1` bağlantıdır ve bu
+sayı instance sayısıyla **çarpılır**. Postgres'in `max_connections`'ı bu çarpımı karşılamaz:
+trafik arttığında uygulama `too many connections` ile **aniden** çöker. Bu, yavaşça kötüleşen
+değil, bir eşiği geçince bir anda oluşan bir arızadır — bu yüzden trafik gelmeden yapılandırılır.
+
+### MIGRATION'LAR POOLER ÜZERİNDEN ÇALIŞTIRILMAZ
+
+Bu, bu bölümün en önemli cümlesidir. Neon'un pooler'ı **transaction modunda** çalışır:
+prepared statement'ları ve oturum düzeyi durumu desteklemez. Prisma Migrate ise bir **advisory
+lock** alır ve DDL'i tek bir oturum boyunca yürütür. Pooler üzerinden bu davranış bozulur;
+migration **yarıda kalabilir** ve şema tutarsız bir durumda bırakılabilir.
+
+Bu yüzden `prisma/schema.prisma`'daki `datasource` bloğu **bilerek** `DATABASE_URL`'e bağlı
+kalır. Havuzlanmış adres şemaya hiç girmez; yalnızca çalışma zamanında `PrismaClient`
+yapıcısına `datasourceUrl` olarak verilir.
+
+**Reddedilen alternatif — Prisma'nın `directUrl` alanı.** Kanonik çözüm gibi görünür, ama
+`url`'i `DATABASE_POOL_URL`'e bağlamayı gerektirir. O değişken tanımsız olduğunda — lokal
+geliştirme, CI, `docker compose` ile ayağa kalkan her kurulum — Prisma **hiç** çalışmaz;
+`env()` içinde geri düşüş ifade edilemez. Programatik çözüm aynı ayrımı sağlar ve havuz
+yapılandırılmamışken hiçbir şeyi değiştirmez.
+
+Bu kural bir yorumla değil, bir testle korunuyor: `integration/db-connection.spec.ts` şema
+dosyasını okur ve `datasource` bloğunda `DATABASE_POOL_URL` geçerse **kırmızıya döner**.
+
+### Uygulama başına `connection_limit`
+
+Havuzlanmış adrese, operatör kendisi belirtmemişse `connection_limit=5` eklenir.
+
+Pooler'daki limit **sunucu genelindedir**; istemci tarafında sınır koymazsak tek bir instance
+havuzun tamamını tüketip diğer instance'ları aç bırakabilir. 5, Neon'un pooled endpoint'inin
+karşıladığı istemci sayısıyla serverless instance başına makul bir paydır.
+
+**Operatörün açık tercihi ezilmez:** adreste zaten bir `connection_limit` varsa dokunulmaz.
+Sessizce 20'yi 5'e düşürmek, yapılandırmayı yalancı hale getirirdi.
+
+### Ölçüm: 50 eşzamanlı kimlikli istek
+
+Kabul kriteri varsayımla değil, ölçümle kapatıldı. Sonuç ve yöntem PR'da; özet: 50 eşzamanlı
+kimlikli `GET /api/users/me` isteği (her biri session revocation sorgusunu tetikler) **sıfır
+hata** ile tamamlandı, `too many connections` (P1001) veya havuz zaman aşımı (P2024)
+görülmedi.
+
+Ölçüm **lokal PostgreSQL'e** karşı yapıldı; Neon'un pooler'ı henüz hesap bağlı olmadığı için
+devrede değildi. Yani ölçülen şey **Prisma'nın kendi havuz davranışıdır** — 50 eşzamanlı istek
+sınırlı sayıda bağlantı üzerinden sıraya girer, yeni bağlantı açmaya çalışıp reddedilmez. Bu,
+kabul kriterinin doğrulanabilir yarısıdır.
+
+### Kalan risk / kapsam dışı
+
+- **Neon pooler'ı gerçek trafikle doğrulanmadı.** `DATABASE_POOL_URL` production ortamına
+  konduktan sonra aynı ölçüm oraya karşı tekrarlanmalıdır; bu, hesap erişimi gerektirdiği için
+  bu PR'ın dışındadır.
+- **`connection_limit=5` bir başlangıç değeridir**, ölçülmüş bir optimum değil. Doğru değer
+  instance sayısına ve Neon planının bağlantı kotasına bağlıdır; ilk yük altında gözden
+  geçirilmelidir.
+- **Deployment hedefi hâlâ bağlayıcı değil.** Migration'ların hangi adımda ve hangi adresle
+  koşacağı (`DATABASE_URL` ile, pooler'sız) `docs/deployment.md`'ye yazıldı, ama pipeline
+  kurulmadı — `#185`'in konusu.
+- **`jwt` callback sorgusu değiştirilmedi.** Issue açıkça bunu şart koşuyordu; bağlantı
+  yönetimi o sorguyu ucuzlatmaz, yalnızca yükünü taşınabilir kılar.

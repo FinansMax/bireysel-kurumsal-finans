@@ -12,7 +12,14 @@ updates:
     # Açık PR sayısı sınırlı: sınırsız bırakmak, incelenmeyen PR'ların birikip
     # hepsinin görmezden gelinmesiyle sonuçlanır — az sayıda ama gerçekten bakılan
     # PR daha iyidir.
-    open-pull-requests-limit: 5
+    #
+    # 5'TEN 10'A ÇIKARILDI (Issue #189 sonrası, gerçek bir olaydan sonra): limit 5 iken
+    # kuyruk beş rutin güncellemeyle doldu ve Next.js 16.3.3'ün İKİ CRITICAL RCE düzeltmesini
+    # taşıyan sürüm güncellemesi HİÇ AÇILAMADI. Dependabot'un ayrı "security update" akışı da
+    # devreye girmedi, çünkü o advisory'ler GitHub global advisory veritabanında yoktu.
+    # Yani limit, doğrudan bir güvenlik yamasını geciktirdi. 10, hem birikmeyi önler hem de
+    # rutin güncellemelerin kritik olanları kuyrukta tutmasını engeller.
+    open-pull-requests-limit: 10
     labels:
       - dependencies
     commit-message:

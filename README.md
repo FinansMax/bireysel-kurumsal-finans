@@ -3060,6 +3060,59 @@ desen).
 - Var olan tenant'lara toplu seed basan CLI/migration script'i.
 - Seed'in kullanıcı tarafından "sıfırla" ile yeniden çalıştırılması.
 
+## Güvenlik kararı: bağımlılık taraması tek başına yetmez
+
+Next.js **16.3.3**, iki **Critical** açığı kapatan bir yama sürümüdür:
+
+| Advisory | CVSS | Etkilenen | Ne |
+| --- | --- | --- | --- |
+| `GHSA-p293-qw3h-jr36` | 9.0 | `>= 16.0 < 16.3.3` | Windows barındırmada path traversal → kimliksiz RCE |
+| `GHSA-2xp9-vwfh-vxw4` | 9.5 | `< 16.3.3` | Image Optimization AVIF → `sharp`/`libheif` → kimliksiz RCE |
+
+Bu repo `16.3.0`'daydı, yani **her iki aralığın da içindeydi**.
+
+### Kritik ders: `npm audit` bunları BİLDİRMEDİ
+
+Yükseltme anında `npm audit` çalıştırıldı ve çıktısında `next` **hiç geçmiyordu** — yalnızca
+`prisma`/`@prisma/config`/`deepmerge-ts` bulguları vardı. Sebep: her iki advisory de o an
+GitHub **global advisory veritabanında yoktu** (`gh api advisories/GHSA-...` → `404`); yalnızca
+`vercel/next.js` deposunun kendi advisory sayfalarında yayınlanmışlardı. npm'in danışma
+veritabanı da onları henüz almamıştı.
+
+Sonuç: **tarama aracının sessizliği, güvende olduğumuz anlamına gelmez.** CVSS 9.0 ve 9.5
+seviyesinde iki RCE, `npm audit`'e göre yoktu.
+
+**Karar:** bağımlılık taraması (`npm audit` + Dependabot) gerekli ama **yeterli değildir**.
+Framework advisory'leri **ayrıca** takip edilir:
+
+- `next`, `next-auth` ve `prisma` için upstream release notları/advisory sayfaları düzenli
+  okunur; Dependabot'un sessizliği kanıt sayılmaz.
+- Bir yama sürümünün release notunda "security fixes" geçiyorsa, o sürüm **rutin bir güncelleme
+  gibi kuyruğa alınmaz**.
+- Lockstep sürümlenen paketler (`next` + `eslint-config-next`) **birlikte** yükseltilir; ayrı
+  bırakmak, lint yapılandırmasının yamalı, çalışma zamanının yamasız kalmasına yol açar — bu
+  olayda Dependabot tam olarak bunu önerdi (yalnızca `eslint-config-next` için PR açtı).
+
+### İkinci advisory bize dokunuyor muydu?
+
+Ölçüldü, varsayılmadı:
+
+- **`next/image` uygulamada hiç kullanılmıyor** — `src/` içinde tek bir `<Image>` veya
+  `next/image` import'u yok (`src/proxy.ts`'teki iki referans yalnızca matcher yorumu).
+- **`images.formats` varsayılanı `['image/webp']`** (doğrulandı:
+  `node_modules/next/dist/shared/lib/image-config.js`). AVIF **opt-in**'dir ve
+  `next.config.ts`'te `images` bloğu **hiç yok** — yani AVIF üretimi kapalı.
+- **`remotePatterns` boş** (varsayılan): `/_next/image` uzak URL getiremez.
+- **Kullanıcı dosya yüklemesi yok**; `public/` yalnızca beş statik SVG içeriyor.
+- Ancak **`sharp@0.35.3` ağaçta var** (`next`'in geçişli bağımlılığı) ve `/_next/image`
+  endpoint'i, kodda `<Image>` kullanılmasa da bir Next uygulamasında **mevcuttur**.
+
+**Değerlendirme:** ikinci advisory'ye maruziyetimiz düşük görünüyor, ama **sıfır olduğu
+iddia edilmiyor** — endpoint var ve zafiyetli kütüphane ağaçta. Birinci advisory (Windows path
+traversal) ise geliştirme makineleri Windows olduğu için doğrudan ilgilidir.
+
+**Kalan risk:** production hedefi henüz belirlenmedi (#185/#187 açık). Hedef Windows tabanlı bir
+barındırma olursa birinci advisory sınıfı yeniden değerlendirilmelidir.
 ## AuditLog saklama ve arşivleme (Issue #188)
 
 `AuditLog` her state değiştiren işlemde bir satır yazıyor ve **hiçbir zaman silinmiyordu**. Bir

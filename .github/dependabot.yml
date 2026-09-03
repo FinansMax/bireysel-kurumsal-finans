@@ -1,0 +1,49 @@
+# Bağımlılık güncellemeleri (Issue #189).
+#
+# NEDEN VAR: repo'da bağımlılık açıklarını bildiren hiçbir mekanizma yoktu. Bir açık,
+# birileri haberi duyana kadar görünmez kalıyordu.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    # Açık PR sayısı sınırlı: sınırsız bırakmak, incelenmeyen PR'ların birikip
+    # hepsinin görmezden gelinmesiyle sonuçlanır — az sayıda ama gerçekten bakılan
+    # PR daha iyidir.
+    #
+    # 5'TEN 10'A ÇIKARILDI (Issue #189 sonrası, gerçek bir olaydan sonra): limit 5 iken
+    # kuyruk beş rutin güncellemeyle doldu ve Next.js 16.3.3'ün İKİ CRITICAL RCE düzeltmesini
+    # taşıyan sürüm güncellemesi HİÇ AÇILAMADI. Dependabot'un ayrı "security update" akışı da
+    # devreye girmedi, çünkü o advisory'ler GitHub global advisory veritabanında yoktu.
+    # Yani limit, doğrudan bir güvenlik yamasını geciktirdi. 10, hem birikmeyi önler hem de
+    # rutin güncellemelerin kritik olanları kuyrukta tutmasını engeller.
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+    commit-message:
+      prefix: chore
+    ignore:
+      # NEXT-AUTH OTOMATİK GÜNCELLENMEZ (Issue #189 kararı).
+      #
+      # Kütüphane BETA sürümde ve bu repo'nun session revocation duruşu Auth.js'in İÇ
+      # davranışına dayanıyor: `jwt` callback'inde `null` dönüldüğünde session action'ın
+      # token'ı yeniden imzalamak yerine cookie'yi temizlemesi (bkz. README "Session
+      # Revocation" ve `src/lib/auth/config.ts`). Beta sürümler arasında bu davranışın
+      # değişmesi mümkündür ve otomatik birleştirilen bir güncelleme, revocation'ı
+      # SESSİZCE devre dışı bırakabilirdi. Güncelleme elle, testlerle birlikte yapılır.
+      - dependency-name: next-auth
+      # Prisma da elle: şema/migration uyumu ve generate adımı sürüm değişiminde
+      # kırılabilir; CI'da yakalanır ama incelenmeden birleştirilmemeli.
+      - dependency-name: prisma
+      - dependency-name: "@prisma/client"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+    commit-message:
+      prefix: chore

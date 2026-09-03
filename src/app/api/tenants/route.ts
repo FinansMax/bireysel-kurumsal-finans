@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { isEmailVerified } from "@/lib/auth/email-verification";
 import { requireUser } from "@/lib/auth/guard";
 import { checkRateLimit } from "@/lib/rate-limit/guard";
 import { RATE_LIMIT_BUCKETS, RATE_LIMIT_POLICIES } from "@/lib/rate-limit/policies";
@@ -45,6 +46,22 @@ export async function POST(request: Request) {
   }
 
   const { name, slug } = body as Record<string, unknown>;
+
+  // DOĞRULANMAMIŞ HESAP TENANT OLUŞTURAMAZ (Issue #190).
+  //
+  // Gerekçe: doğrulama, hesabın sahibine gerçekten ulaşılabildiğini kanıtlar; para ve ekip
+  // verisi ancak o noktadan sonra devreye girmelidir. Girişi TAMAMEN engellemek
+  // reddedildi — e-posta gecikmesinde (spam kutusu, kurumsal gateway) kullanıcıyı
+  // hesabından kilitlerdi.
+  //
+  // 403, 401 DEĞİL: kimlik doğrulanmış, yetki eksik (bkz. `docs/architecture.md` status
+  // sözlüğü). Mesaj ANLAŞILIR olmalı — kullanıcı ne yapması gerektiğini bilmeli.
+  if (!(await isEmailVerified(user.id))) {
+    return NextResponse.json(
+      { error: "Please verify your e-mail address before creating a workspace." },
+      { status: 403 },
+    );
+  }
 
   const result = await createTenant(user.id, { name, slug });
 

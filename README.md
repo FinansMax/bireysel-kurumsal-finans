@@ -2821,3 +2821,380 @@ değilken yapılandırılmış loglama TAM olarak çalışmaya devam eder."* Bug
 budur. SDK bağlandığında `beforeSend` içinde `sanitizeMetadata()` mantığı uygulanmalı,
 `sendDefaultPii: false` olmalı ve raw token taşıyan URL'lerin query string'i atılmalıdır (issue'da
 yazılı). Kritik olay alarmları (#183 madde 3) kod değil, Sentry panosu yapılandırmasıdır.
+
+## Saat dilimi: referans tenant'tır (Issue #134)
+
+Üründe hiçbir saat dilimi katmanı yoktu ve **üç ayrı yer üç farklı referans** kullanıyordu:
+
+| Yer | Eski referans |
+| --- | --- |
+| İşlem formu varsayılanı | Sunucunun **yerel** günü |
+| Liste gösterimi (`toISOString().slice(0,10)`) | **UTC** günü |
+| `Transaction.occurredAt` varsayılanı | Sunucunun **anı** |
+
+Sunucu UTC ise fark görünmez — bu yüzden hata hem CI'da hem geliştirme makinesinde **sessiz**
+kalıyordu. Sunucu UTC+3 ise gece yarısı civarındaki kayıtlar listede **bir gün kaymış**
+görünüyordu.
+
+Finansal bir üründe bunun bedeli görüntü hatası değildir: bir işlemin hangi **güne**, dolayısıyla
+hangi **döneme** düştüğü raporlamanın doğrudan girdisidir.
+
+### Karar: referans `Tenant.timeZone`
+
+Kullanıcının tarayıcısı referans **alınmaz**: aynı tenant'ın iki üyesi farklı şehirlerdeyse aynı
+raporun farklı çıkması, çözdüğü sorundan büyük bir sorun yaratırdı.
+
+"Her şey UTC, gösterim de UTC" alternatifi daha basitti ama Türkiye'de UTC+3 ile çalışan bir ekip
+için gece 01:00'de girilen kayıt UTC'de "dün" olur — kullanıcıya "benim girdiğim tarih bu değildi"
+dedirtir.
+
+### Karar: `occurredAt` bir AN olarak kalır
+
+`@db.Date`'e çevirmek geri dönüşü olmayan bir migration'dır ve ileride saatli kayıt (ör. tahsilat
+anı, Epic 15) gerektiğinde yolu kapatır. Gün hesabı, saklanan **anın** tenant saat diliminde
+yorumlanmasıyla yapılır.
+
+### Mevcut kayıtlar dönüştürülmedi
+
+Varsayılan `Europe/Istanbul`; bugüne kadarki tüm kayıtlar tek saat diliminde girildiği için bu
+varsayılan **geçmişi de doğru yorumlar**. Migration mevcut satırlara dokunmaz.
+
+### Tek yardımcı modül
+
+`src/lib/time/tenant-time.ts` — `formatDateInTimeZone()`, `todayInTimeZone()`,
+`isValidTimeZone()`, `resolveTenantTimeZone()`. Ekranlar tarih aritmetiğini elle yapmaz.
+
+`timeZone`, `ActiveTenant` tipine eklendi: gün/dönem hesabı yapan her ekran zaten aktif tenant'ı
+çözüyor, dolayısıyla ek sorgu yok ve referansın **unutulması** zorlaşıyor.
+
+**Bağımlılık eklenmedi.** `date-fns-tz`/`luxon` yerine platformun `Intl` API'si; IANA veritabanı
+zaten Node'un içinde. Saat dilimi doğrulaması da elle tutulan bir allowlist değil, `Intl`'e
+sorarak yapılıyor — liste yıl içinde değişir ve kopyası bir sonraki tzdata güncellemesinde yanlış
+olurdu.
+
+**Okuma tarafında geçersiz değer varsayılana düşer, yazma tarafında reddedilir.** DB'deki değer
+teoride geçersiz olabilir; o durumda `Intl` fırlatır ve tüm liste sayfası çökerdi — bir ayar
+yüzünden veriye erişimin tamamen kaybolması kabul edilemez.
+
+### Kalan risk / kapsam dışı
+
+- **Ayar ekranı yok.** `Tenant.timeZone` şemada ve okuma yolunda var, ama **değiştirilebilir bir
+  arayüzü yok** — tenant ayarları ekranı #86'nın konusudur. Bugün değer yalnızca varsayılandır.
+- **Rapor dönem sınırları hâlâ UTC.** `src/lib/finance/aggregation.ts` ay başı/sonu sınırlarını
+  `Date.UTC` ile kuruyor. Bu PR işlem listesi ve form varsayılanını hizaladı; raporlama
+  tarafının aynı referansa taşınması ayrı bir adımdır ve Epic 7 ekranlarıyla birlikte ele
+  alınmalıdır.
+- **Dashboard ve borç/alacak listelerindeki tarih gösterimi** hâlâ `toISOString().slice(0,10)`
+  kullanıyor; aynı sebeple ayrı adıma bırakıldı.
+
+## E-posta doğrulama (Issue #190)
+
+`User.emailVerified` şemada vardı ama **hiçbir yerde yazılmıyor ve okunmuyordu**. Kullanıcı
+yanlış yazdığı bir e-postayla kayıt olabiliyordu; şifre sıfırlama akışı o hesaba sonsuza dek
+erişilemez hâle geliyor ve destek yükü doğuruyordu. Sahte hesap üretimi de serbestti.
+
+### Token deseni: `PasswordResetToken` ile birebir aynı
+
+`randomBytes(32)`, DB'de yalnız SHA-256 hash'i, `expiresAt`, tek kullanımlık, tüketim **tek
+atomik `updateMany`** ile (invariant #6). Yeni bir desen icat edilmedi.
+
+**Neden ayrı bir model** (`PasswordResetToken`'ı yeniden kullanmak yerine): iki akışın ömürleri
+ve iptal kuralları farklıdır — sıfırlama 30 dakika, doğrulama **24 saat**. Tek modele
+sıkıştırmak "bu token hangi akışa ait" ayrımını bir `type` kolonuyla çözmeyi ve **her sorguya o
+filtreyi eklemeyi** gerektirirdi; unutulduğu anda bir akışın token'ı diğerinde geçerli olurdu.
+
+**Neden 24 saat:** doğrulama linki kullanıcının o an online olmasını gerektirmez ve e-posta
+gecikmeleri saatler sürebilir. Aciliyet farkı da var — sızmış bir doğrulama token'ı en fazla
+"e-posta doğrulandı" der, **hesabı devralmaz**.
+
+### Doğrulanmamış hesap ne yapabilir?
+
+**Giriş yapabilir ve kendi profilini görebilir; ama çalışma alanı oluşturamaz ve davet kabul
+edemez** (403).
+
+Doğrulama, hesabın sahibine gerçekten ulaşılabildiğini kanıtlar; **para ve ekip verisi ancak o
+noktadan sonra** devreye girmelidir. Girişi tamamen engellemek **reddedildi**: e-posta
+gecikmesinde (spam kutusu, kurumsal gateway) kullanıcıyı hesabından kilitlerdi.
+
+Kontrol tek bir yerden okunur (`isEmailVerified()`) — iki ayrı yerde uygulandığı için
+kopyalanan bir kontrol, birinin unutulmasıyla sonuçlanırdı.
+
+### Enumeration duruşu korundu
+
+`resend-verification` **daima aynı yanıtı** döner: e-posta kayıtlı olsun olmasın, hesap
+doğrulanmış olsun olmasın. Aksi halde endpoint "şu e-posta kayıtlı mı" **ve** "doğrulanmış mı"
+sorularının ücretsiz bir oracle'ı olurdu. Token hatası da ayrıştırılmaz — bulunamadı / süresi
+doldu / zaten kullanıldı hepsi aynı `400` (invariant #7).
+
+### POST, GET değil
+
+`verify-email` bir `GET` olsaydı, **e-posta istemcisinin link ön-getirmesi** token'ı kullanıcı
+tıklamadan tüketebilirdi (invariant #4, `/reset-password` ile aynı gerekçe). Sayfa token'ı
+otomatik POST eder; `useRef` ile tek çağrı garantilenir çünkü React geliştirme modunda efektler
+iki kez çalışır ve token tek kullanımlıktır.
+
+### Gönderim best-effort
+
+Doğrulama e-postası gönderilemese de **kayıt başarılı sayılır** (201). Aksi halde sağlayıcı
+kesintisi, kullanıcının hiç hesap açamaması anlamına gelirdi; kullanıcı "tekrar gönder" ile
+ilerleyebilir.
+
+`credentialsChangedAt` **bumplanmaz**: e-posta doğrulamak bir credential değişikliği değildir ve
+kullanıcıyı tüm oturumlarından düşürmek (#26/#186) burada yanlış olurdu.
+
+### Kalan risk / kapsam dışı
+
+- **Arayüzde kalıcı uyarı şeridi yok.** Issue "doğrulanmamış kullanıcıya arayüzde kalıcı bir
+  uyarı şeridi ve tekrar gönder bağlantısı" istiyor; bu PR **API + doğrulama sayfasını**
+  getiriyor, kabuğa şerit eklemiyor. Kullanıcı bugün 403 mesajıyla karşılaşıyor ve mesaj ne
+  yapması gerektiğini söylüyor. Şerit ayrı bir adım.
+- **E-posta adresi değiştirme akışı** kapsam dışı (issue'da yazılı); `/api/users/me` e-postayı
+  bilerek değiştirmiyor.
+- Gerçek sağlayıcıyla uçtan uca teslim **manuel doğrulanmadı** — #180'in Resend anahtarı hâlâ
+  bekliyor. `EMAIL_PROVIDER=console` ile tüm akış test edildi.
+
+## Bağımlılık güvenliği (Issue #189)
+
+### `next-auth` tam sürüme sabitlendi
+
+`^5.0.0-beta.32` → `5.0.0-beta.32`. Kütüphane **beta** sürümde ve `^` ile açık bırakılması, bir
+`npm install`'ın beta'nın yeni bir sürümünü çekip **auth davranışını sessizce değiştirmesi**
+anlamına geliyordu.
+
+Bu repo'nun session revocation duruşu Auth.js'in **iç davranışına** dayanıyor: `jwt`
+callback'inde `null` dönüldüğünde session action'ın token'ı yeniden imzalamak yerine cookie'yi
+temizlemesi (bkz. "Session Revocation"). Beta sürümler arasında bu değişebilir ve fark
+edilmeden revocation devre dışı kalabilirdi. Finansal bir üründe auth katmanının kontrolsüz
+güncellenmesi kabul edilebilir bir risk değil.
+
+**Kabul edilen kalan risk:** sabitleme, güvenlik yamalarını da otomatik almamak demektir.
+Bunun karşılığı Dependabot'un uyarı üretmesi ve güncellemenin **elle, testlerle** yapılmasıdır.
+
+### Dependabot
+
+`.github/dependabot.yml` — npm ve github-actions için haftalık. `next-auth`, `prisma` ve
+`@prisma/client` **otomatik PR dışında** bırakıldı: üçü de sessizce güncellenmesi kabul
+edilemeyecek katmanlar (auth davranışı, şema/migration uyumu).
+
+Açık PR sayısı 5 ile sınırlı — sınırsız bırakmak, incelenmeyen PR'ların birikip hepsinin
+görmezden gelinmesiyle sonuçlanır.
+
+### `npm audit` CI job'ı EKLENMEDİ — karar bekliyor
+
+Issue bir `npm audit --audit-level=high` job'ı istiyor. **Bugün eklenirse CI anında kırmızıya
+döner:** mevcut ağaçta üç yüksek seviye açık var.
+
+```
+@prisma/config  high
+deepmerge-ts    high   GHSA-ggr8-5vv4-36mx (stack exhaustion)
+prisma          high
+```
+
+`npm audit` bunlar için tek bir çözüm öneriyor: **`prisma@6.12.0`** — yani 6.19.3'ten
+**kırıcı bir düşürme** (`isSemVerMajor: true`). Ölçüldü: `--audit-level=high` exit **1**,
+`--audit-level=critical` exit **0**; `--omit=dev` de temiz **değil** (açık üretim ağacına
+uzanıyor).
+
+Üç seçenek var ve üçü de bir karar gerektiriyor:
+
+1. Prisma'yı 6.12.0'a düşürmek (şema/migration uyumu yeniden doğrulanmalı),
+2. Eşiği `critical`'a çekmek (issue'nun istediğinden zayıf),
+3. Bu üç advisory'yi gerekçesiyle allowlist'e almak.
+
+Karar verilene kadar job **eklenmedi**; eklemek, CI'ı yeşil tutma kuralını ihlal ederdi.
+
+## Modül seed mekanizması (Issue #154)
+
+Bir modül bir tenant'ta **ilk kez** açıldığında, kullanılabilir olması için gereken varsayılan
+verinin kurulması. Kapatıp tekrar açmak veri **kopyalamamalıdır**.
+
+### Seed, modülü açan transaction'ın İÇİNDE çalışır
+
+`ModuleSeed` imzası `prisma` değil **`tx`** alır. Ayrı bir bağlantıda çalıştırmak, seed başarılı
+olup modülün açılmaması (ya da tersi) durumunu mümkün kılardı — ikisi **tek bir atomik
+karardır**.
+
+`seededAt` **aynı yazmada** doldurulur. Ayrı bir yazmada doldurmak, arada düşen bir istekte
+**çift seed** üretirdi.
+
+### Eşzamanlılık
+
+Tüm işlem zaten `runSerializable()` içinde (bağımlılık kuralı nedeniyle, #151). `seededAt`
+okuması ve seed yazması aynı serializable transaction'da olduğu için, eşzamanlı iki "aç"
+isteğinden biri serialization hatası alıp yeniden dener ve ikinci denemede `seededAt` dolu
+bulur. `integration/module-seed.spec.ts` bunu kanıtlıyor.
+
+**İkinci savunma katmanı:** seed fonksiyonları kendi başlarına da idempotent yazılır — unique
+constraint'lere dayanır, "önce say sonra ekle" **yapmaz**.
+
+### Seed başarısız olursa
+
+Transaction **rollback** olur: modül açılmaz, yarım veri kalmaz. Servis `503` döner — **500
+değil** (kullanıcı bir sunucu çökmesi değil, tamamlanmamış bir işlem görmeli; durum tutarlı
+olduğu için tekrar denemek mantıklı) ve **409 değil** (bu bir iş kuralı ihlali değil, kurulum
+hatası).
+
+**Bilinen sınır:** kalıcı olarak başarısız olan bir seed her denemede aynı `503`'ü döndürür;
+gerçek neden yalnızca sunucu logundadır.
+
+### Kapatma seed'i geri almaz
+
+`seededAt` bir kez dolduktan sonra hiç temizlenmez ve kapatma veri silmez.
+
+### Bugün hiçbir modülde seed TANIMLI DEĞİL
+
+Mekanizma hazır, ama kurulacak veri henüz yok: CRM'in aşama şablonu kendi modellerini bekliyor
+(#157), tahsilatın varsayılanı yok. Uydurma bir seed yazmak, var olmayan tablolara referans
+veren ve derlenmeyen bir katalog üretirdi — `permissions` ve `nav` alanlarının başlangıçta boş
+bırakılmasıyla aynı gerekçe.
+
+Bu yüzden `setModuleEnabled()` bir `seeds` **enjeksiyon seam'i** taşır: mekanizmayı gerçek bir
+domain seed'i olmadan test edebilmek için. Katalogu test içinde mutasyona uğratmak reddedildi —
+paylaşılan global durumu değiştirir ve testler arası sızıntı üretirdi. Bu bir **bypass
+değildir**: seed'i atlamaz, yalnızca kaynağını değiştirir; `seededAt` mantığı, transaction
+sınırı ve rollback davranışı aynen çalışır (`emailSender` ve `probeDatabase` seam'leriyle aynı
+desen).
+
+### Kapsam dışı
+
+- Var olan tenant'lara toplu seed basan CLI/migration script'i.
+- Seed'in kullanıcı tarafından "sıfırla" ile yeniden çalıştırılması.
+
+## Güvenlik kararı: bağımlılık taraması tek başına yetmez
+
+Next.js **16.3.3**, iki **Critical** açığı kapatan bir yama sürümüdür:
+
+| Advisory | CVSS | Etkilenen | Ne |
+| --- | --- | --- | --- |
+| `GHSA-p293-qw3h-jr36` | 9.0 | `>= 16.0 < 16.3.3` | Windows barındırmada path traversal → kimliksiz RCE |
+| `GHSA-2xp9-vwfh-vxw4` | 9.5 | `< 16.3.3` | Image Optimization AVIF → `sharp`/`libheif` → kimliksiz RCE |
+
+Bu repo `16.3.0`'daydı, yani **her iki aralığın da içindeydi**.
+
+### Kritik ders: `npm audit` bunları BİLDİRMEDİ
+
+Yükseltme anında `npm audit` çalıştırıldı ve çıktısında `next` **hiç geçmiyordu** — yalnızca
+`prisma`/`@prisma/config`/`deepmerge-ts` bulguları vardı. Sebep: her iki advisory de o an
+GitHub **global advisory veritabanında yoktu** (`gh api advisories/GHSA-...` → `404`); yalnızca
+`vercel/next.js` deposunun kendi advisory sayfalarında yayınlanmışlardı. npm'in danışma
+veritabanı da onları henüz almamıştı.
+
+Sonuç: **tarama aracının sessizliği, güvende olduğumuz anlamına gelmez.** CVSS 9.0 ve 9.5
+seviyesinde iki RCE, `npm audit`'e göre yoktu.
+
+**Karar:** bağımlılık taraması (`npm audit` + Dependabot) gerekli ama **yeterli değildir**.
+Framework advisory'leri **ayrıca** takip edilir:
+
+- `next`, `next-auth` ve `prisma` için upstream release notları/advisory sayfaları düzenli
+  okunur; Dependabot'un sessizliği kanıt sayılmaz.
+- Bir yama sürümünün release notunda "security fixes" geçiyorsa, o sürüm **rutin bir güncelleme
+  gibi kuyruğa alınmaz**.
+- Lockstep sürümlenen paketler (`next` + `eslint-config-next`) **birlikte** yükseltilir; ayrı
+  bırakmak, lint yapılandırmasının yamalı, çalışma zamanının yamasız kalmasına yol açar — bu
+  olayda Dependabot tam olarak bunu önerdi (yalnızca `eslint-config-next` için PR açtı).
+
+### İkinci advisory bize dokunuyor muydu?
+
+Ölçüldü, varsayılmadı:
+
+- **`next/image` uygulamada hiç kullanılmıyor** — `src/` içinde tek bir `<Image>` veya
+  `next/image` import'u yok (`src/proxy.ts`'teki iki referans yalnızca matcher yorumu).
+- **`images.formats` varsayılanı `['image/webp']`** (doğrulandı:
+  `node_modules/next/dist/shared/lib/image-config.js`). AVIF **opt-in**'dir ve
+  `next.config.ts`'te `images` bloğu **hiç yok** — yani AVIF üretimi kapalı.
+- **`remotePatterns` boş** (varsayılan): `/_next/image` uzak URL getiremez.
+- **Kullanıcı dosya yüklemesi yok**; `public/` yalnızca beş statik SVG içeriyor.
+- Ancak **`sharp@0.35.3` ağaçta var** (`next`'in geçişli bağımlılığı) ve `/_next/image`
+  endpoint'i, kodda `<Image>` kullanılmasa da bir Next uygulamasında **mevcuttur**.
+
+**Değerlendirme:** ikinci advisory'ye maruziyetimiz düşük görünüyor, ama **sıfır olduğu
+iddia edilmiyor** — endpoint var ve zafiyetli kütüphane ağaçta. Birinci advisory (Windows path
+traversal) ise geliştirme makineleri Windows olduğu için doğrudan ilgilidir.
+
+**Kalan risk:** production hedefi henüz belirlenmedi (#185/#187 açık). Hedef Windows tabanlı bir
+barındırma olursa birinci advisory sınıfı yeniden değerlendirilmelidir.
+## AuditLog saklama ve arşivleme (Issue #188)
+
+`AuditLog` her state değiştiren işlemde bir satır yazıyor ve **hiçbir zaman silinmiyordu**. Bir
+yıl içinde veritabanının en büyük tablosu o olurdu; `@@index([createdAt])` ve `@@index([action])`
+de onunla birlikte büyürdü. Ayrıca "kişisel veriyi ne kadar süre tutuyorsunuz?" sorusunun bir
+cevabı yoktu.
+
+### Saklama süresi: 12 ay sıcak, öncesi arşiv
+
+Audit log'un iki tüketicisi var: **güvenlik incelemesi** (pratikte haftalar, en fazla aylar
+geriye bakar) ve **uyuşmazlık çözümü** (finansal bir üründe bir işlemin kim tarafından
+değiştirildiği bir mali yıl boyunca sorulabilir). 12 ay ikisini de karşılar ve **tam bir mali
+dönemi** kapsar.
+
+**Daha kısa (90 gün) reddedildi:** yıl sonu kapanışında geçmiş bir çeyreğin kayıtları kaybolurdu.
+**Daha uzun (7 yıl) reddedildi:** yasal saklama yükümlülüğü audit log'a değil **finansal
+kayıtlara** aittir; audit log onların yerine geçmez. Kişisel veriyi gereğinden uzun tutmak da
+bir yükümlülüktür, avantaj değil.
+
+"12 ay" verinin ömrü değil, **sıcak veritabanında kalma süresidir** — süresi dolan kayıtlar
+silinmeden önce arşivlenir.
+
+### Önce arşiv, sonra silme
+
+Süreç ikisinin arasında ölürse satırlar hâlâ veritabanındadır ve bir sonraki çalıştırma onları
+**yeniden** arşivler: sonuç, arşivde yinelenen kayıtlardır. Ters sıra (önce sil, sonra arşivle)
+**veri kaybı** üretirdi. Yinelenen arşiv kaydı geri dönülebilir bir sorundur; kaybolan denetim
+kaydı değildir.
+
+Arşiv **JSONL**'dir (satır başına bir JSON): tek dev bir dizinin aksine akış halinde okunabilir,
+milyonlarca satır belleğe alınmadan işlenebilir. Dosya önce `.tmp` yazılıp sonra `rename`
+edilir — `rename` aynı dosya sistemi içinde atomiktir; doğrudan hedefe yazarken süreç ölürse
+geride **yarım bir arşiv** kalır ve o dosya "silinen satırların tam kaydı" sanılırdı.
+
+### Partiler hâlinde, idempotent
+
+Tek dev `DELETE` **atılmaz**: milyonlarca satırlık tek bir ifade tabloyu uzun süre kilitler,
+WAL'ı şişirir ve replikasyon gecikmesi üretir — bakım işi üretimi durdurur hale gelirdi.
+
+Cutoff **mutlak bir tarihtir** (satır sayısına veya önceki çalıştırmaya bağlı değil), bu yüzden
+görev güvenle tekrarlanabilir ve yarıda kesilirse kaldığı yerden devam eder. İkinci çalıştırma
+hiçbir şey silmez ve dosya bile üretmez.
+
+Tek çalıştırmada azami parti sayısı sınırlıdır: ilk çalıştırma yılların birikmiş kaydını
+bulabilir ve sınırsız bir döngü, zamanlanmış işin platform zaman aşımına takılıp **her seferinde
+aynı yerde ölmesine** yol açardı. `hasMore` bir sonraki çalıştırmanın gerekli olduğunu söyler.
+
+### Silme audit log'a YAZMAZ
+
+Silme işlemi kendi `AuditLog` satırını üretseydi tablo hiçbir zaman tam boşalmaz ve görev **kendi
+kendini besleyen** bir döngüye girerdi. Sonuç yalnızca sunucu loguna yazılır — bakım işinin
+gerçekten çalıştığının tek görünür kanıtı budur.
+
+`tenantId`/`actorUserId` **null** olan kayıtlar da politikaya tabidir: tenant'ı veya kullanıcısı
+silinmiş kayıtlar (`onDelete: SetNull`) aksi halde sonsuza kadar birikirdi.
+
+### Tetikleme: platformun zamanlanmış işi
+
+`POST /api/maintenance/audit-retention`, `MAINTENANCE_SECRET` ile korunur. Uygulama içinde
+kalıcı bir zamanlayıcı **kurulmaz**: `setInterval` serverless/çok instance'lı bir deployment'ta
+ya hiç çalışmaz ya da her instance'ta ayrı ayrı çalışır.
+
+**Oturum değil, paylaşılan anahtar:** zamanlanmış bir işin oturumu yoktur; ona bir kullanıcı
+hesabı açmak, o hesabın çalınması hâlinde çok daha geniş bir yetki verirdi. Anahtar,
+karşılaştırmada **sabit zamanlıdır** (`timingSafeEqual`, önce SHA-256 ile eşit uzunluğa
+indirgenerek — farklı uzunlukta `timingSafeEqual` fırlatır ve fırlatmanın kendisi "uzunluk
+tutmadı" bilgisini sızdırırdı).
+
+**Anahtar yanlışsa da yapılandırılmamışsa da yanıt `404`'tür** — `401`/`403` değil. Kimliksiz bir
+çağıran, bu adreste bir bakım endpoint'i olup olmadığını ve yapılandırılmış olup olmadığını
+ayırt edemez. Yanlış yapılandırma yine de **görünürdür**: zamanlanmış iş 404 alır ve platformun
+cron kayıtlarında başarısız görünür.
+
+**Yanıt sayıları içerir, satırları değil:** silinen audit kayıtları kişisel veri taşır; onları
+HTTP yanıtına koymak arşiv dosyasının erişim kontrolünü anlamsız kılardı.
+
+### Kalan risk / kapsam dışı
+
+- **Arşiv bugün YEREL DİSKE yazılıyor.** Soğuk depolamaya taşımak **#185**'in konusudur ve o
+  issue veritabanı sağlayıcısı kararına bağlı olduğu için açık. `AUDIT_ARCHIVE_DIR` ile hedef
+  değiştirilebilir; production'da yedekleme deposuyla aynı yere işaret etmelidir.
+- **Zamanlanmış işin kendisi kurulmadı** — `.github/workflows` veya platform cron'u tanımlamak
+  bir deployment adımıdır ve `MAINTENANCE_SECRET`'ın ortama konmasını gerektirir.
+- **Doğru anahtarla 200 alındığı manuel doğrulanmadı**: `MAINTENANCE_SECRET` test ortamında
+  tanımlı değil, bu yüzden otomatik testler "özellik kapalı" (404) davranışını doğrular.

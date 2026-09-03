@@ -56,3 +56,8 @@ prisma/*.db
 
 # local/test davet e-postası çıktısı (bkz. src/lib/tenants/invitation-email.ts) — aynı gerekçe.
 /.test-outbox-invitations/
+/.test-outbox-verifications/
+
+# AuditLog arşivi (Issue #188). Silinmeden önce dışa aktarılan denetim kayıtları KİŞİSEL VERİ
+# içerir; repository'ye asla girmemelidir. Production'da bu dizin soğuk depolamaya taşınır (#185).
+/.audit-archive/

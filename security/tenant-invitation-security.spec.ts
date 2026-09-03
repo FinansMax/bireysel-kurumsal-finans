@@ -23,7 +23,11 @@ test.afterAll(async () => {
 
 async function createUserWithMembership(role: MembershipRole, tenantId: string, email?: string) {
   const userEmail = email ?? `sec-invite-${randomUUID()}@example.com`;
-  const user = await prisma.user.create({ data: { email: userEmail } });
+  // #190: doğrulanmamış hesap davet KABUL EDEMEZ. Bu spec'in konusu davet güvenliği;
+  // doğrulama onun ÖN KOŞULU — kurulumda doğrulanmış bir hesap oluşturulur.
+  const user = await prisma.user.create({
+    data: { email: userEmail, emailVerified: new Date() },
+  });
   await prisma.membership.create({ data: { userId: user.id, tenantId, role } });
 
   const sessionCookie = await createSessionCookieHeader({ sub: user.id, email: userEmail });
@@ -35,7 +39,11 @@ async function createUserWithMembership(role: MembershipRole, tenantId: string, 
 
 async function createUserWithoutMembership(email?: string) {
   const userEmail = email ?? `sec-invite-user-${randomUUID()}@example.com`;
-  const user = await prisma.user.create({ data: { email: userEmail } });
+  // #190: doğrulanmamış hesap davet KABUL EDEMEZ. Bu spec'in konusu davet güvenliği;
+  // doğrulama onun ÖN KOŞULU — kurulumda doğrulanmış bir hesap oluşturulur.
+  const user = await prisma.user.create({
+    data: { email: userEmail, emailVerified: new Date() },
+  });
   const sessionCookie = await createSessionCookieHeader({ sub: user.id, email: userEmail });
   return { userId: user.id, email: userEmail, cookie: sessionCookie };
 }

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { markEmailVerified } from "./support/email-verification";
 import { signInWithCredentials } from "./support/auth";
 import { uniqueTestClientIp } from "./support/rate-limit";
 
@@ -41,6 +42,9 @@ async function signUpAndSignIn(page: Page, prefix: string): Promise<string> {
     data: { email, password: PASSWORD },
     headers: apiHeaders(),
   });
+  // #190: doğrulanmamış hesap çalışma alanı kuramaz; bu testin konusu doğrulama DEĞİL,
+  // onun ÖN KOŞULU (bkz. e2e/support/email-verification.ts).
+  await markEmailVerified(email);
   expect(created.status()).toBe(201);
 
   const signedIn = await signInWithCredentials(page.request, email, PASSWORD);

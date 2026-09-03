@@ -52,6 +52,21 @@ export const RATE_LIMIT_POLICIES = {
   REVOKE_SESSIONS: { limit: 5, windowMs: 15 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
   COLLECTIONS_MANAGE: { limit: 60, windowMs: 1 * MINUTES },
+  // VERIFY_EMAIL 10/15dk (Issue #190): token 256 bit olduğu için brute-force birincil tehdit
+  // DEĞİLDİR; amaç, kimlik istemeyen ve her çağrıda DB'ye yazan bu endpoint'in sınırsız
+  // çağrılmasını engellemektir (RESET_PASSWORD ile aynı gerekçe ve aynı değerler).
+  VERIFY_EMAIL: { limit: 10, windowMs: 15 * MINUTES },
+  // RESEND_VERIFICATION 3/15dk: her çağrı bir e-posta GÖNDERİR (gerçek sağlayıcıda
+  // maliyetli) ve aynı adrese tekrar tekrar mesaj göndermek hedef kullanıcı açısından
+  // tacize dönüşebilir. FORGOT_PASSWORD'dan (5) daha dar: doğrulama linki 24 saat yaşıyor,
+  // tekrar isteme ihtiyacı çok daha nadir.
+  RESEND_VERIFICATION: { limit: 3, windowMs: 15 * MINUTES },
+  // MAINTENANCE 10/15dk (Issue #188): bakım endpoint'i PUBLIC'tir (oturum istemez, paylaşılan
+  // bir anahtarla korunur) ve PAHALIDIR (toplu okuma + silme + dosya yazma). Limitin ikinci
+  // işlevi, anahtarın brute-force edilmesini yavaşlatmaktır. 10, günlük çalışan bir cron'un
+  // `hasMore` nedeniyle birkaç kez arka arkaya çağrılmasına yer bırakır; insan eliyle
+  // tetiklenen bir denemeyi de engellemez.
+  MAINTENANCE: { limit: 10, windowMs: 15 * MINUTES },
 } as const satisfies Record<string, RateLimitPolicy>;
 
 /**
@@ -68,4 +83,7 @@ export const RATE_LIMIT_BUCKETS = {
   REVOKE_SESSIONS: "auth:revoke-sessions",
   TENANT_CREATE: "tenant:create",
   COLLECTIONS_MANAGE: "collections:manage",
+  VERIFY_EMAIL: "auth:verify-email",
+  RESEND_VERIFICATION: "auth:resend-verification",
+  MAINTENANCE: "maintenance",
 } as const;

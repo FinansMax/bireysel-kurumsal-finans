@@ -42,6 +42,8 @@ kaldırmadan doğrudan çağrılabilir.
 | `src/lib/tenants/` | Tenant, membership, davet, aktif tenant context'i, doğrulama |
 | `src/lib/finance/` | Finansal modeller (`Account`, `Category`, sonraki issue'larda `Transaction`, ...) |
 | `src/lib/db/` | Veritabanı seviyesi yardımcılar — `runSerializable()` (Serializable + retry) |
+| `src/lib/config/` | Ortam değişkeni çözümleyicileri — her biri tek bir değişken grubunun TEK kaynağı (`app-url`, `email`, `trusted-proxy`, `rate-limit-store`) |
+| `src/lib/health/` | Readiness kontrolü — DB ve migration yoklaması (Issue #184) |
 | `src/lib/audit/` | Audit action sabitleri, sanitization, `writeAuditLog()` |
 | `src/lib/email/` | E-posta transport'u (Resend HTTP API) ve şablonlar; `EmailSender`/`InvitationSender` arayüzleri kendi domain'lerinde kalır |
 | `src/lib/rate-limit/` | `RateLimiter` interface'i, in-memory limiter, policy kataloğu, guard |

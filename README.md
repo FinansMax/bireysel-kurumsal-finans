@@ -55,6 +55,10 @@ cp .env.example .env
 | `EMAIL_PROVIDER` | **Production'da** | `console` \| `resend`. Production'da `console` olamaz. |
 | `EMAIL_API_KEY` | `resend` ise | Sağlayıcı API anahtarı. **Secret** — loglanmaz, `NEXT_PUBLIC_` olamaz. |
 | `EMAIL_FROM` | `resend` ise | Gönderen adresi, ör. `FinansMax <no-reply@example.com>`. |
+| `TRUSTED_PROXY` | **Production'da** | `true` \| `false`. `x-forwarded-for` güvenilir mi? Sessiz varsayılan YOK (Issue #182). |
+| `RATE_LIMIT_STORE` | Hayır | `memory` (varsayılan) \| `redis`. Çok instance'lı deployment'ta `redis` gerekir (Issue #181). |
+| `UPSTASH_REDIS_REST_URL` | `redis` ise | Upstash REST adresi. Eksikse uygulama sessizce `memory`'ye DÜŞMEZ, hata verir. |
+| `UPSTASH_REDIS_REST_TOKEN` | `redis` ise | Upstash REST token'ı. **Secret** — loglanmaz, `NEXT_PUBLIC_` olamaz. |
 | `POSTGRES_*` | Lokal | Yalnızca `docker-compose.yml`'in lokal PostgreSQL container'ını kurmak için. |
 
 **`APP_BASE_URL` neden production'da zorunlu:** Şifre sıfırlama ve tenant daveti
@@ -2602,6 +2606,76 @@ stub'lanan şey bir güvenlik mekanizması değil, üçüncü taraf bir HTTP sı
 - **Bounce/complaint yönetimi, gönderim istatistikleri, e-posta kuyruğu** kapsam dışıdır.
 - **Bildirim e-postaları** Epic 9'un (#74), **e-posta doğrulama akışı** #190'ın konusudur.
 
+## Dağıtık rate limiting (Issue #181)
+
+`InMemoryRateLimiter` **process-local**'dir. Çok instance'lı veya serverless bir deployment'ta
+her instance kendi sayacını tutar (gerçek limit instance sayısıyla çarpılır) ve cold start
+sayacı sıfırlar — saldırgan yeni instance'lara dağılarak limiti pratikte etkisiz kılabilir.
+Yani brute-force koruması kodda **vardı** ama production'da **yok sayılabilirdi**.
+
+`RateLimiter` arayüzü (#27) tam bu değişim için yazılmıştı: **route kodu ve `checkRateLimit()`
+sözleşmesi hiç değişmedi**, yalnızca `limiter.ts`'teki seçim satırı genişledi.
+
+### Atomiklik — bu işin çekirdeği
+
+`InMemoryRateLimiter.consume()` içinde tek bir `await` yoktur; oku+hesapla+yaz tek senkron
+bloktur ve JavaScript'in tek thread'li event loop'unda bu **atomiktir**. Redis'e geçerken bu
+garanti kaybolur: "oku → hesapla → yaz" üç ayrı ağ çağrısı olur ve eşzamanlı istekler limiti
+aşabilir (klasik TOCTOU).
+
+Bu yüzden tüm sliding-window mantığı **tek bir Lua script'inde**, Redis'in kendi tek thread'li
+yürütmesi altında çalışır: `ZREMRANGEBYSCORE` → `ZCARD` → (koşullu) `ZADD` → `PEXPIRE`.
+
+**`MULTI/EXEC` reddedildi:** koşullu yazma (yalnızca izin verilirse `ZADD`) bir transaction
+içinde ifade edilemez — karar için önce `ZCARD` sonucunu okumak, yani transaction'ı bölmek
+gerekirdi.
+
+**Reddedilen deneme bucket'a yazılmaz** (in-memory davranışın aynısı). Aksi halde limiti aşan
+bir saldırgan, her reddedilen denemeyle pencereyi uzatıp meşru kullanıcıyı süresiz kilitleyebilirdi.
+
+**Üye adı benzersizdir** (`<ms>-<rastgele>`): aynı milisaniyedeki iki istek aynı üye adını
+paylaşsaydı `ZADD` ikincisini yeni bir giriş saymaz, üzerine yazardı — iki istek bir sayılır ve
+limit sessizce gevşerdi.
+
+### Store erişilemezse: FAIL-OPEN
+
+Redis'e ulaşılamadığında istek **geçirilir** ve hata loglanır.
+
+**Gerekçe:** rate limiter yardımcı bir korumadır; Redis kesintisinde tüm giriş/kayıt akışını
+kilitlemek, engellediği riskten daha büyük bir hasar üretir — tek bir üçüncü taraf servis,
+uygulamanın tamamını erişilemez kılardı.
+
+**Kabul edilen kalan risk:** kesinti süresince brute-force koruması yoktur. Fail-closed
+isteniyorsa bu **ayrı bir karardır** ve bu satırın değiştirilmesini gerektirir.
+
+Hata logu bucket key'ini (dolayısıyla istemci IP'sini) **içermez** (invariant #7).
+
+### `@upstash/redis` paketi kullanılmadı
+
+Paketin buradaki tek işi tek bir POST isteğini sarmalamak olurdu. Repo `bcrypt` yerine
+`node:crypto`, `zod` yerine elle yazılmış doğrulama kullanıyor; **bu değişiklik hiçbir npm
+bağımlılığı eklemez**. TCP yerine HTTP tercihi de bilinçli: serverless'ta kalıcı TCP havuzu her
+cold start'ta yeniden kurulur ve bağlantı sayısı instance sayısıyla çarpılır.
+
+### Yapılandırma sessizce zayıflamaz
+
+`RATE_LIMIT_STORE` tanımsızsa `memory` kullanılır (lokal geliştirme ve testler bugünkü gibi
+çalışır). Ama:
+
+- Tanınmayan bir değer (`rediss` gibi bir yazım hatası) **her ortamda hata verir** — sessizce
+  in-memory'ye düşmek, tam da bu issue'nun kapatmak istediği "koruma var sanılıyor ama yok"
+  durumudur.
+- `redis` seçiliyken credential eksikse **fırlatır**, sessizce in-memory'ye düşmez: operatör
+  açıkça "paylaşılan store istiyorum" dedi.
+- Seçilen store **başlangıçta bir kez loglanır** (`[rate-limit] store=...`). Production'da
+  yanlışlıkla in-memory'ye düşmüş bir kurulumun bunu fark etmesinin tek yolu budur.
+
+### Doğrulanmamış kalan
+
+Lua script'inin Redis içindeki davranışı (pencerenin gerçekten kayması, `ZADD`'in gerçekten
+yazması) **gerçek bir Upstash örneği gerektirir** ve bu repoda otomatik test edilmemiştir.
+Otomatik testler bu sınıfın sözleşmesini doğrular: tek round-trip (atomiklik iddiasının kanıtı),
+argüman şekli, yanıt çevrimi ve fail-open davranışı.
 ## Tüm oturumları kapatma (Issue #186)
 
 Stateless JWT mimarisinde sign-out yalnızca istemcinin cookie'sini temizler — **çalınmış bir

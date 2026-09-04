@@ -2,6 +2,10 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Bu blok BILEREK DATABASE_URL'e bagli kalir (Issue #187): migration'lar ve prisma generate
+// dogrudan baglanti ister. Havuzlanmis adres (DATABASE_POOL_URL) yalnizca calisma zamaninda,
+// PrismaClient yapicisina verilir - bkz. src/lib/config/database.ts ve src/lib/prisma.ts.
+// Buradaki url'i DATABASE_POOL_URL yapmayin; integration/db-connection.spec.ts bunu korur.
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -75,14 +79,18 @@ model Tenant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships  Membership[]
-  invitations  TenantInvitation[]
-  auditLogs    AuditLog[]
-  accounts     Account[]
-  categories   Category[]
-  transactions Transaction[]
-  debtCredits  DebtCredit[]
-  modules      TenantModule[]
+  memberships         Membership[]
+  invitations         TenantInvitation[]
+  auditLogs           AuditLog[]
+  accounts            Account[]
+  categories          Category[]
+  transactions        Transaction[]
+  debtCredits         DebtCredit[]
+  modules             TenantModule[]
+  deals               Deal[]
+  paymentPlans        PaymentPlan[]
+  paymentInstallments PaymentInstallment[]
+  cheques             Cheque[]
 }
 
 /// Bir tenant'ta bir modülün açık olup olmadığı (Issue #151).
@@ -447,4 +455,119 @@ model AuditLog {
   @@index([actorUserId])
   @@index([action])
   @@index([createdAt])
+}
+
+// CRM Süreç Takibi (Issue #158 / Epic 14): Ödeme planına bağlanan satış süreci modeli.
+model Deal {
+  id        String   @id @default(cuid())
+  title     String
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  plans PaymentPlan[]
+
+  @@index([tenantId])
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  CHEQUE
+  MIXED
+}
+
+enum PaymentPlanStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum InstallmentStatus {
+  PENDING
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+// Tahsilat Ödeme Planı (Issue #165).
+model PaymentPlan {
+  id               String            @id @default(cuid())
+  totalAmount      Decimal           @db.Decimal(19, 4)
+  currency         String
+  method           PaymentMethod
+  downPayment      Decimal           @default(0) @db.Decimal(19, 4)
+  installmentCount Int
+  status           PaymentPlanStatus @default(ACTIVE)
+  notes            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  dealId String
+  deal   Deal   @relation(fields: [dealId], references: [id], onDelete: NoAction)
+
+  installments PaymentInstallment[]
+  cheques      Cheque[]
+
+  @@index([tenantId])
+  @@index([dealId])
+}
+
+// Tahsilat Taksidi (Issue #165).
+model PaymentInstallment {
+  id         String            @id @default(cuid())
+  sequence   Int
+  dueDate    DateTime
+  amount     Decimal           @db.Decimal(19, 4)
+  paidAmount Decimal           @default(0) @db.Decimal(19, 4)
+  status     InstallmentStatus @default(PENDING)
+  paidAt     DateTime?
+  method     PaymentMethod?
+  notes      String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  planId String
+  plan   PaymentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  transactionId String?  @unique
+  cheques       Cheque[]
+
+  @@unique([planId, sequence])
+  @@index([tenantId, dueDate])
+  @@index([tenantId, status])
+}
+
+// Çek Modeli (Issue #165 / Issue #167 relation).
+model Cheque {
+  id           String   @id @default(cuid())
+  chequeNumber String
+  bankName     String
+  dueDate      DateTime
+  amount       Decimal  @db.Decimal(19, 4)
+  currency     String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  planId String?
+  plan   PaymentPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+
+  installmentId String?
+  installment   PaymentInstallment? @relation(fields: [installmentId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([installmentId])
 }

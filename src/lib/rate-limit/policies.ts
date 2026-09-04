@@ -51,6 +51,7 @@ export const RATE_LIMIT_POLICIES = {
   // fazlasıyla karşılar; kimse 15 dakikada beşten fazla kez tüm cihazlarından çıkmaz.
   REVOKE_SESSIONS: { limit: 5, windowMs: 15 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
+  COLLECTIONS_MANAGE: { limit: 60, windowMs: 1 * MINUTES },
   // VERIFY_EMAIL 10/15dk (Issue #190): token 256 bit olduğu için brute-force birincil tehdit
   // DEĞİLDİR; amaç, kimlik istemeyen ve her çağrıda DB'ye yazan bu endpoint'in sınırsız
   // çağrılmasını engellemektir (RESET_PASSWORD ile aynı gerekçe ve aynı değerler).
@@ -81,6 +82,7 @@ export const RATE_LIMIT_BUCKETS = {
   CHANGE_PASSWORD: "auth:change-password",
   REVOKE_SESSIONS: "auth:revoke-sessions",
   TENANT_CREATE: "tenant:create",
+  COLLECTIONS_MANAGE: "collections:manage",
   VERIFY_EMAIL: "auth:verify-email",
   RESEND_VERIFICATION: "auth:resend-verification",
   MAINTENANCE: "maintenance",

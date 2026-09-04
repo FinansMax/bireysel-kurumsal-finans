@@ -1,8 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
+import { API_ERROR_CODES } from "@/lib/api/error-codes";
 import { FormError, SubmitButton, TextField } from "@/components/auth-form";
 
 /**
@@ -26,20 +27,22 @@ import { FormError, SubmitButton, TextField } from "@/components/auth-form";
  *
  * ---
  *
- * `403` DE AYRI BİR DAL ALIR (Issue #232) ve bu, "hata mesajlarını ayrıştırma" kuralının
- * istisnası DEĞİLDİR: gizlenmesi gereken bir iç durum yoktur, çünkü bu endpoint'te 403'ün
- * bugün TEK bir kaynağı vardır — #190'ın e-posta doğrulama kapısı. Kimlik yoksa
- * `requireUser()` 401 döner, girdi/çakışma hataları `createTenant()`ten 400/409 olarak gelir.
- * Yani statü tek başına ayırt edicidir; arayüz bir tahmin ÜRETMEZ, sunucunun zaten söylediği
- * şeyi kullanıcının dilinde tekrar eder.
+ * `403` STATÜYE DEĞİL, YANITTAKİ `code` ALANINA GÖRE AYRIŞTIRILIR (Issue #232).
  *
- * Sunucunun `error` metni doğrudan basılMAZ (yukarıdaki karar): İngilizcedir ve UI sözleşmesi
- * değildir. Kullanıcıya gösterilen, aynı talimatın Türkçe karşılığıdır.
+ * İlk çözüm "bu endpoint'te 403'ün tek kaynağı e-posta doğrulama kapısıdır" varsayımına
+ * dayanıyordu. Bu bugün doğruydu ama bir sözleşme değildi: route'a bir bakım modu ya da yeni
+ * bir RBAC kapısı eklendiği gün form, alakasız bir hataya "e-postanızı doğrulayın" demeye
+ * başlardı ve hiçbir test kırılmazdı. Artık doğrulama dalı YALNIZCA sunucu
+ * `EMAIL_NOT_VERIFIED` kodunu gönderdiğinde açılır; tanınmayan her 403 genel yetkisizlik
+ * metnine düşer (bkz. `src/lib/api/error-codes.ts`).
  *
- * "LÜTFEN DAHA SONRA TEKRAR DENEYİN" ARTIK YALNIZCA GERÇEKTEN GEÇİCİ DURUMLARA AİTTİR
- * (5xx ve ağ hatası). Doğrulanmamış e-postada bu cümle aktif bir yanlış yönlendirmeydi:
- * beklemek durumu düzeltmez, kullanıcının bir eylem yapması gerekir. Bir hata mesajının en
- * kötü hâli yanlış olanı değil, kullanıcıyı işe yaramaz bir eyleme yönlendirenidir.
+ * Kararın diğer yarısı korunur: dallanma `code`a bakar, EKRANA BASILAN metin ise sunucunun
+ * İngilizce `error` alanı değil, onun Türkçe karşılığıdır.
+ *
+ * "LÜTFEN DAHA SONRA TEKRAR DENEYİN" YALNIZCA GERÇEKTEN GEÇİCİ DURUMLARA AİTTİR (5xx ve ağ
+ * hatası). Doğrulanmamış e-postada bu cümle aktif bir yanlış yönlendirmeydi: beklemek durumu
+ * düzeltmez, kullanıcının bir eylem yapması gerekir. Bir hata mesajının en kötü hâli yanlış
+ * olanı değil, kullanıcıyı işe yaramaz bir eyleme yönlendirenidir.
  */
 const TEMPORARY_FAILURE_MESSAGE =
   "Çalışma alanı oluşturulamadı. Lütfen daha sonra tekrar deneyin.";
@@ -50,6 +53,9 @@ const TEMPORARY_FAILURE_MESSAGE =
  * eklendiğinde sessizce yanlış vaatte bulunan dala düşmemesidir.
  */
 const UNEXPECTED_FAILURE_MESSAGE = "Çalışma alanı oluşturulamadı.";
+
+/** Tanınmayan bir 403: sebebini bilmiyoruz, o yüzden UYDURMUYORUZ. */
+const FORBIDDEN_MESSAGE = "Bu işlem için yetkiniz yok.";
 
 const EMAIL_NOT_VERIFIED_MESSAGE =
   "Çalışma alanı oluşturmak için önce e-posta adresinizi doğrulamanız gerekiyor. " +
@@ -64,7 +70,28 @@ type SubmitFailure = {
 /** Ağ hatası (istek sunucuya hiç ulaşmadı) için kullanılan sözde statü. */
 const NETWORK_ERROR_STATUS = 0;
 
-function failureForStatus(status: number): SubmitFailure {
+/**
+ * Yanıttaki makine kodunu okur.
+ *
+ * Gövde JSON olmayabilir (proxy'den dönen bir HTML hata sayfası, boş gövde): o durumda "kod
+ * yok" denir ve çağıran taraf genel dala düşer. Burada throw etmek, asıl hatayı bir JSON
+ * ayrıştırma hatasına çevirirdi.
+ */
+async function readErrorCode(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.json();
+    if (typeof body !== "object" || body === null || !("code" in body)) {
+      return null;
+    }
+
+    const { code } = body as { code: unknown };
+    return typeof code === "string" ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+function failureFor(status: number, code: string | null): SubmitFailure {
   switch (status) {
     case 400:
       return {
@@ -72,7 +99,9 @@ function failureForStatus(status: number): SubmitFailure {
         emailNotVerified: false,
       };
     case 403:
-      return { message: EMAIL_NOT_VERIFIED_MESSAGE, emailNotVerified: true };
+      return code === API_ERROR_CODES.EMAIL_NOT_VERIFIED
+        ? { message: EMAIL_NOT_VERIFIED_MESSAGE, emailNotVerified: true }
+        : { message: FORBIDDEN_MESSAGE, emailNotVerified: false };
     case 409:
       return {
         message: "Bu adres zaten kullanılıyor. Farklı bir ad veya adres deneyin.",
@@ -111,6 +140,21 @@ const RESEND_MESSAGES: Record<Exclude<ResendState, "idle" | "pending">, string> 
   failed: "Doğrulama e-postası gönderilemedi. Lütfen daha sonra tekrar deneyin.",
 };
 
+/**
+ * Başarılı gönderimden sonra düğmenin kapalı kaldığı süre.
+ *
+ * NEDEN GEREKLİ: endpoint invariant #7 gereği HER ZAMAN aynı 200'ü döner — "gönderildi" ile
+ * "zaten doğrulanmış" arasında görünür bir fark yoktur. Onay satırı zaten ekrandayken ikinci
+ * tıklama hiçbir şeyi değiştirmez, kullanıcı ekranın bozuk olduğunu düşünür ve tıklamaya devam
+ * ederek 3/15dk limitine kendini kilitler. Düğmenin görünür şekilde tükenmesi, yanıtı
+ * AYRIŞTIRMADAN verilen tek dürüst geri bildirimdir.
+ *
+ * Bu bir rate limit DEĞİLDİR ve öyleymiş gibi davranılmaz: gerçek sınır sunucuda
+ * (`RESEND_VERIFICATION`, 3/15dk). Buradaki süre yalnızca bir arayüz jestidir, bu yüzden kısa
+ * tutulur — kullanıcıyı gerçekten gerektiğinde tekrar denemekten alıkoymamalı.
+ */
+const RESEND_COOLDOWN_MS = 10_000;
+
 export function CreateTenantForm({ userEmail }: { userEmail: string }) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -118,6 +162,18 @@ export function CreateTenantForm({ userEmail }: { userEmail: string }) {
   const [failure, setFailure] = useState<SubmitFailure | null>(null);
   const [pending, setPending] = useState(false);
   const [resend, setResend] = useState<ResendState>("idle");
+  const [coolingDown, setCoolingDown] = useState(false);
+
+  useEffect(() => {
+    if (!coolingDown) {
+      return;
+    }
+
+    const timer = setTimeout(() => setCoolingDown(false), RESEND_COOLDOWN_MS);
+    // Temizlik ZORUNLU: kullanıcı bu süre içinde başka bir ekrana geçerse sökülmüş bir
+    // bileşenin state'i güncellenmeye çalışılırdı.
+    return () => clearTimeout(timer);
+  }, [coolingDown]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -138,7 +194,7 @@ export function CreateTenantForm({ userEmail }: { userEmail: string }) {
       });
 
       if (!response.ok) {
-        setFailure(failureForStatus(response.status));
+        setFailure(failureFor(response.status, await readErrorCode(response)));
         return;
       }
 
@@ -149,8 +205,8 @@ export function CreateTenantForm({ userEmail }: { userEmail: string }) {
       router.push("/dashboard");
       router.refresh();
     } catch {
-      // Ağ hatası: istek sunucuya hiç ulaşmadı.
-      setFailure(failureForStatus(NETWORK_ERROR_STATUS));
+      // Ağ hatası: istek sunucuya hiç ulaşmadı, dolayısıyla okunacak bir kod da yok.
+      setFailure(failureFor(NETWORK_ERROR_STATUS, null));
     } finally {
       setPending(false);
     }
@@ -174,6 +230,9 @@ export function CreateTenantForm({ userEmail }: { userEmail: string }) {
 
       if (response.ok) {
         setResend("sent");
+        // Cooldown YALNIZCA başarıda başlar: istek başarısız olduysa kullanıcının hemen tekrar
+        // denemesini engellemek, çözebileceği bir sorunda onu bekletmek olurdu.
+        setCoolingDown(true);
         return;
       }
 
@@ -182,6 +241,8 @@ export function CreateTenantForm({ userEmail }: { userEmail: string }) {
       setResend("failed");
     }
   }
+
+  const resendDisabled = resend === "pending" || coolingDown;
 
   return (
     <form onSubmit={handleSubmit} className="max-w-sm space-y-4" noValidate>
@@ -218,10 +279,14 @@ export function CreateTenantForm({ userEmail }: { userEmail: string }) {
           <button
             type="button"
             onClick={resendVerification}
-            disabled={resend === "pending"}
+            disabled={resendDisabled}
             className="rounded-control border border-line px-3 py-1.5 text-sm font-medium text-body transition-colors duration-150 ease-out-soft hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {resend === "pending" ? "Gönderiliyor…" : "Doğrulama e-postasını tekrar gönder"}
+            {resend === "pending"
+              ? "Gönderiliyor…"
+              : coolingDown
+                ? "Gönderildi"
+                : "Doğrulama e-postasını tekrar gönder"}
           </button>
 
           {resend === "sent" ? (

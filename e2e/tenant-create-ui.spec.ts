@@ -171,6 +171,10 @@ test.describe("/tenants/new — çalışma alanı oluşturma", () => {
    * Bu cümle sadece yetersiz değil, AKTİF OLARAK YANLIŞTI: beklemek durumu düzeltmez. Test
    * hem doğru mesajın göründüğünü hem de yanlış olanın GÖRÜNMEDİĞİNİ doğrular — ikincisi
    * olmadan, iki mesajı birden basan bir regresyon fark edilmezdi.
+   *
+   * Buradaki 403 GERÇEK sunucudan gelir ve `code: "EMAIL_NOT_VERIFIED"` taşır. Eşlemenin
+   * statüye değil KODA dayandığı, bir alttaki "tanınmayan 403" testiyle birlikte kanıtlanır:
+   * aynı statü, farklı kod, farklı sonuç.
    */
   test("doğrulanmamış hesap 403'ün gerekçesini görüyor, 'daha sonra tekrar deneyin' görmüyor", async ({
     page,
@@ -195,7 +199,7 @@ test.describe("/tenants/new — çalışma alanı oluşturma", () => {
     expect(await listTenants(page)).toHaveLength(0);
   });
 
-  test("403 ekranındaki aksiyon doğrulama e-postasını MEVCUT endpoint'ten tekrar gönderiyor", async ({
+  test("403 aksiyonu MEVCUT endpoint'e gönderiyor ve düğme cooldown'a giriyor", async ({
     page,
   }) => {
     await signUpAndSignIn(page, "ui-tenant-resend", { verifyEmail: false });
@@ -220,6 +224,68 @@ test.describe("/tenants/new — çalışma alanı oluşturma", () => {
     await expect(page.locator("form").getByRole("status")).toContainText(
       "Doğrulama e-postası gönderildi",
     );
+
+    // COOLDOWN: endpoint invariant #7 gereği hep aynı 200'ü döndüğü için ikinci tıklama görünür
+    // hiçbir şey değiştirmez; düğmenin tükenmesi, yanıtı AYRIŞTIRMADAN verilen tek geri
+    // bildirimdir.
+    await expect(page.getByRole("button", { name: "Gönderildi" })).toBeDisabled();
+
+    // Süre dolunca düğme GERİ AÇILIR. Bu beklenti olmadan, düğmeyi kalıcı olarak kilitleyen
+    // bir regresyon (ör. `setCoolingDown(false)` hiç çalışmaması) testten geçerdi.
+    await expect(
+      page.getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }),
+    ).toBeEnabled({ timeout: 15_000 });
+  });
+
+  /**
+   * Issue #232: 403 eşlemesi STATÜYE değil, yanıttaki `code` alanına dayanır.
+   *
+   * Önceki hâli "bu endpoint'te 403'ün tek kaynağı doğrulama kapısıdır" varsayımıyla
+   * çalışıyordu. Bu test, o varsayımın geri gelmesini engeller: aynı statü, tanınmayan bir
+   * kodla geldiğinde form ALAKASIZ bir hataya "e-postanızı doğrulayın" DEMEMELİ. Yukarıdaki
+   * gerçek-403 testiyle birlikte tam bir çift oluşturur — biri kodun tanındığını, bu ise
+   * tanınmadığında ne olduğunu kanıtlar.
+   *
+   * İki senaryo birden koşulur: tanınmayan bir kod VE hiç kod olmaması. İkincisi, koda geçmeden
+   * önceki bütün 403 üreticilerinin (ve ileride kod koymayı unutan her yeni dalın) doğru tarafa
+   * düştüğünü gösterir.
+   */
+  test("tanınmayan bir 403 kodu doğrulama mesajı üretmiyor", async ({ page }) => {
+    await signUpAndSignIn(page, "ui-tenant-403-code");
+
+    let forbiddenBody: Record<string, unknown> = {
+      error: "Forbidden",
+      code: "MAINTENANCE_MODE",
+    };
+
+    await page.route("**/api/tenants", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        body: JSON.stringify(forbiddenBody),
+      });
+    });
+
+    await page.goto("/tenants/new");
+
+    for (const senaryo of ["tanınmayan kod", "kod yok"]) {
+      await fillForm(page, "Yetkisiz Sirket", `ui-403-${randomUUID()}`);
+      await submit(page);
+
+      await expect(formAlert(page), senaryo).toContainText("Bu işlem için yetkiniz yok");
+      await expect(formAlert(page), senaryo).not.toContainText("doğrulamanız");
+      await expect(
+        page.getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }),
+        senaryo,
+      ).toHaveCount(0);
+
+      // İkinci tur: sunucu hiç `code` göndermiyor.
+      forbiddenBody = { error: "Forbidden" };
+    }
   });
 
   /**

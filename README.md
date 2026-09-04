@@ -3374,3 +3374,87 @@ kabul kriterinin doğrulanabilir yarısıdır.
   kurulmadı — `#185`'in konusu.
 - **`jwt` callback sorgusu değiştirilmedi.** Issue açıkça bunu şart koşuyordu; bağlantı
   yönetimi o sorguyu ucuzlatmaz, yalnızca yükünü taşınabilir kılar.
+
+## Yedekleme ve geri dönüş (Issue #185)
+
+> **RPO = 24 saat. RTO = 4 saat.**
+>
+> Prosedür: `docs/runbook-restore.md` · Politika ve saklama süreleri: `docs/data-retention.md`
+
+Ürün müşterinin **parasal** verisini tutuyor. Bu iki sayı yazılmadan yedekleme tasarımı
+yapılamaz; "elimizde yedek var" bir politika değildir.
+
+### Neden bu iki sayı
+
+**RPO 24 saat** — en kötü durumda 24 saate kadar veri kaybını göze alıyoruz. Bu bir **tavandır**,
+beklenen değer değil: birincil katman olan point-in-time recovery kaybı dakikalar seviyesinde
+tutar. 24 saat, PITR'ın da kullanılamadığı senaryoyu (hesap kilitlenmesi, sağlayıcı kaybı)
+karşılar.
+
+**RTO 4 saat** — ölçülen `pg_restore` süresine göre çok geniştir ve öyle olması kasıtlıdır.
+Ölçülen süre yalnızca geri yüklemedir; gerçek olayda kararın verilmesi, doğru yedeğin seçilmesi,
+indirme, deployment geçişi ve doğrulama eklenir. Dar bir RTO yazmak, karşılanamayacak bir söz
+vermek olurdu.
+
+### İki katman, ve ikincisinin neden var olduğu
+
+| Katman | Ne | Saklama |
+| --- | --- | --- |
+| **Birincil** | Neon otomatik yedek + **PITR** | En az 7 gün hedefleniyor |
+| **İkincil** | Haftalık **taşınabilir** `pg_dump -Fc`, ayrı nesne deposunda | **8 hafta** |
+
+Sağlayıcının kendi yedeği, **hesabın kilitlenmesi** ya da sağlayıcının kendisinin kaybedilmesi
+durumunda erişilemez; snapshot formatı da sağlayıcıya özeldir ve başka bir Postgres'e taşınamaz.
+`pg_dump -Fc` çıktısı herhangi bir Postgres 16'ya `pg_restore` ile yüklenir. İkinci katman,
+**sağlayıcı kilidini kıran tek şeydir** (#95'ten devralınan kısıt) ve birincinin *yerine* değil
+*yanına* gelir.
+
+**8 hafta neden:** bir veri bozulması her zaman aynı gün fark edilmez. Yalnızca son dökümü
+tutmak, "bozulma zaten dökümün içinde" senaryosunda hiçbir işe yaramaz.
+
+**Yedekleme anahtarı yalnızca YAZMA yetkilidir.** Sunucusu ele geçirilen bir sistemde o anahtarla
+yedekler okunamaz ve silinemez. Fidye yazılımı senaryosunda yedekleri koruyan tek şey budur.
+
+### Döküm pooler üzerinden alınmaz
+
+`pg_dump` uzun süren tek bir oturum açar ve tutarlı bir snapshot için oturum durumuna güvenir;
+PgBouncer transaction modunda bu bozulur ve döküm **hata vermeden tutarsız** çıkabilir.
+`scripts/backup-dump.sh` adreste `-pooler` görürse **çalışmayı reddeder**. Aynı gerekçe
+migration'lar için de geçerlidir (bkz. "Veritabanı bağlantı yönetimi (Issue #187)").
+
+### Sessiz yedeksizliğe karşı
+
+Bir yedekleme işinin en tehlikeli hâli, **başarılı görünüp işe yaramaz bir dosya üretmesidir**.
+Script bu yüzden yüklemeden önce dökümü doğrular: `pg_restore --list` ile okunabilirlik, kayıt
+sayısı eşiği ve dökümde **`_prisma_migrations` tablosunun varlığı**. Sonuncusu olmadan geri
+dönüş, migration durumu bilinmeyen bir veritabanı üretir.
+
+### Prova yapıldı — 2026-09-03
+
+"Test edilmemiş bir yedek, yedek değildir." Prosedür varsayılmadı, koşuldu: 31 MB'lık kaynaktan
+`pg_dump -Fc` (**518 ms**) → **boş** hedef veritabanı → `pg_restore` (**639 ms**) → doğrulama.
+
+Altı tablonun kayıt sayısı, 13 tablonun tamamı, **15 uygulanmış migration** ve son migration adı
+kaynakla **birebir** eşleşti; yarım kalmış migration yok. Ayrıntılar ve **dürüst sınırlar**
+(Neon'a karşı değil lokal Postgres 16'ya karşı, 31 MB production ölçeği değil, PITR provası
+yapılmadı): `docs/runbook-restore.md` § 7.
+
+### Geri dönüşten sonra: `AUTH_SECRET`
+
+Geri dönüş oturumları geçersiz kılmaz — `credentialsChangedAt` ve `sessionsRevokedAt` alanları
+da geri sarılır. Yani **geri alınmış bir şifre değişikliği, eski oturumu yeniden geçerli kılar**.
+Olay bir güvenlik ihlaliyse `AUTH_SECRET` döndürülmelidir; runbook § 8 bunu adım olarak taşır.
+
+### Kalan risk / benden bağımsız yapılamayanlar
+
+Bu bölüm hedef durumu tarif eder. Aşağıdakiler **hesap erişimi** gerektirdiği için yapılmadı ve
+**#185 bunlar tamamlanmadan kapatılmamalıdır**:
+
+- Neon'da otomatik yedekleme + **PITR'ın açılması** ve saklama süresinin belgelenmesi.
+- Nesne deposu bucket'ı, şifreleme, **yalnızca yazma** yetkili anahtar.
+- Haftalık işin **zamanlanması** ve son üç dökümün varlığının doğrulanması.
+- Provanın **Neon'a karşı** tekrarlanması.
+- `scripts/backup-dump.sh`'in S3 yükleme adımı **gerçek bir depoya karşı çalıştırılmadı**;
+  döküm alma, doğrulama ve rotasyon mantığı taklit bir `aws` CLI ile uçtan uca koşturuldu.
+- **"Hesabımı sil" akışı yok** — saklama tablosundaki "hesap silinene kadar" satırları bugün
+  fiilen *süresiz* demektir. Ayrı bir issue gerekir.

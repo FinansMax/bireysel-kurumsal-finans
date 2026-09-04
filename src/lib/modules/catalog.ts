@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
-import type { Permission } from "@/lib/authz/permissions";
+import { PERMISSIONS, type Permission } from "@/lib/authz/permissions";
 
 /**
  * Modül katalogu (Issue #151).
@@ -103,7 +103,11 @@ export const MODULE_CATALOG: Record<ModuleKey, ModuleDefinition> = {
     // Tahsilat, tahsil edilecek şeyin (bir süreç/anlaşma) var olmasına dayanır; CRM olmadan
     // "kimden neyi tahsil ediyoruz" sorusunun kayıtta karşılığı yoktur.
     dependsOn: [MODULES.CRM],
-    permissions: [],
+    // #165 ile tahsilat izinleri `permissions.ts`e girdi; bu alanın sözleşmesi gereği buraya
+    // da yazılır. Katalog bugün bu listeyi OKUYAN bir yer içermez — yetkilendirme her zaman
+    // `requirePermission()` üzerinden yapılır (invariant #3). Buradaki liste, "bu modül açılırsa
+    // hangi yetenekler görünür olur" sorusunun tek yerden yanıtıdır.
+    permissions: [PERMISSIONS.VIEW_COLLECTIONS, PERMISSIONS.MANAGE_COLLECTIONS],
     nav: [],
   },
 };

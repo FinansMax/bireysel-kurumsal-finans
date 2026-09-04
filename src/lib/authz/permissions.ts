@@ -42,9 +42,19 @@ export const PERMISSIONS = {
   // kolay yoludur ve bu yüzden MEMBER'a verilmez.
   VIEW_DEBT_CREDITS: "debt-credits:view",
   MANAGE_DEBT_CREDITS: "debt-credits:manage",
-  // tahsilat ve ödeme planı (Issue #165). Okuma (OWNER/ADMIN/MEMBER), Yönetim (OWNER/ADMIN).
+  // Tahsilat ve ödeme planı (Issue #165). Finansal modellerdeki genel kalıbın aynısı: MEMBER
+  // planı ve taksitleri GÖRÜR, ama kuramaz/iptal edemez/tutarını değiştiremez. Bir taksitin
+  // tutarını ya da vadesini değiştirmek, tenant'ın ALACAĞINI yeniden yazmaktır —
+  // `MANAGE_DEBT_CREDITS` ile aynı sınıfta bir yetkidir ve aynı gerekçeyle MEMBER'a verilmez.
   VIEW_COLLECTIONS: "collections:view",
   MANAGE_COLLECTIONS: "collections:manage",
+  // Modül sistemi (Issue #151). GÖRÜNTÜLEME her role verilir — menüyü kurabilmek için hangi
+  // modüllerin açık olduğunu BİLMEK gerekir; bu bilgi bir sır değildir.
+  //
+  // YÖNETİM YALNIZ OWNER'DADIR ve bu, matristeki genel "OWNER+ADMIN yönetir" kalıbının
+  // BİLİNÇLİ istisnasıdır: bir modülü açmak tenant'ın ÜRÜN YÜZEYİNİ değiştirir (yeni ekranlar,
+  // yeni izinler, yeni veri). Bu, `UPDATE_TENANT_SETTINGS` ile aynı sınıfta bir karardır —
+  // matriste bugün OWNER-only olan tek izin odur.
   VIEW_MODULES: "modules:view",
   MANAGE_MODULES: "modules:manage",
 } as const;
@@ -105,6 +115,7 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.MANAGE_DEBT_CREDITS,
     PERMISSIONS.VIEW_COLLECTIONS,
     PERMISSIONS.MANAGE_COLLECTIONS,
+    // ADMIN modülleri GÖRÜR ama AÇAMAZ: ürün yüzeyini değiştirmek OWNER kararıdır.
     PERMISSIONS.VIEW_MODULES,
   ],
   // MEMBER hesapları GÖRÜR ama yönetemez (Issue #46): finansal kayıtları okumak ekibin

@@ -85,15 +85,26 @@ export type CollectionServiceResult<T> =
   | { ok: false; status: 400 | 403 | 404 | 409 | 500 | 503; error: string };
 
 /**
- * Belirtilen tarih üzerine belirtilen ay kadar ekler.
+ * Vade tarihine takvim ayı ekler.
+ *
+ * AYIN SON GÜNÜNE SIKIŞTIRILIR: `setMonth` tek başına taşar — 31 Ocak + 1 ay, Şubat 31
+ * çekmediği için 3 Mart olur. Aylık bir planda ilk vade ayın 29/30/31'i ise bütün vadeler
+ * sessizce kayar ve bir taksit bir öncekinin ayına düşebilir.
+ *
+ * HESAP UTC ÜZERİNDEN YAPILIR, sunucunun yerel saat dilimiyle DEĞİL. `firstDueDate` istemciden
+ * ISO-8601 olarak gelir ve bir AN olarak saklanır; yerel alanlarla (`getDate`/`setMonth`)
+ * hesaplamak, aynı girdinin UTC-5'teki bir sunucuda başka bir vade üretmesi demekti — yani
+ * dağıtım ortamına göre değişen bir ödeme planı. Tenant saat dilimine göre GÖSTERİM ayrı bir
+ * katmandır (Issue #134, `src/lib/time/tenant-time.ts`); burada belirleyici olan, aynı girdinin
+ * her yerde aynı vadeyi üretmesidir.
  */
 function addMonths(date: Date, months: number): Date {
   const d = new Date(date);
-  const day = d.getDate();
-  d.setDate(1);
-  d.setMonth(d.getMonth() + months);
-  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-  d.setDate(Math.min(day, lastDay));
+  const day = d.getUTCDate();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() + months);
+  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, lastDay));
   return d;
 }
 

@@ -12,7 +12,11 @@ test.afterAll(async () => {
   await prisma.$disconnect();
 });
 
-async function createTenant(label: string, crmEnabled = true) {
+async function createTenant(
+  label: string,
+  modules: { crm?: boolean; collections?: boolean } = {},
+) {
+  const { crm = true, collections = true } = modules;
   return prisma.tenant.create({
     data: {
       name: label,
@@ -20,8 +24,8 @@ async function createTenant(label: string, crmEnabled = true) {
       modules: {
         createMany: {
           data: [
-            { moduleKey: "crm", enabled: crmEnabled },
-            { moduleKey: "collections", enabled: crmEnabled },
+            { moduleKey: "crm", enabled: crm },
+            { moduleKey: "collections", enabled: collections },
           ],
         },
       },
@@ -149,26 +153,46 @@ test.describe("Tahsilat ve Ödeme Planı Güvenlik Testleri", () => {
     expect(scopedRes.status()).toBe(404);
   });
 
-  test("crm modülü devre dışıyken collections endpoint'leri 404 döner", async ({ request }) => {
-    // Kontrol grubu: crm modülü açık olan tenant'ta normal çalışır.
-    // Deney: crm modülünü TenantModule kaydıyla explicit olarak kapattığımızda
-    // collections endpoint'inin 404 döndüğü doğrulanır — sistem yüzeyi gizleme kararı.
-    const tenant = await createTenant("SecModuleDisabled", false);
-    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+  test("collections modülü kapalıyken endpoint'ler 404 döner (403 DEĞİL)", async ({ request }) => {
+    // Kapalı modül o tenant için VAR OLMAYAN bir yüzeydir; 403 "bu özellik var ama sen
+    // açmamışsın" bilgisini sızdırırdı (invariant #7 — cross-tenant kayıtlarla aynı duruş).
+    //
+    // BAĞIMLILIK CASCADE'İ BURADA TEST EDİLMEZ ve bu bilinçlidir: #151'in kararına göre
+    // `collections` → `crm` bağımlılığı AÇMA anında (`setModuleEnabled`) zorlanır, okuma
+    // anında değil. Bu testler tenant satırlarını doğrudan yazdığı için o kapıdan geçmez;
+    // dolayısıyla test yalnızca guard'ın kendi kararını doğrular. "Bağımlılık okuma anında da
+    // zorlanmalı mı?" sorusu #151/#152'ye aittir.
+    const disabled = await createTenant("SecModuleDisabled", { collections: false });
+    const disabledOwner = await createUserWithMembership(MembershipRole.OWNER, disabled.id);
 
-    // collections, crm'e bağımlı; crm kapalıyken collections da kapalı sayılır → 404.
-    const res = await request.post(`/api/tenants/${tenant.id}/collections/plans`, {
-      headers: { cookie: owner.cookie },
-      data: {
-        dealId: "irrelevant-id",
-        totalAmount: "100.00",
-        currency: "TRY",
-        method: "CASH",
-        installmentCount: 1,
-        firstDueDate: new Date().toISOString(),
-      },
+    const planBody = {
+      dealId: "irrelevant-id",
+      totalAmount: "100.00",
+      currency: "TRY",
+      method: "CASH",
+      installmentCount: 1,
+      firstDueDate: new Date().toISOString(),
+    };
+
+    const res = await request.post(`/api/tenants/${disabled.id}/collections/plans`, {
+      headers: { cookie: disabledOwner.cookie },
+      data: planBody,
     });
-
     expect(res.status()).toBe(404);
+
+    // KONTROL GRUBU: aynı istek, aynı rol, modül AÇIK. 404 gelmemeli — aksi halde yukarıdaki
+    // beklenti "modül kapalı olduğu için" değil, isteğin başka bir nedenle başarısız
+    // olmasından ötürü yeşil kalırdı (dealId geçersiz olduğu için burada 404 değil 400/404
+    // ayrımı önemlidir: servis "İlişkili süreç bulunamadı" için de 404 döner, bu yüzden
+    // kontrol grubu geçerli bir deal ile kurulur).
+    const enabled = await createTenant("SecModuleEnabled");
+    const enabledOwner = await createUserWithMembership(MembershipRole.OWNER, enabled.id);
+    const deal = await seedDeal(enabled.id);
+
+    const controlRes = await request.post(`/api/tenants/${enabled.id}/collections/plans`, {
+      headers: { cookie: enabledOwner.cookie },
+      data: { ...planBody, dealId: deal.id },
+    });
+    expect(controlRes.status()).toBe(201);
   });
 });

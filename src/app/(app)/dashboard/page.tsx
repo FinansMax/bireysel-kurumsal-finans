@@ -17,6 +17,7 @@ import {
   IconWorkspace,
 } from "@/components/ui/icons";
 import { DirectionChip, Money } from "@/components/ui/money";
+import { formatDateInTimeZone } from "@/lib/time/tenant-time";
 import { IconTile, PageHeader, Panel, PanelHeader } from "@/components/ui/surfaces";
 import { TrendChart, type TrendBar } from "@/components/ui/trend-chart";
 import { requirePageUser } from "@/lib/auth/page-guard";
@@ -198,6 +199,7 @@ export default async function DashboardPage({
           accountsById={accountsById}
           categoryNames={categoryNames}
           hasAccounts={accounts.length > 0}
+          timeZone={tenant.timeZone}
         />
       ) : null}
     </section>
@@ -775,6 +777,7 @@ function RecentSection({
   accountsById,
   categoryNames,
   hasAccounts,
+  timeZone,
 }: {
   rows: ReadonlyArray<{
     id: string;
@@ -788,6 +791,7 @@ function RecentSection({
   accountsById: Map<string, { name: string; currency: string }>;
   categoryNames: Map<string, string>;
   hasAccounts: boolean;
+  timeZone: string;
 }) {
   if (rows.length === 0) {
     return (
@@ -843,10 +847,13 @@ function RecentSection({
                   {row.description ?? "Açıklama yok"}
                 </p>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
-                  {/* Tarih `YYYY-MM-DD` olarak, `toLocaleDateString()` KULLANILMADAN yazılır:
-                      yerelleştirme çıktıyı sunucunun saat dilimine bağlardı (#54'ün kararı). */}
+                  {/* `occurredAt` bir ANDIR: hangi güne düştüğü TENANT'IN saat diliminde
+                      yorumlanır (#134). Önceki `toISOString().slice(0, 10)` daima UTC gününü
+                      basıyordu — aynı kayıt işlemler listesinde bir gün, burada başka bir gün
+                      görünebiliyordu. `toLocaleDateString()` hâlâ kullanılmıyor: çıktıyı
+                      sunucunun locale'ine bağlardı (#54'ün kararı). */}
                   <span className="text-xs text-faint">
-                    {row.occurredAt.toISOString().slice(0, 10)}
+                    {formatDateInTimeZone(row.occurredAt, timeZone)}
                   </span>
                   <span className="text-xs text-faint">{account?.name ?? "—"}</span>
                   <CategoryBadge

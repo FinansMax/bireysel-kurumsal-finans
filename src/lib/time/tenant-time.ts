@@ -93,6 +93,31 @@ export function todayInTimeZone(timeZone: string, now: Date = new Date()): strin
 }
 
 /**
+ * Tenant'ın saat dilimindeki "bugün"ün, TARİH-ONLY değerlerle karşılaştırılabilir karşılığı
+ * (UTC gece yarısı, epoch ms).
+ *
+ * NEDEN AYRI BİR YARDIMCI: bu kod tabanında iki farklı zaman türü var ve karıştırılmaları
+ * sessiz hatalar üretiyor:
+ *
+ * - **AN** (`Transaction.occurredAt`): gerçek bir zaman noktası. Hangi güne düştüğü, tenant'ın
+ *   saat diliminde YORUMLANARAK bulunur → `formatDateInTimeZone()`.
+ * - **TARİH-ONLY** (`DebtCredit.dueDate`): saati olmayan bir gün, veritabanında UTC gece yarısı
+ *   olarak saklanır (`src/lib/finance/validation.ts`). Bu değeri bir saat diliminde
+ *   "yorumlamak" YANLIŞ olur — UTC'nin gerisindeki bir dilimde günü bir gün geriye kaydırır.
+ *
+ * "Vadesi geçti mi" sorusu ikisini karşılaştırır: TARİH-ONLY bir vade ile tenant'ın BUGÜNÜ.
+ * Doğru cevap, tenant'ın bugününü aynı TARİH-ONLY gösterimine çevirmektir — vadeyi bir saat
+ * dilimine çevirmek değil. `Date.UTC(now.getUTCFullYear(), ...)` yapmak, UTC'nin bugününü
+ * kullanırdı: UTC+3'te gece yarısını geçmiş bir tenant için, o gün vadesi dolan kayıtlar
+ * "henüz gecikmedi" görünürdü.
+ */
+export function startOfTodayInTimeZone(timeZone: string, now: Date = new Date()): number {
+  // `todayInTimeZone()` zaten `YYYY-MM-DD` üretiyor; onu UTC gece yarısına sabitlemek, saklanan
+  // tarih-only değerlerle BİREBİR aynı gösterimi verir.
+  return Date.parse(`${todayInTimeZone(timeZone, now)}T00:00:00.000Z`);
+}
+
+/**
  * Tenant'tan gelen saat dilimini güvenli hale getirir.
  *
  * DB'deki değer teoride geçersiz olabilir (elle düzenleme, ileride eklenecek bir ayar

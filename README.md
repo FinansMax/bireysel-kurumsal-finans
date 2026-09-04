@@ -2277,7 +2277,15 @@ kontrollerinin ikinci bir kopyasını doğururdu.
 - **Kısmi ödeme yok** (yukarıdaki `PARTIAL` gerekçesi).
 - **Karşı taraf serbest metindir**; kişi/kurum rehberi (`Contact`) ayrı bir kavram ve ayrı bir
   issue.
-- **Saat dilimi yok (#134)** — vade ve "bugün" karşılaştırması UTC.
+- **Vade karşılaştırması artık TENANT'IN saat dilimine göre** (#134). "Bugün",
+  `startOfTodayInTimeZone(tenant.timeZone)` ile hesaplanır. Önceki hâli UTC'nin gününü
+  kullanıyordu: UTC+3'te gece yarısını geçmiş bir tenant için o gün vadesi dolan kayıtlar
+  "henüz gecikmedi" görünüyordu — gecikme rozeti bir gün geç yanıyordu.
+
+  **`dueDate` bilerek saat dilimine ÇEVRİLMEZ.** O bir AN değil, TARİH-ONLY bir değerdir ve UTC
+  gece yarısı olarak saklanır; bir saat diliminde "yorumlamak" günü UTC'nin gerisindeki
+  dilimlerde bir gün geriye kaydırırdı. Yani `occurredAt` için doğru olan şey burada yanlış
+  olurdu. Karşılaştırmanın iki tarafı da tarih-only kalır.
 
 ## Modül sistemi — çekirdek (Issue #151)
 

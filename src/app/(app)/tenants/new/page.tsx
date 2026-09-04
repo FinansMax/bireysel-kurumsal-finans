@@ -17,7 +17,13 @@ export const metadata: Metadata = {
  * ekranında da kullanılır.
  */
 export default async function NewTenantPage() {
-  await requirePageUser();
+  // Kullanıcının e-postası forma PROP olarak geçer: doğrulanmamış hesap 403 aldığında sunulan
+  // "tekrar gönder" aksiyonu, mevcut `POST /api/auth/resend-verification` endpoint'ini çağırır
+  // ve o endpoint gövdede `email` bekler (Issue #232). Oturumdaki kullanıcıya göre çalışan
+  // ikinci bir endpoint AÇILMADI — gerekçesi `create-tenant-form.tsx`te.
+  //
+  // Sızıntı değildir: kullanıcının KENDİ adresi, kendi oturumunda, kabukta zaten görünür.
+  const user = await requirePageUser();
 
   return (
     <section className="space-y-6">
@@ -31,7 +37,7 @@ export default async function NewTenantPage() {
         </p>
       </div>
 
-      <CreateTenantForm />
+      <CreateTenantForm userEmail={user.email} />
     </section>
   );
 }

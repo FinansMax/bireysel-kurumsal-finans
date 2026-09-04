@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { API_ERROR_CODES } from "@/lib/api/error-codes";
 import { isEmailVerified } from "@/lib/auth/email-verification";
 import { requireUser } from "@/lib/auth/guard";
 import { checkRateLimit } from "@/lib/rate-limit/guard";
@@ -56,9 +57,17 @@ export async function POST(request: Request) {
   //
   // 403, 401 DEĞİL: kimlik doğrulanmış, yetki eksik (bkz. `docs/architecture.md` status
   // sözlüğü). Mesaj ANLAŞILIR olmalı — kullanıcı ne yapması gerektiğini bilmeli.
+  //
+  // `code` ARAYÜZ İÇİNDİR (Issue #232): `error` metni İngilizce ve serbesttir, arayüz ona göre
+  // dallanamaz. Kod olmadan form 403'ün SEBEBİNİ statüden tahmin etmek zorunda kalıyordu; bu
+  // route'a ikinci bir 403 kaynağı (bakım modu, yeni bir RBAC kapısı) eklendiği gün o tahmin
+  // sessizce yanlışa dönerdi. Gerekçenin tamamı: `src/lib/api/error-codes.ts`.
   if (!(await isEmailVerified(user.id))) {
     return NextResponse.json(
-      { error: "Please verify your e-mail address before creating a workspace." },
+      {
+        error: "Please verify your e-mail address before creating a workspace.",
+        code: API_ERROR_CODES.EMAIL_NOT_VERIFIED,
+      },
       { status: 403 },
     );
   }

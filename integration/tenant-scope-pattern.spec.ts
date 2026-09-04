@@ -427,6 +427,54 @@ test.describe("Tenant scoping pattern koruması — tenant-module.ts", () => {
 });
 
 /**
+ * Aynı koruma, tahsilat modülünün servis katmanı için (Issue #165). Bu dosya, bugün tek bir
+ * çağrıda EN ÇOK tenant-scoped sorgu yapan yerdir (plan + taksit, okuma + yazma); scope'u
+ * kaçırılmış tek bir sorgu, başka bir tenant'ın ALACAK kaydını okutur ya da değiştirir.
+ */
+test.describe("Tenant scoping pattern koruması — payment-plan.ts", () => {
+  const COLLECTIONS_SOURCE = readFileSync(
+    path.join(__dirname, "..", "src", "lib", "collections", "payment-plan.ts"),
+    "utf-8",
+  );
+
+  test("tenantScoped() import edilip her sorguda kullanılıyor", () => {
+    expect(COLLECTIONS_SOURCE).toContain('from "@/lib/tenancy/scope"');
+
+    const usageCount = COLLECTIONS_SOURCE.match(/tenantScoped\(/g)?.length ?? 0;
+    // createPaymentPlan (deal + aktif plan kontrolü = 2) + getPaymentPlan (1) +
+    // updatePaymentPlan (updateMany + findFirst = 2) + cancelPaymentPlan (findFirst +
+    // 2 updateMany + findFirst = 4) + listInstallments (1) + updateInstallment
+    // (findFirst + updateMany + findFirst = 3) = en az 13 kullanım.
+    expect(usageCount).toBeGreaterThanOrEqual(13);
+  });
+
+  test("tenant-scoped resource id'siyle sadece-id update/delete/findUnique kullanılmıyor", () => {
+    expect(COLLECTIONS_SOURCE).not.toMatch(/\.paymentPlan\.update\(/);
+    expect(COLLECTIONS_SOURCE).not.toMatch(/\.paymentPlan\.delete\(/);
+    expect(COLLECTIONS_SOURCE).not.toMatch(/\.paymentPlan\.findUnique\(/);
+    expect(COLLECTIONS_SOURCE).not.toMatch(/\.paymentInstallment\.update\(/);
+    expect(COLLECTIONS_SOURCE).not.toMatch(/\.paymentInstallment\.delete\(/);
+    expect(COLLECTIONS_SOURCE).not.toMatch(/\.paymentInstallment\.findUnique\(/);
+
+    // Riskli literal desen: tenantId olmadan, sadece id ile where.
+    expect(COLLECTIONS_SOURCE).not.toMatch(/where:\s*\{\s*id:\s*planId\s*\}/);
+    expect(COLLECTIONS_SOURCE).not.toMatch(/where:\s*\{\s*id:\s*installmentId\s*\}/);
+  });
+
+  test("create sırasında tenantId açıkça yazılıyor (client input'tan türetilmiyor)", () => {
+    // Plan ve taksitler tek `create` içinde (nested `createMany`) yazılır; scope YENİ kayıtta
+    // filtrelenmez, ATANIR — bu yüzden tenantId'nin `data`da açıkça geçtiği doğrulanır.
+    expect(COLLECTIONS_SOURCE).toMatch(/data:\s*\{\s*tenantId/);
+  });
+
+  test("taksit tutarı client'tan gelen bir listeden okunmuyor", () => {
+    // #165'in kararı: taksitler SUNUCUDA türetilir. Birinin ileride istek gövdesindeki
+    // `installments` alanını doğrudan yazmaya başlaması, planın toplamını client'a açardı.
+    expect(COLLECTIONS_SOURCE).not.toMatch(/params\.installments/);
+  });
+});
+
+/**
  * Modül guard'ının SIRA invariant'ı (Issue #152).
  *
  * Bu bir tenant-scope kontrolü değil ama aynı sınıfta bir regresyon korumasıdır: guard'ın

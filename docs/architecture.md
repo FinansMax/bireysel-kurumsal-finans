@@ -123,6 +123,53 @@ export type UpdateRoleResult =
 | 409 | Çakışma (duplicate slug, zaten üye, son OWNER) |
 | 429 | Rate limit (`Retry-After` header'ı ile) |
 
+#### 403 yanıtları makine tarafından okunabilir bir `code` taşır
+
+`403` tek başına "yetki yok" der, **neden** olmadığını söylemez — ve aynı endpoint zamanla
+birden çok nedenle 403 dönebilir. Bu yüzden 403 yanıtları `error` metninin yanında bir `code`
+alanı taşır ve kodlar `src/lib/api/error-codes.ts`teki katalogda tanımlıdır:
+
+```ts
+return NextResponse.json(
+  { error: "Please verify your e-mail address before creating a workspace.", code: API_ERROR_CODES.EMAIL_NOT_VERIFIED },
+  { status: 403 },
+);
+```
+
+**İstemci dallanması statüye DEĞİL koda bakar.** Tanınmayan ya da kodsuz bir 403, generic
+yetkisizlik mesajına düşer.
+
+**Neden (Issue #232):** `/tenants/new` formu 403'ü "bu endpoint'te tek kaynak e-posta doğrulama
+kapısıdır" varsayımıyla eşliyordu. Varsayım o gün doğruydu ama bir sözleşme değildi: route'a
+ikinci bir 403 kaynağı (bakım modu, yeni bir RBAC kapısı) eklendiği gün form, tamamen alakasız
+bir hataya "e-postanızı doğrulayın" demeye başlardı — **ve hiçbir test kırılmazdı.** Sessizce
+yanlış mesaj gösteren bir arayüz, hata veren arayüzden kötüdür: kullanıcı yanlış olduğunu
+anlayamaz.
+
+**`error` metnine göre dallanmak neden değil:** o alan İngilizce, insan okuru için ve serbest
+metindir; ona bakmak, bir hata cümlesindeki yazım düzeltmesini kırıcı bir değişikliğe çevirirdi.
+`code` kararlıdır, çevrilmez ve yalnızca makine okur. Kullanıcıya gösterilen metin arayüzde,
+Türkçe olarak kalır.
+
+**Enumeration sızdırmaz:** kod, isteği YAPAN kullanıcının KENDİ durumunu söyler. İnvariant #7'nin
+yasakladığı şey, geçersizlik SEBEBİNİ ayrıştırmanın saldırgana arama uzayı daraltmasıydı
+(ör. "bu e-posta kayıtlı"); burada öğrenilebilecek tek şey zaten kendi oturumuna aittir.
+
+**Her hata kod almaz.** Bir hataya kod vermek, "arayüzün bu durumu AYRI ele alması gerekiyor"
+demektir; kod yalnızca kullanıcının yapabileceği FARKLI bir eylem varsa anlamlıdır.
+
+Kuralın **iki** savunması vardır ve ikisi de gereklidir:
+
+1. **Tip sistemi — asıl savunma.** Katalog `as const`tur, `ApiErrorCode` union'ını üretir ve
+   ağdan gelen değer `toApiErrorCode()` ile bu union'a daraltılır. Hem route hem istemci sabiti
+   aynı yerden import eder, dolayısıyla bir kodu yeniden adlandırmak **derleme hatası** verir.
+   İstemcide elle yazılmış kod string'i bulunmaz.
+2. **"Kodsuz 403 → generic" testi — güvenlik ağı.** Tip sistemi, bir route'un koda hiç yer
+   VERMEMESİNİ yakalayamaz. O test, koda geçmeden önceki bütün 403 üreticilerinin ve ileride
+   kod koymayı unutan her yeni dalın doğru tarafa düştüğünü gösterir
+   (`e2e/tenant-create-ui.spec.ts`). Testi tek savunma sanmak yanlış olur: kod adı değişikliğini
+   yakalayan şey 1. maddedir.
+
 ## Eşzamanlılık (concurrency) desenleri
 
 Bu repo'da "önce kontrol et, sonra yaz" deseni **kabul edilmez**; iki istek arasına giren üçüncü

@@ -56,6 +56,7 @@ export const RATE_LIMIT_POLICIES = {
   // yolu olurdu. 2, gercek bir tasima ihtiyacini fazlasiyla karsilar.
   DATA_EXPORT: { limit: 2, windowMs: 60 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
+  COLLECTIONS_MANAGE: { limit: 60, windowMs: 1 * MINUTES },
   // VERIFY_EMAIL 10/15dk (Issue #190): token 256 bit olduğu için brute-force birincil tehdit
   // DEĞİLDİR; amaç, kimlik istemeyen ve her çağrıda DB'ye yazan bu endpoint'in sınırsız
   // çağrılmasını engellemektir (RESET_PASSWORD ile aynı gerekçe ve aynı değerler).
@@ -87,6 +88,7 @@ export const RATE_LIMIT_BUCKETS = {
   REVOKE_SESSIONS: "auth:revoke-sessions",
   DATA_EXPORT: "tenant:data-export",
   TENANT_CREATE: "tenant:create",
+  COLLECTIONS_MANAGE: "collections:manage",
   VERIFY_EMAIL: "auth:verify-email",
   RESEND_VERIFICATION: "auth:resend-verification",
   MAINTENANCE: "maintenance",

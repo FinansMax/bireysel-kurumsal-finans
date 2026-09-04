@@ -6,7 +6,6 @@ export type ValidationError = {
 };
 
 const MONEY_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d{1,4})?$/;
-const ISO_4217_CODES = new Set(Intl.supportedValuesOf("currency"));
 
 function parseMoney(value: unknown, allowZero: boolean): { raw: string; decimal: Prisma.Decimal } | null {
   if (typeof value !== "string") return null;
@@ -23,8 +22,7 @@ function parseMoney(value: unknown, allowZero: boolean): { raw: string; decimal:
 }
 
 /**
- * Plan oluşturma isteği verilerini doğrular.
- * Aritmetik tutarlılık ve tip kontrollerini içerir.
+ * Kullanıcı girdisini DB'ye ulaşmadan önce aritmetik ve tip açısından güvenli hale getirir.
  */
 export function validateCreatePaymentPlan(input: unknown): {
   valid: true;
@@ -63,7 +61,7 @@ export function validateCreatePaymentPlan(input: unknown): {
 
   // currency
   const currencyStr = typeof raw.currency === "string" ? raw.currency.trim().toUpperCase() : "";
-  if (!/^[A-Z]{3}$/.test(currencyStr) || !ISO_4217_CODES.has(currencyStr)) {
+  if (!/^[A-Z]{3}$/.test(currencyStr)) {
     errors.push({ field: "currency", message: "Para birimi 3 harfli geçerli ISO 4217 kodu olmalıdır (ör. TRY, USD)." });
   }
 

@@ -8,7 +8,12 @@ import {
   createSessionCookieHeader,
 } from "./support/session";
 
+const createdTenantIds: string[] = [];
+const createdUserIds: string[] = [];
+
 test.afterAll(async () => {
+  await prisma.tenant.deleteMany({ where: { id: { in: createdTenantIds } } });
+  await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
   await prisma.$disconnect();
 });
 
@@ -17,7 +22,7 @@ async function createTenant(
   modules: { crm?: boolean; collections?: boolean } = {},
 ) {
   const { crm = true, collections = true } = modules;
-  return prisma.tenant.create({
+  const tenant = await prisma.tenant.create({
     data: {
       name: label,
       slug: `${label.toLowerCase()}-${randomUUID()}`,
@@ -32,11 +37,14 @@ async function createTenant(
     },
     select: { id: true },
   });
+  createdTenantIds.push(tenant.id);
+  return tenant;
 }
 
 async function createUserWithMembership(role: MembershipRole, tenantId: string) {
   const email = `sec-collections-${randomUUID()}@example.com`;
   const user = await prisma.user.create({ data: { email }, select: { id: true } });
+  createdUserIds.push(user.id);
   await prisma.membership.create({ data: { userId: user.id, tenantId, role } });
 
   const cookie = combineCookieHeaders(

@@ -218,6 +218,29 @@ test.describe("PaymentPlan + PaymentInstallment İş Kuralları", () => {
     }
   });
 
+  test("overdue filtresi tarih aralığı ve status ile kesişir", async () => {
+    const tenantId = await seedTenant();
+    const dealId = await seedDeal(tenantId);
+    const now = new Date();
+    const result = await createPaymentPlan(tenantId, {
+      dealId, totalAmount: "300.00", currency: "TRY", method: PaymentMethod.CASH,
+      downPayment: "0.00", installmentCount: 3,
+      firstDueDate: new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000),
+      intervalMonths: 1, notes: null,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    await prisma.paymentInstallment.updateMany({
+      where: { id: result.data.installments[1].id, tenantId }, data: { status: "PARTIAL" },
+    });
+    const filtered = await listInstallments(tenantId, {
+      from: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), to: now,
+      status: "PENDING", overdue: true,
+    });
+    expect(filtered.ok).toBe(true);
+    if (filtered.ok) expect(filtered.data.map((item) => item.id)).toEqual([result.data.installments[0].id]);
+  });
+
   test("taksit vadesi ay sonunda taşmadan hesaplanır", async () => {
     const tenantId = await seedTenant();
     const dealId = await seedDeal(tenantId);

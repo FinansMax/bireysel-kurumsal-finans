@@ -82,7 +82,7 @@ export type CreatePaymentPlanParams = {
  */
 export type CollectionServiceResult<T> =
   | { ok: true; data: T }
-  | { ok: false; status: 400 | 403 | 404 | 409 | 500 | 503; error: string };
+  | { ok: false; status: 400 | 403 | 404 | 409 | 503; error: string };
 
 /**
  * Vade tarihine takvim ayı ekler.
@@ -111,6 +111,8 @@ function addMonths(date: Date, months: number): Date {
 /**
  * Yeni ödeme planı ve bağlı taksitlerini sunucu tarafında oluşturur.
  * Eşzamanlılık kuralı (aynı deal için tek ACTIVE plan) runSerializable() ile garanti edilir.
+ * Doğrudan `$transaction` yerine bu yardımcı, Serializable çakışmalarını otomatik yeniden
+ * denediği için kullanılır.
  */
 export async function createPaymentPlan(
   tenantId: string,
@@ -162,7 +164,8 @@ export async function createPaymentPlan(
     const sumBaseDec = baseInstallmentDec.mul(params.installmentCount);
     const remainderDec = netDec.sub(sumBaseDec);
 
-    // Taksit kayıtlarının hazırlanması
+    // Kalan son taksite eklenir; böylece aşağı yuvarlamadan doğan küsurat kaybolmaz ve toplam
+    // net tutarla tam eşleşir. İlk taksitleri eşit bırakmak planın başlangıç akışını korur.
     const installmentsData: Array<{
       sequence: number;
       dueDate: Date;
@@ -251,21 +254,27 @@ export async function updatePaymentPlan(
   planId: string,
   notes: string | null
 ): Promise<CollectionServiceResult<PaymentPlanRecord>> {
-  const updateResult = await prisma.paymentPlan.updateMany({
-    where: tenantScoped(tenantId, { id: planId }),
-    data: { notes },
+  try {
+    const result = await runSerializable(async (tx) => {
+    const updateResult = await tx.paymentPlan.updateMany({
+      where: tenantScoped(tenantId, { id: planId }), data: { notes },
+    });
+    if (updateResult.count !== 1) {
+      return { ok: false as const, status: 404 as const, error: "Ödeme planı bulunamadı." };
+    }
+    const updatedPlan = await tx.paymentPlan.findFirst({
+      where: tenantScoped(tenantId, { id: planId }), select: PAYMENT_PLAN_SELECT,
+    });
+    if (!updatedPlan) return { ok: false as const, status: 404 as const, error: "Ödeme planı bulunamadı." };
+    return { ok: true as const, data: updatedPlan };
   });
-
-  if (updateResult.count === 0) {
-    return { ok: false, status: 404, error: "Ödeme planı bulunamadı." };
+    return result;
+  } catch (error) {
+    if (error instanceof SerializationConflictError) {
+      return { ok: false, status: 503, error: "İşlem çakışması nedeniyle plan güncellenemedi." };
+    }
+    throw error;
   }
-
-  const updatedPlan = await prisma.paymentPlan.findFirst({
-    where: tenantScoped(tenantId, { id: planId }),
-    select: PAYMENT_PLAN_SELECT,
-  });
-
-  return { ok: true, data: updatedPlan! };
 }
 
 /**
@@ -313,7 +322,8 @@ export async function cancelPaymentPlan(
       select: PAYMENT_PLAN_WITH_INSTALLMENTS_SELECT,
     });
 
-    return { ok: true as const, data: updated! };
+    if (!updated) return { ok: false as const, status: 404 as const, error: "Ödeme planı bulunamadı." };
+    return { ok: true as const, data: updated };
     });
 
     if (!result.ok) {
@@ -360,8 +370,12 @@ export async function listInstallments(
 
   // OVERDUE dinamik olarak türetilir: dueDate < now() ve status IN (PENDING, PARTIAL)
   if (params.overdue) {
-    whereClause.dueDate = { lt: new Date() };
-    whereClause.status = { in: [InstallmentStatus.PENDING, InstallmentStatus.PARTIAL] };
+    const dueDate = whereClause.dueDate && typeof whereClause.dueDate === "object" ? whereClause.dueDate : {};
+    whereClause.dueDate = { ...dueDate, lt: new Date() };
+    const overdueStatuses = [InstallmentStatus.PENDING, InstallmentStatus.PARTIAL];
+    whereClause.status = params.status
+      ? { in: overdueStatuses.filter((status) => status === params.status) }
+      : { in: overdueStatuses };
   }
 
   const installments = await prisma.paymentInstallment.findMany({
@@ -424,7 +438,8 @@ export async function updateInstallment(
         where: tenantScoped(tenantId, { id: installmentId }),
         select: PAYMENT_INSTALLMENT_SELECT,
       });
-      return { ok: true as const, data: updated! };
+      if (!updated) return { ok: false as const, status: 404 as const, error: "Taksit bulunamadı." };
+      return { ok: true as const, data: updated };
     });
     return result;
   } catch (error) {

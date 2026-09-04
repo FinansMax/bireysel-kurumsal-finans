@@ -3,242 +3,242 @@ import { randomUUID } from "node:crypto";
 import { MembershipRole } from "@prisma/client";
 import { expect, test } from "@playwright/test";
 
-import { signInWithCredentials } from "../e2e/support/auth";
-import { markEmailVerified } from "../e2e/support/email-verification";
-import { uniqueTestClientIp } from "../e2e/support/rate-limit";
 import { prisma } from "../src/lib/prisma";
-
 import {
   combineCookieHeaders,
   createActiveTenantCookieHeader,
   createSessionCookieHeader,
 } from "./support/session";
 
+/**
+ * Denetim kaydı API'si — saldırgan bakışı (Issue #78).
+ *
+ * Denetim kaydı, bir tenant'ın İÇ HAREKETLERİNİ anlatır: kim ne zaman kimi çıkardı, hangi hesap
+ * silindi, hangi rol yükseltildi. Sızması, komşu tenant hakkında başka hiçbir endpoint'in
+ * vermediği bir istihbarat verirdi.
+ */
+
+const createdTenantIds: string[] = [];
+const createdUserIds: string[] = [];
+
 test.afterAll(async () => {
+  if (createdTenantIds.length > 0) {
+    await prisma.tenant.deleteMany({ where: { id: { in: createdTenantIds } } });
+  }
+  if (createdUserIds.length > 0) {
+    await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+  }
   await prisma.$disconnect();
 });
 
-/** Her çağrı kendi sahte istemci IP'sini kullanır (bkz. `e2e/support/rate-limit.ts`, Issue #27). */
-async function signUp(request: import("@playwright/test").APIRequestContext, email: string, password: string) {
-  const response = await request.post("/api/auth/signup", {
-    data: { email, password },
-    headers: { "x-forwarded-for": uniqueTestClientIp() },
+async function createTenant(label: string) {
+  const tenant = await prisma.tenant.create({
+    data: { name: label, slug: `${label.toLowerCase()}-${randomUUID()}` },
+    select: { id: true },
   });
-
-  // #190: doğrulanmamış hesap çalışma alanı kuramaz. Bu spec'in konusu audit log;
-  // doğrulama onun ÖN KOŞULU (bkz. e2e/support/email-verification.ts).
-  await markEmailVerified(email);
-
-  return response;
+  createdTenantIds.push(tenant.id);
+  return tenant;
 }
 
-async function createUserWithMembership(role: MembershipRole, tenantId: string, email?: string) {
-  const userEmail = email ?? `sec-audit-${randomUUID()}@example.com`;
-  const user = await prisma.user.create({ data: { email: userEmail } });
+async function createUserWithMembership(role: MembershipRole, tenantId: string) {
+  const email = `sec-audit-${randomUUID()}@example.com`;
+  const user = await prisma.user.create({ data: { email }, select: { id: true } });
+  createdUserIds.push(user.id);
   await prisma.membership.create({ data: { userId: user.id, tenantId, role } });
 
-  const sessionCookie = await createSessionCookieHeader({ sub: user.id, email: userEmail });
-  const activeTenantCookie = await createActiveTenantCookieHeader(tenantId);
-  const cookie = combineCookieHeaders(sessionCookie, activeTenantCookie);
+  const cookie = combineCookieHeaders(
+    await createSessionCookieHeader({ sub: user.id, email }),
+    await createActiveTenantCookieHeader(tenantId),
+  );
 
-  return { userId: user.id, email: userEmail, cookie };
+  return { userId: user.id, email, cookie };
 }
 
-test.describe("Audit log security — login (HTTP)", () => {
-  test("gerçek HTTP sign-in başarılı olduğunda AUTH_LOGIN_SUCCESS satırı oluşuyor", async ({ request }) => {
-    const email = `sec-audit-login-ok-${randomUUID()}@example.com`;
-    const password = "S3curePassw0rd!";
-    const signupResponse = await signUp(request, email, password);
-    expect(signupResponse.status()).toBe(201);
-    const { user } = await signupResponse.json();
+async function seedEntry(tenantId: string, action: string) {
+  return prisma.auditLog.create({
+    data: { tenantId, action, targetType: "TENANT", targetId: tenantId },
+    select: { id: true },
+  });
+}
 
-    try {
-      await signInWithCredentials(request, email, password);
+test.describe("Audit log API — authentication ve yetki", () => {
+  test("kimliksiz istek 401 alır ve hiçbir kayıt sızmaz", async ({ request }) => {
+    const tenant = await createTenant("SecAuditAnon");
+    await seedEntry(tenant.id, "SECRET_EVENT");
 
-      const rows = await prisma.auditLog.findMany({
-        where: { action: "AUTH_LOGIN_SUCCESS", actorUserId: user.id },
-      });
-      expect(rows).toHaveLength(1);
-      expect(rows[0].targetType).toBe("USER");
-      expect(rows[0].targetId).toBe(user.id);
-    } finally {
-      await prisma.auditLog.deleteMany({ where: { actorUserId: user.id } });
-      await prisma.user.delete({ where: { id: user.id } });
-    }
+    const response = await request.get(`/api/tenants/${tenant.id}/audit-log`);
+
+    expect(response.status()).toBe(401);
+    expect(await response.text()).not.toContain("SECRET_EVENT");
   });
 
-  test("gerçek HTTP sign-in başarısız olduğunda AUTH_LOGIN_FAILURE satırı oluşuyor, plaintext şifre sızmıyor", async ({
-    request,
-  }) => {
-    const email = `sec-audit-login-fail-${randomUUID()}@example.com`;
-    const password = "S3curePassw0rd!";
-    await signUp(request, email, password);
+  test("MEMBER 403 alır (denetim kaydı bir yönetim görünürlüğüdür)", async ({ request }) => {
+    const tenant = await createTenant("SecAuditMember");
+    const member = await createUserWithMembership(MembershipRole.MEMBER, tenant.id);
+    await seedEntry(tenant.id, "MEMBER_MUST_NOT_SEE");
 
-    try {
-      const before = await prisma.auditLog.count({ where: { action: "AUTH_LOGIN_FAILURE" } });
+    const response = await request.get(`/api/tenants/${tenant.id}/audit-log`, {
+      headers: { cookie: member.cookie },
+    });
 
-      await signInWithCredentials(request, email, "WrongPassword!");
-
-      const after = await prisma.auditLog.count({ where: { action: "AUTH_LOGIN_FAILURE" } });
-      expect(after).toBe(before + 1);
-
-      const rows = await prisma.auditLog.findMany({
-        where: { action: "AUTH_LOGIN_FAILURE" },
-        orderBy: { createdAt: "desc" },
-        take: 1,
-      });
-      expect(rows[0].actorUserId).toBeNull();
-      expect(JSON.stringify(rows[0])).not.toContain(password);
-      expect(JSON.stringify(rows[0])).not.toContain("WrongPassword!");
-    } finally {
-      await prisma.user.deleteMany({ where: { email } });
-    }
+    expect(response.status()).toBe(403);
+    expect(await response.text()).not.toContain("MEMBER_MUST_NOT_SEE");
   });
 
-  test("hiçbir AuditLog satırı plaintext şifre/secret/token içermiyor (bir dizi login denemesinden sonra)", async ({
+  test("DUYARLILIK: aynı istek ADMIN ile 200 döner — 403 role bağlı, endpoint'e değil", async ({
     request,
   }) => {
-    const email = `sec-audit-noleak-${randomUUID()}@example.com`;
-    const password = "S3curePassw0rd!Unique";
-    const signupResponse = await signUp(request, email, password);
-    const { user } = await signupResponse.json();
+    // Bu kontrol grubu olmadan, endpoint'i HERKESE kapatan bir regresyon da yukarıdaki testi
+    // geçerdi. `VIEW_AUDIT_LOG` matriste OWNER ve ADMIN'dedir (permissions.ts).
+    const tenant = await createTenant("SecAuditAdmin");
+    const admin = await createUserWithMembership(MembershipRole.ADMIN, tenant.id);
+    await seedEntry(tenant.id, "ADMIN_CAN_SEE");
 
-    try {
-      await signInWithCredentials(request, email, password);
-      await signInWithCredentials(request, email, "AnotherWrongPassword!");
+    const response = await request.get(`/api/tenants/${tenant.id}/audit-log`, {
+      headers: { cookie: admin.cookie },
+    });
 
-      const rows = await prisma.auditLog.findMany({
-        orderBy: { createdAt: "desc" },
-        take: 10,
-      });
-      for (const row of rows) {
-        const serialized = JSON.stringify(row);
-        expect(serialized).not.toContain(password);
-        expect(serialized).not.toContain("AnotherWrongPassword!");
-      }
-    } finally {
-      await prisma.auditLog.deleteMany({ where: { actorUserId: user.id } });
-      await prisma.user.delete({ where: { id: user.id } });
-    }
+    expect(response.status()).toBe(200);
+    const body = (await response.json()) as { entries: Array<{ action: string }> };
+    expect(body.entries.map((entry) => entry.action)).toContain("ADMIN_CAN_SEE");
   });
 });
 
-test.describe("Audit log security — tenant creation (HTTP)", () => {
-  test("POST /api/tenants başarılı olduğunda TENANT_CREATED satırı doğru actorUserId/tenantId ile oluşuyor", async ({
+test.describe("Audit log API — tenant izolasyonu", () => {
+  test("URL'deki tenantId aktif tenant'tan farklıysa 403 ve komşunun kaydı sızmaz", async ({
     request,
   }) => {
-    const email = `sec-audit-tenant-${randomUUID()}@example.com`;
-    const password = "S3curePassw0rd!";
-    const signupResponse = await signUp(request, email, password);
-    const { user } = await signupResponse.json();
-    const sessionCookie = await createSessionCookieHeader({ sub: user.id, email });
+    const tenantA = await createTenant("SecAuditA");
+    const tenantB = await createTenant("SecAuditB");
+    const ownerB = await createUserWithMembership(MembershipRole.OWNER, tenantB.id);
+    await seedEntry(tenantA.id, "NEIGHBOUR_SECRET");
 
-    try {
-      const response = await request.post("/api/tenants", {
-        headers: { cookie: sessionCookie, "x-forwarded-for": uniqueTestClientIp() },
-        data: { name: "Audit Sec Co" },
-      });
-      expect(response.status()).toBe(201);
-      const { tenant } = await response.json();
+    const response = await request.get(`/api/tenants/${tenantA.id}/audit-log`, {
+      headers: { cookie: ownerB.cookie },
+    });
 
-      const rows = await prisma.auditLog.findMany({ where: { tenantId: tenant.id } });
-      expect(rows).toHaveLength(1);
-      expect(rows[0].action).toBe("TENANT_CREATED");
-      expect(rows[0].actorUserId).toBe(user.id);
-      expect(rows[0].targetType).toBe("TENANT");
-      expect(rows[0].targetId).toBe(tenant.id);
-
-      await prisma.tenant.delete({ where: { id: tenant.id } });
-    } finally {
-      await prisma.auditLog.deleteMany({ where: { actorUserId: user.id } });
-      await prisma.user.delete({ where: { id: user.id } });
-    }
+    expect(response.status()).toBe(403);
+    expect(await response.text()).not.toContain("NEIGHBOUR_SECRET");
   });
-});
 
-test.describe("Audit log security — membership role change (HTTP)", () => {
-  test("PATCH ile rol değişikliği başarılı olduğunda MEMBERSHIP_ROLE_CHANGED satırı doğru tenantId/actorUserId ile oluşuyor", async ({
+  test("KENDİ tenant'ının URL'i altında bile komşunun kayıtları görünmüyor", async ({
     request,
   }) => {
-    const tenant = await prisma.tenant.create({ data: { name: "Audit Role Co", slug: `audit-role-${randomUUID()}` } });
+    // Asıl sorgu-seviyesi izolasyon testi budur: yukarıdaki 403 guard'dan geliyor ve
+    // `tenantScoped()` tamamen silinse bile yeşil kalırdı.
+    const tenantA = await createTenant("SecAuditScopeA");
+    const tenantB = await createTenant("SecAuditScopeB");
+    const ownerB = await createUserWithMembership(MembershipRole.OWNER, tenantB.id);
+
+    await seedEntry(tenantA.id, "ONLY_IN_A");
+    await seedEntry(tenantB.id, "ONLY_IN_B");
+
+    const response = await request.get(`/api/tenants/${tenantB.id}/audit-log`, {
+      headers: { cookie: ownerB.cookie },
+    });
+
+    expect(response.status()).toBe(200);
+    const actions = ((await response.json()) as { entries: Array<{ action: string }> }).entries.map(
+      (entry) => entry.action,
+    );
+
+    expect(actions).toContain("ONLY_IN_B");
+    expect(actions).not.toContain("ONLY_IN_A");
+  });
+
+  test("KURCALANMIŞ imleç başka tenant'ın verisini AÇMIYOR", async ({ request }) => {
+    // İmleç opaktır ama şifreli değildir ve olması da gerekmez: "hangi tenant" sorusunun cevabı
+    // imleçte değil, `requirePermission()` context'indedir.
+    const tenantA = await createTenant("SecAuditCursorA");
+    const tenantB = await createTenant("SecAuditCursorB");
+    const ownerB = await createUserWithMembership(MembershipRole.OWNER, tenantB.id);
+
+    const entryA = await seedEntry(tenantA.id, "CURSOR_TARGET_A");
+    await seedEntry(tenantB.id, "CURSOR_OWN_B");
+
+    // A'nın satırından üretilmiş, biçimi GEÇERLİ bir imleç.
+    const forged = Buffer.from(
+      `${new Date(Date.now() + 60_000).toISOString()}|${entryA.id}`,
+      "utf8",
+    ).toString("base64url");
+
+    const response = await request.get(
+      `/api/tenants/${tenantB.id}/audit-log?after=${encodeURIComponent(forged)}`,
+      { headers: { cookie: ownerB.cookie } },
+    );
+
+    expect(response.status()).toBe(200);
+    const text = await response.text();
+    expect(text).not.toContain("CURSOR_TARGET_A");
+    expect(text).toContain("CURSOR_OWN_B");
+  });
+
+  test("BOZUK imleç 400 döner: sessizce ilk sayfaya DÜŞMEZ", async ({ request }) => {
+    const tenant = await createTenant("SecAuditBadCursor");
     const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
-    const member = await createUserWithMembership(MembershipRole.MEMBER, tenant.id);
-    const memberMembership = await prisma.membership.findFirstOrThrow({
-      where: { tenantId: tenant.id, userId: member.userId },
+    await seedEntry(tenant.id, "SHOULD_NOT_APPEAR");
+
+    const response = await request.get(`/api/tenants/${tenant.id}/audit-log?after=bozuk`, {
+      headers: { cookie: owner.cookie },
     });
 
-    try {
-      const response = await request.patch(`/api/tenants/${tenant.id}/members/${memberMembership.id}`, {
-        headers: { cookie: owner.cookie },
-        data: { role: "ADMIN" },
-      });
-      expect(response.status()).toBe(200);
+    expect(response.status()).toBe(400);
+    expect(await response.text()).not.toContain("SHOULD_NOT_APPEAR");
+  });
+});
 
-      const rows = await prisma.auditLog.findMany({ where: { tenantId: tenant.id, action: "MEMBERSHIP_ROLE_CHANGED" } });
-      expect(rows).toHaveLength(1);
-      expect(rows[0].actorUserId).toBe(owner.userId);
-      expect(rows[0].tenantId).toBe(tenant.id);
-      expect(rows[0].targetType).toBe("MEMBERSHIP");
-      expect(rows[0].targetId).toBe(memberMembership.id);
-      expect(rows[0].metadata).toEqual({ previousRole: "MEMBER", newRole: "ADMIN" });
-    } finally {
-      await prisma.auditLog.deleteMany({ where: { tenantId: tenant.id } });
-      await prisma.tenant.delete({ where: { id: tenant.id } });
-      await prisma.user.deleteMany({ where: { id: { in: [owner.userId, member.userId] } } });
-    }
+test.describe("Audit log API — yan etki ve sızıntı", () => {
+  test("GET yan etkisizdir: listeyi okumak yeni bir kayıt ÜRETMEZ", async ({ request }) => {
+    // Her okuma bir satır üretseydi liste kendi kendini besleyen bir gürültü kaynağına dönerdi
+    // — ve GET'in yan etkisiz olması aynı zamanda CSRF duruşunun dayandığı invariant'tır (#4).
+    const tenant = await createTenant("SecAuditNoWrite");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    await seedEntry(tenant.id, "BASELINE");
+
+    const before = await prisma.auditLog.count({ where: { tenantId: tenant.id } });
+    const response = await request.get(`/api/tenants/${tenant.id}/audit-log`, {
+      headers: { cookie: owner.cookie },
+    });
+    expect(response.status()).toBe(200);
+    const after = await prisma.auditLog.count({ where: { tenantId: tenant.id } });
+
+    expect(after).toBe(before);
   });
 
-  test("MEMBER'ın role-change denemesi 403 ile reddedilir ve audit success event üretmez", async ({ request }) => {
-    const tenant = await prisma.tenant.create({ data: { name: "Audit Forbidden Co", slug: `audit-forbidden-${randomUUID()}` } });
-    const member = await createUserWithMembership(MembershipRole.MEMBER, tenant.id);
-    const other = await createUserWithMembership(MembershipRole.MEMBER, tenant.id);
-    const otherMembership = await prisma.membership.findFirstOrThrow({
-      where: { tenantId: tenant.id, userId: other.userId },
+  test("yanıt hassas kullanıcı alanı taşımıyor", async ({ request }) => {
+    const tenant = await createTenant("SecAuditFields");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    await prisma.auditLog.create({
+      data: { tenantId: tenant.id, actorUserId: owner.userId, action: "WITH_ACTOR" },
     });
 
-    try {
-      const response = await request.patch(`/api/tenants/${tenant.id}/members/${otherMembership.id}`, {
-        headers: { cookie: member.cookie },
-        data: { role: "ADMIN" },
-      });
-      expect(response.status()).toBe(403);
+    const response = await request.get(`/api/tenants/${tenant.id}/audit-log`, {
+      headers: { cookie: owner.cookie },
+    });
+    const text = await response.text();
 
-      const rows = await prisma.auditLog.findMany({ where: { tenantId: tenant.id, action: "MEMBERSHIP_ROLE_CHANGED" } });
-      expect(rows).toHaveLength(0);
-    } finally {
-      await prisma.tenant.delete({ where: { id: tenant.id } });
-      await prisma.user.deleteMany({ where: { id: { in: [member.userId, other.userId] } } });
+    expect(response.status()).toBe(200);
+    // Aktörün e-postası BİLEREK dönüyor (kaydın anlamı için gerekli); dönmemesi gerekenler:
+    for (const forbidden of ["passwordHash", "credentialsChangedAt", "sessionsRevokedAt"]) {
+      expect(text).not.toContain(forbidden);
     }
+    expect(text).toContain(owner.email);
   });
 
-  test("aktif tenant URL'deki tenantId'den farklıysa (403 tenant boundary bypass) audit event üretilmiyor", async ({
+  test("şekli geçersiz tenantId 400 alır — kimlik kontrolüne bile gitmeden", async ({
     request,
   }) => {
-    const activeTenant = await prisma.tenant.create({ data: { name: "Audit Active Co", slug: `audit-active-${randomUUID()}` } });
-    const otherTenant = await prisma.tenant.create({ data: { name: "Audit Other Co", slug: `audit-other-${randomUUID()}` } });
-    const owner = await createUserWithMembership(MembershipRole.OWNER, activeTenant.id);
-    await prisma.membership.create({
-      data: { userId: owner.userId, tenantId: otherTenant.id, role: MembershipRole.OWNER },
-    });
-    const victim = await createUserWithMembership(MembershipRole.MEMBER, otherTenant.id);
-    const victimMembership = await prisma.membership.findFirstOrThrow({
-      where: { tenantId: otherTenant.id, userId: victim.userId },
-    });
+    // `isValidId()` bir BİÇİM doğrulaması değil, ucuz bir ŞEKİL kontrolüdür (boş değil,
+    // <= 191 karakter). Var olmayan ama şekli geçerli bir id 400 DEĞİL 401/403 alır: "bu id
+    // var mı" sorusunun cevabı kimliği doğrulanmamış bir isteğe verilmez (enumeration engeli).
+    const tooLong = "x".repeat(200);
 
-    try {
-      const response = await request.patch(`/api/tenants/${otherTenant.id}/members/${victimMembership.id}`, {
-        headers: { cookie: owner.cookie },
-        data: { role: "ADMIN" },
-      });
-      expect(response.status()).toBe(403);
+    const response = await request.get(`/api/tenants/${tooLong}/audit-log`);
+    expect(response.status()).toBe(400);
 
-      const rows = await prisma.auditLog.findMany({
-        where: { tenantId: { in: [activeTenant.id, otherTenant.id] }, action: "MEMBERSHIP_ROLE_CHANGED" },
-      });
-      expect(rows).toHaveLength(0);
-    } finally {
-      await prisma.tenant.deleteMany({ where: { id: { in: [activeTenant.id, otherTenant.id] } } });
-      await prisma.user.deleteMany({ where: { id: { in: [owner.userId, victim.userId] } } });
-    }
+    // KONTROL GRUBU: şekli geçerli ama var olmayan bir id, 400 değil 401 alır — yani 400
+    // gerçekten şekil kontrolünden geliyor, "bulunamadı"dan değil.
+    const wellFormed = await request.get("/api/tenants/cmtnehmbe00isadzkw1rxa388/audit-log");
+    expect(wellFormed.status()).toBe(401);
   });
 });

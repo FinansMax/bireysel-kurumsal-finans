@@ -91,7 +91,52 @@ doğru cevap proxy'yi kurmaktır.
 
 ---
 
-## 3. Kontrol listesi
+## 3. Veritabanı: iki adres, ve migration'ın hangisini kullanacağı
+
+Sağlayıcı **Neon**. Neon iki endpoint verir ve bunlar birbirinin yerine geçmez.
+
+| Değişken | Adres | Kim kullanır |
+| --- | --- | --- |
+| `DATABASE_URL` | **Doğrudan** (`ep-xxx.<bolge>.aws.neon.tech`) | `prisma migrate`, `prisma generate` |
+| `DATABASE_POOL_URL` | **Havuzlanmış** (`ep-xxx-pooler.<bolge>.aws.neon.tech`) | Uygulama çalışma zamanı |
+
+### Migration'ı pooler üzerinden çalıştırmayın
+
+Neon'un pooler'ı PgBouncer'ın **transaction modunda** çalışır: prepared statement ve oturum
+düzeyi durum yoktur. Prisma Migrate bir **advisory lock** alır ve DDL'i tek oturumda yürütür.
+Pooler üzerinden bu bozulur; migration **yarıda kalıp** şemayı tutarsız bırakabilir.
+
+Deploy pipeline'ında migration adımı bu yüzden **açıkça doğrudan adresi** kullanmalıdır:
+
+```bash
+# Migration adımı - DOGRUDAN adres
+DATABASE_URL="postgresql://user:pass@ep-xxx.eu-central-1.aws.neon.tech/db?sslmode=require" \
+  npx prisma migrate deploy
+
+# Uygulama adımı - her iki degisken de tanimli
+#   DATABASE_URL      -> dogrudan  (Prisma sema kaynagi)
+#   DATABASE_POOL_URL -> havuzlanmis (calisma zamani)
+npm run start
+```
+
+`prisma/schema.prisma` daima `DATABASE_URL`'i okur; havuzlanmış adres şemaya hiç girmez.
+Gerekçe ve reddedilen `directUrl` alternatifi: `src/lib/config/database.ts` ve README
+"Veritabanı bağlantı yönetimi (Issue #187)".
+
+### `connection_limit`
+
+`DATABASE_POOL_URL`'de `connection_limit` belirtilmemişse uygulama başına **5** uygulanır
+(`src/lib/config/database.ts`). Adrese `?connection_limit=N` yazarsanız o değer ezilmez.
+Instance sayısı arttıkça bu değer Neon planının bağlantı kotasına göre gözden geçirilmelidir.
+
+### `DATABASE_POOL_URL` tanımlamazsanız
+
+Uygulama `DATABASE_URL`'e düşer ve doğrudan bağlanır. Tek instance'lı küçük bir kurulumda
+çalışır; çok instance'lı/serverless bir kurulumda `too many connections` alırsınız.
+
+---
+
+## 4. Kontrol listesi
 
 Production'a çıkmadan önce:
 
@@ -101,6 +146,9 @@ Production'a çıkmadan önce:
 - [ ] `APP_BASE_URL` mutlak bir `https://` adresi olarak yazıldı (bkz. `src/lib/config/app-url.ts`).
 - [ ] `AUTH_SECRET` production'a özel ve CI'daki disposable değerden farklı.
 - [ ] `.env` repository'de değil; secret'lar platform secret yöneticisinde.
+- [ ] `DATABASE_URL` **doğrudan** Neon endpoint'i (host'unda `-pooler` YOK).
+- [ ] `DATABASE_POOL_URL` **havuzlanmış** endpoint (host'unda `-pooler` VAR).
+- [ ] Deploy pipeline'ında `prisma migrate deploy` adımı `DATABASE_URL` ile koşuyor, pooler ile değil.
 
 ---
 

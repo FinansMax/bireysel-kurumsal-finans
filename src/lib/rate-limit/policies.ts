@@ -60,6 +60,12 @@ export const RATE_LIMIT_POLICIES = {
   // tacize dönüşebilir. FORGOT_PASSWORD'dan (5) daha dar: doğrulama linki 24 saat yaşıyor,
   // tekrar isteme ihtiyacı çok daha nadir.
   RESEND_VERIFICATION: { limit: 3, windowMs: 15 * MINUTES },
+  // MAINTENANCE 10/15dk (Issue #188): bakım endpoint'i PUBLIC'tir (oturum istemez, paylaşılan
+  // bir anahtarla korunur) ve PAHALIDIR (toplu okuma + silme + dosya yazma). Limitin ikinci
+  // işlevi, anahtarın brute-force edilmesini yavaşlatmaktır. 10, günlük çalışan bir cron'un
+  // `hasMore` nedeniyle birkaç kez arka arkaya çağrılmasına yer bırakır; insan eliyle
+  // tetiklenen bir denemeyi de engellemez.
+  MAINTENANCE: { limit: 10, windowMs: 15 * MINUTES },
 } as const satisfies Record<string, RateLimitPolicy>;
 
 /**
@@ -77,4 +83,5 @@ export const RATE_LIMIT_BUCKETS = {
   TENANT_CREATE: "tenant:create",
   VERIFY_EMAIL: "auth:verify-email",
   RESEND_VERIFICATION: "auth:resend-verification",
+  MAINTENANCE: "maintenance",
 } as const;

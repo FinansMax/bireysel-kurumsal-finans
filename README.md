@@ -59,7 +59,7 @@ cp .env.example .env
 | `RATE_LIMIT_STORE` | Hayır | `memory` (varsayılan) \| `redis`. Çok instance'lı deployment'ta `redis` gerekir (Issue #181). |
 | `UPSTASH_REDIS_REST_URL` | `redis` ise | Upstash REST adresi. Eksikse uygulama sessizce `memory`'ye DÜŞMEZ, hata verir. |
 | `UPSTASH_REDIS_REST_TOKEN` | `redis` ise | Upstash REST token'ı. **Secret** — loglanmaz, `NEXT_PUBLIC_` olamaz. |
-| `SENTRY_DSN` | Hayır | Sentry hata izleme. **HENÜZ BAĞLANMADI** — SDK onayı + hesap bekliyor (Issue #183). Yokken loglama tam çalışır. |
+| `SENTRY_DSN` | Hayır | Sentry hata izleme (Issue #183). Tanımsızsa SDK hiç başlatılmaz; loglama tam çalışır. |
 | `POSTGRES_*` | Lokal | Yalnızca `docker-compose.yml`'in lokal PostgreSQL container'ını kurmak için. |
 
 **`APP_BASE_URL` neden production'da zorunlu:** Şifre sıfırlama ve tenant daveti
@@ -2808,19 +2808,53 @@ derin nesne taraması ölçülebilir bir maliyettir.
 
 Mevcut üç `console.error` çağrısı (audit yazımı, e-posta gönderimi) bu logger'a taşındı.
 
-### Bu PR'da YAPILMAYAN — Sentry
+### Sentry — hata izleme (BAĞLANDI)
 
-`SENTRY_DSN` `.env.example`'a yer tutucu olarak eklendi ama **SDK bağlanmadı**. İki ayrı engel
-var ve ikisi de karar gerektirir:
+`@sentry/nextjs` **onaylı bir bağımlılık olarak** eklendi (`CLAUDE.md` gereği açık onay alındı).
 
-1. `@sentry/nextjs` **yeni bir npm bağımlılığıdır** ve `CLAUDE.md` gereği açık onay ister.
-2. Sentry hesabı/DSN gerekir.
+**`SENTRY_DSN` tanımlı değilse SDK hiç başlatılmaz.** `Sentry.init({ dsn: undefined })` çağırmak
+da "kapalı" davranır ama SDK'nın global hook'larını (unhandled rejection, fetch sarmalayıcıları)
+yine de kurar; hiç çağırmamak lokal geliştirme ve test ortamını gerçekten dokunulmamış bırakır.
 
-Issue #183 bu ayrımı zaten öngörüyor: *"Loglama Sentry'ye bağımlı olmaz... `SENTRY_DSN` tanımlı
-değilken yapılandırılmış loglama TAM olarak çalışmaya devam eder."* Bugünkü durum tam olarak
-budur. SDK bağlandığında `beforeSend` içinde `sanitizeMetadata()` mantığı uygulanmalı,
-`sendDefaultPii: false` olmalı ve raw token taşıyan URL'lerin query string'i atılmalıdır (issue'da
-yazılı). Kritik olay alarmları (#183 madde 3) kod değil, Sentry panosu yapılandırmasıdır.
+**Yapılandırma tek kaynaktan gelir** (`src/lib/observability/sentry-config.ts`). Next.js üç ayrı
+runtime için üç başlatma dosyası ister (`src/instrumentation-client.ts`, `sentry.server.config.ts`,
+`sentry.edge.config.ts`); ayarları üç kez yazmak, birinde `sendDefaultPii`'yi veya `beforeSend`'i
+unutmak demekti — ve o unutma **sessizdir**: Sentry çalışmaya devam eder, sadece kişisel veri
+göndermeye başlar.
+
+#### Kişisel veri gönderilmez — iki katman
+
+1. **`sendDefaultPii: false`**, tipte `false` literal'i olarak sabitlendi: biri `true` yazmak
+   isterse bunun bilinçli bir değişiklik olduğu diff'te görünür.
+2. **`beforeSend` içinde `scrubEvent()`** — çünkü birincisi YETMEZ: uygulama kodunun kendi
+   eklediği `extra`/`contexts` alanları ve hata mesajlarına gömülü URL'ler o ayarın kapsamı
+   dışındadır. `writeAuditLog()`'un `sanitizeMetadata()` çağırmasıyla birebir aynı gerekçe.
+
+`scrubEvent()` şunları yapar:
+
+- **URL'lerin sorgu dizesini tamamen atar.** Şifre sıfırlama, davet ve e-posta doğrulama
+  linklerinin hepsi raw token'ı `?token=` içinde taşır; bir hata raporunda tam URL, o token'ı
+  Sentry'yi görebilen herkese verir. **Yalnızca `token` parametresi değil, sorgunun tamamı**
+  atılır: hangi parametrenin hassas olduğunu tek tek saymak, ileride eklenen birini unutmaktır.
+- **`cookie`, `authorization` ve `x-forwarded-for` başlıklarını atar.** Bir session cookie'si,
+  hata raporunu görebilen herkese hesap devri imkânı verir.
+- **`extra`, `contexts`, istek gövdesi ve breadcrumb verisini** `sanitizeMetadata()`'den geçirir.
+
+`sentry-scrub.ts` **`@sentry/nextjs` import etmez** — saf fonksiyonlardır ve Sentry hiç
+yapılandırılmamışken test edilirler. Testler ayrıca `beforeSend`'in gerçekten bağlandığını da
+doğrular: doğru çalışan ama hiç çağrılmayan bir temizleyici, hiç yokmuş gibidir.
+
+**`tracesSampleRate: 0`** — performans izleme kapalı. Trace'ler ayrı bir maliyet ve ayrı bir
+veri akışıdır (URL'ler, sorgu süreleri); açılması ayrı bir karardır.
+
+#### Kalan risk
+
+- **Gerçek bir DSN ile uçtan uca doğrulama yapılmadı.** "Bilerek fırlatılan bir hata Sentry'de
+  görünüyor ve içinde şifre/token/cookie yok" kriteri hesap gerektirdiği için manuel
+  doğrulamaya bırakıldı. Temizleme mantığı 12 testle doğrulanmıştır, ama SDK'nın olayı
+  gerçekten bu haliyle gönderdiği gözlenmedi.
+- **Kritik olay alarmları** (5xx oranı, `SerializationConflictError` eşiği) kod değil, Sentry
+  panosu yapılandırmasıdır.
 
 ## Saat dilimi: referans tenant'tır (Issue #134)
 
@@ -3002,3 +3036,280 @@ uzanıyor).
 3. Bu üç advisory'yi gerekçesiyle allowlist'e almak.
 
 Karar verilene kadar job **eklenmedi**; eklemek, CI'ı yeşil tutma kuralını ihlal ederdi.
+
+## Modül seed mekanizması (Issue #154)
+
+Bir modül bir tenant'ta **ilk kez** açıldığında, kullanılabilir olması için gereken varsayılan
+verinin kurulması. Kapatıp tekrar açmak veri **kopyalamamalıdır**.
+
+### Seed, modülü açan transaction'ın İÇİNDE çalışır
+
+`ModuleSeed` imzası `prisma` değil **`tx`** alır. Ayrı bir bağlantıda çalıştırmak, seed başarılı
+olup modülün açılmaması (ya da tersi) durumunu mümkün kılardı — ikisi **tek bir atomik
+karardır**.
+
+`seededAt` **aynı yazmada** doldurulur. Ayrı bir yazmada doldurmak, arada düşen bir istekte
+**çift seed** üretirdi.
+
+### Eşzamanlılık
+
+Tüm işlem zaten `runSerializable()` içinde (bağımlılık kuralı nedeniyle, #151). `seededAt`
+okuması ve seed yazması aynı serializable transaction'da olduğu için, eşzamanlı iki "aç"
+isteğinden biri serialization hatası alıp yeniden dener ve ikinci denemede `seededAt` dolu
+bulur. `integration/module-seed.spec.ts` bunu kanıtlıyor.
+
+**İkinci savunma katmanı:** seed fonksiyonları kendi başlarına da idempotent yazılır — unique
+constraint'lere dayanır, "önce say sonra ekle" **yapmaz**.
+
+### Seed başarısız olursa
+
+Transaction **rollback** olur: modül açılmaz, yarım veri kalmaz. Servis `503` döner — **500
+değil** (kullanıcı bir sunucu çökmesi değil, tamamlanmamış bir işlem görmeli; durum tutarlı
+olduğu için tekrar denemek mantıklı) ve **409 değil** (bu bir iş kuralı ihlali değil, kurulum
+hatası).
+
+**Bilinen sınır:** kalıcı olarak başarısız olan bir seed her denemede aynı `503`'ü döndürür;
+gerçek neden yalnızca sunucu logundadır.
+
+### Kapatma seed'i geri almaz
+
+`seededAt` bir kez dolduktan sonra hiç temizlenmez ve kapatma veri silmez.
+
+### Bugün hiçbir modülde seed TANIMLI DEĞİL
+
+Mekanizma hazır, ama kurulacak veri henüz yok: CRM'in aşama şablonu kendi modellerini bekliyor
+(#157), tahsilatın varsayılanı yok. Uydurma bir seed yazmak, var olmayan tablolara referans
+veren ve derlenmeyen bir katalog üretirdi — `permissions` ve `nav` alanlarının başlangıçta boş
+bırakılmasıyla aynı gerekçe.
+
+Bu yüzden `setModuleEnabled()` bir `seeds` **enjeksiyon seam'i** taşır: mekanizmayı gerçek bir
+domain seed'i olmadan test edebilmek için. Katalogu test içinde mutasyona uğratmak reddedildi —
+paylaşılan global durumu değiştirir ve testler arası sızıntı üretirdi. Bu bir **bypass
+değildir**: seed'i atlamaz, yalnızca kaynağını değiştirir; `seededAt` mantığı, transaction
+sınırı ve rollback davranışı aynen çalışır (`emailSender` ve `probeDatabase` seam'leriyle aynı
+desen).
+
+### Kapsam dışı
+
+- Var olan tenant'lara toplu seed basan CLI/migration script'i.
+- Seed'in kullanıcı tarafından "sıfırla" ile yeniden çalıştırılması.
+
+## Güvenlik kararı: bağımlılık taraması tek başına yetmez
+
+Next.js **16.3.3**, iki **Critical** açığı kapatan bir yama sürümüdür:
+
+| Advisory | CVSS | Etkilenen | Ne |
+| --- | --- | --- | --- |
+| `GHSA-p293-qw3h-jr36` | 9.0 | `>= 16.0 < 16.3.3` | Windows barındırmada path traversal → kimliksiz RCE |
+| `GHSA-2xp9-vwfh-vxw4` | 9.5 | `< 16.3.3` | Image Optimization AVIF → `sharp`/`libheif` → kimliksiz RCE |
+
+Bu repo `16.3.0`'daydı, yani **her iki aralığın da içindeydi**.
+
+### Kritik ders: `npm audit` bunları BİLDİRMEDİ
+
+Yükseltme anında `npm audit` çalıştırıldı ve çıktısında `next` **hiç geçmiyordu** — yalnızca
+`prisma`/`@prisma/config`/`deepmerge-ts` bulguları vardı. Sebep: her iki advisory de o an
+GitHub **global advisory veritabanında yoktu** (`gh api advisories/GHSA-...` → `404`); yalnızca
+`vercel/next.js` deposunun kendi advisory sayfalarında yayınlanmışlardı. npm'in danışma
+veritabanı da onları henüz almamıştı.
+
+Sonuç: **tarama aracının sessizliği, güvende olduğumuz anlamına gelmez.** CVSS 9.0 ve 9.5
+seviyesinde iki RCE, `npm audit`'e göre yoktu.
+
+**Karar:** bağımlılık taraması (`npm audit` + Dependabot) gerekli ama **yeterli değildir**.
+Framework advisory'leri **ayrıca** takip edilir:
+
+- `next`, `next-auth` ve `prisma` için upstream release notları/advisory sayfaları düzenli
+  okunur; Dependabot'un sessizliği kanıt sayılmaz.
+- Bir yama sürümünün release notunda "security fixes" geçiyorsa, o sürüm **rutin bir güncelleme
+  gibi kuyruğa alınmaz**.
+- Lockstep sürümlenen paketler (`next` + `eslint-config-next`) **birlikte** yükseltilir; ayrı
+  bırakmak, lint yapılandırmasının yamalı, çalışma zamanının yamasız kalmasına yol açar — bu
+  olayda Dependabot tam olarak bunu önerdi (yalnızca `eslint-config-next` için PR açtı).
+
+### İkinci advisory bize dokunuyor muydu?
+
+Ölçüldü, varsayılmadı:
+
+- **`next/image` uygulamada hiç kullanılmıyor** — `src/` içinde tek bir `<Image>` veya
+  `next/image` import'u yok (`src/proxy.ts`'teki iki referans yalnızca matcher yorumu).
+- **`images.formats` varsayılanı `['image/webp']`** (doğrulandı:
+  `node_modules/next/dist/shared/lib/image-config.js`). AVIF **opt-in**'dir ve
+  `next.config.ts`'te `images` bloğu **hiç yok** — yani AVIF üretimi kapalı.
+- **`remotePatterns` boş** (varsayılan): `/_next/image` uzak URL getiremez.
+- **Kullanıcı dosya yüklemesi yok**; `public/` yalnızca beş statik SVG içeriyor.
+- Ancak **`sharp@0.35.3` ağaçta var** (`next`'in geçişli bağımlılığı) ve `/_next/image`
+  endpoint'i, kodda `<Image>` kullanılmasa da bir Next uygulamasında **mevcuttur**.
+
+**Değerlendirme:** ikinci advisory'ye maruziyetimiz düşük görünüyor, ama **sıfır olduğu
+iddia edilmiyor** — endpoint var ve zafiyetli kütüphane ağaçta. Birinci advisory (Windows path
+traversal) ise geliştirme makineleri Windows olduğu için doğrudan ilgilidir.
+
+**Kalan risk:** production hedefi henüz belirlenmedi (#185/#187 açık). Hedef Windows tabanlı bir
+barındırma olursa birinci advisory sınıfı yeniden değerlendirilmelidir.
+## AuditLog saklama ve arşivleme (Issue #188)
+
+`AuditLog` her state değiştiren işlemde bir satır yazıyor ve **hiçbir zaman silinmiyordu**. Bir
+yıl içinde veritabanının en büyük tablosu o olurdu; `@@index([createdAt])` ve `@@index([action])`
+de onunla birlikte büyürdü. Ayrıca "kişisel veriyi ne kadar süre tutuyorsunuz?" sorusunun bir
+cevabı yoktu.
+
+### Saklama süresi: 12 ay sıcak, öncesi arşiv
+
+Audit log'un iki tüketicisi var: **güvenlik incelemesi** (pratikte haftalar, en fazla aylar
+geriye bakar) ve **uyuşmazlık çözümü** (finansal bir üründe bir işlemin kim tarafından
+değiştirildiği bir mali yıl boyunca sorulabilir). 12 ay ikisini de karşılar ve **tam bir mali
+dönemi** kapsar.
+
+**Daha kısa (90 gün) reddedildi:** yıl sonu kapanışında geçmiş bir çeyreğin kayıtları kaybolurdu.
+**Daha uzun (7 yıl) reddedildi:** yasal saklama yükümlülüğü audit log'a değil **finansal
+kayıtlara** aittir; audit log onların yerine geçmez. Kişisel veriyi gereğinden uzun tutmak da
+bir yükümlülüktür, avantaj değil.
+
+"12 ay" verinin ömrü değil, **sıcak veritabanında kalma süresidir** — süresi dolan kayıtlar
+silinmeden önce arşivlenir.
+
+### Önce arşiv, sonra silme
+
+Süreç ikisinin arasında ölürse satırlar hâlâ veritabanındadır ve bir sonraki çalıştırma onları
+**yeniden** arşivler: sonuç, arşivde yinelenen kayıtlardır. Ters sıra (önce sil, sonra arşivle)
+**veri kaybı** üretirdi. Yinelenen arşiv kaydı geri dönülebilir bir sorundur; kaybolan denetim
+kaydı değildir.
+
+Arşiv **JSONL**'dir (satır başına bir JSON): tek dev bir dizinin aksine akış halinde okunabilir,
+milyonlarca satır belleğe alınmadan işlenebilir. Dosya önce `.tmp` yazılıp sonra `rename`
+edilir — `rename` aynı dosya sistemi içinde atomiktir; doğrudan hedefe yazarken süreç ölürse
+geride **yarım bir arşiv** kalır ve o dosya "silinen satırların tam kaydı" sanılırdı.
+
+### Partiler hâlinde, idempotent
+
+Tek dev `DELETE` **atılmaz**: milyonlarca satırlık tek bir ifade tabloyu uzun süre kilitler,
+WAL'ı şişirir ve replikasyon gecikmesi üretir — bakım işi üretimi durdurur hale gelirdi.
+
+Cutoff **mutlak bir tarihtir** (satır sayısına veya önceki çalıştırmaya bağlı değil), bu yüzden
+görev güvenle tekrarlanabilir ve yarıda kesilirse kaldığı yerden devam eder. İkinci çalıştırma
+hiçbir şey silmez ve dosya bile üretmez.
+
+Tek çalıştırmada azami parti sayısı sınırlıdır: ilk çalıştırma yılların birikmiş kaydını
+bulabilir ve sınırsız bir döngü, zamanlanmış işin platform zaman aşımına takılıp **her seferinde
+aynı yerde ölmesine** yol açardı. `hasMore` bir sonraki çalıştırmanın gerekli olduğunu söyler.
+
+### Silme audit log'a YAZMAZ
+
+Silme işlemi kendi `AuditLog` satırını üretseydi tablo hiçbir zaman tam boşalmaz ve görev **kendi
+kendini besleyen** bir döngüye girerdi. Sonuç yalnızca sunucu loguna yazılır — bakım işinin
+gerçekten çalıştığının tek görünür kanıtı budur.
+
+`tenantId`/`actorUserId` **null** olan kayıtlar da politikaya tabidir: tenant'ı veya kullanıcısı
+silinmiş kayıtlar (`onDelete: SetNull`) aksi halde sonsuza kadar birikirdi.
+
+### Tetikleme: platformun zamanlanmış işi
+
+`POST /api/maintenance/audit-retention`, `MAINTENANCE_SECRET` ile korunur. Uygulama içinde
+kalıcı bir zamanlayıcı **kurulmaz**: `setInterval` serverless/çok instance'lı bir deployment'ta
+ya hiç çalışmaz ya da her instance'ta ayrı ayrı çalışır.
+
+**Oturum değil, paylaşılan anahtar:** zamanlanmış bir işin oturumu yoktur; ona bir kullanıcı
+hesabı açmak, o hesabın çalınması hâlinde çok daha geniş bir yetki verirdi. Anahtar,
+karşılaştırmada **sabit zamanlıdır** (`timingSafeEqual`, önce SHA-256 ile eşit uzunluğa
+indirgenerek — farklı uzunlukta `timingSafeEqual` fırlatır ve fırlatmanın kendisi "uzunluk
+tutmadı" bilgisini sızdırırdı).
+
+**Anahtar yanlışsa da yapılandırılmamışsa da yanıt `404`'tür** — `401`/`403` değil. Kimliksiz bir
+çağıran, bu adreste bir bakım endpoint'i olup olmadığını ve yapılandırılmış olup olmadığını
+ayırt edemez. Yanlış yapılandırma yine de **görünürdür**: zamanlanmış iş 404 alır ve platformun
+cron kayıtlarında başarısız görünür.
+
+**Yanıt sayıları içerir, satırları değil:** silinen audit kayıtları kişisel veri taşır; onları
+HTTP yanıtına koymak arşiv dosyasının erişim kontrolünü anlamsız kılardı.
+
+### Kalan risk / kapsam dışı
+
+- **Arşiv bugün YEREL DİSKE yazılıyor.** Soğuk depolamaya taşımak **#185**'in konusudur ve o
+  issue veritabanı sağlayıcısı kararına bağlı olduğu için açık. `AUDIT_ARCHIVE_DIR` ile hedef
+  değiştirilebilir; production'da yedekleme deposuyla aynı yere işaret etmelidir.
+- **Zamanlanmış işin kendisi kurulmadı** — `.github/workflows` veya platform cron'u tanımlamak
+  bir deployment adımıdır ve `MAINTENANCE_SECRET`'ın ortama konmasını gerektirir.
+- **Doğru anahtarla 200 alındığı manuel doğrulanmadı**: `MAINTENANCE_SECRET` test ortamında
+  tanımlı değil, bu yüzden otomatik testler "özellik kapalı" (404) davranışını doğrular.
+
+## Veritabanı bağlantı yönetimi (Issue #187)
+
+Sağlayıcı **Neon** olarak karara bağlandı. Neon iki ayrı endpoint sunar ve bu ikisi
+**farklı işler için** vardır; ikisini karıştırmak production'da iki ayrı şekilde canını yakar.
+
+### İki adres, iki iş
+
+| Değişken | Ne | Kim kullanır |
+| --- | --- | --- |
+| `DATABASE_URL` | **Doğrudan** bağlantı | `prisma migrate`, `prisma generate`, `prisma studio` |
+| `DATABASE_POOL_URL` | **Havuzlanmış** (PgBouncer) bağlantı — Neon'da host'unda `-pooler` geçen endpoint | Uygulama çalışma zamanı (`src/lib/prisma.ts`) |
+
+`DATABASE_POOL_URL` **opsiyoneldir**. Tanımsızsa uygulama `DATABASE_URL`'e düşer ve davranış
+bugünküyle **birebir** aynı kalır — lokal geliştirme ve CI hiç etkilenmez.
+
+### Neden bu ayrım gerekli
+
+Her istekte session revocation için bir `User` sorgusu atılıyor (bilinçli karar, bkz. "Session
+Revocation"). Bu, uygulamanın en sıcak sorgusudur. Serverless bir deployment'ta her instance
+**kendi Prisma havuzunu** açar; Prisma'nın varsayılanı `num_cpus * 2 + 1` bağlantıdır ve bu
+sayı instance sayısıyla **çarpılır**. Postgres'in `max_connections`'ı bu çarpımı karşılamaz:
+trafik arttığında uygulama `too many connections` ile **aniden** çöker. Bu, yavaşça kötüleşen
+değil, bir eşiği geçince bir anda oluşan bir arızadır — bu yüzden trafik gelmeden yapılandırılır.
+
+### MIGRATION'LAR POOLER ÜZERİNDEN ÇALIŞTIRILMAZ
+
+Bu, bu bölümün en önemli cümlesidir. Neon'un pooler'ı **transaction modunda** çalışır:
+prepared statement'ları ve oturum düzeyi durumu desteklemez. Prisma Migrate ise bir **advisory
+lock** alır ve DDL'i tek bir oturum boyunca yürütür. Pooler üzerinden bu davranış bozulur;
+migration **yarıda kalabilir** ve şema tutarsız bir durumda bırakılabilir.
+
+Bu yüzden `prisma/schema.prisma`'daki `datasource` bloğu **bilerek** `DATABASE_URL`'e bağlı
+kalır. Havuzlanmış adres şemaya hiç girmez; yalnızca çalışma zamanında `PrismaClient`
+yapıcısına `datasourceUrl` olarak verilir.
+
+**Reddedilen alternatif — Prisma'nın `directUrl` alanı.** Kanonik çözüm gibi görünür, ama
+`url`'i `DATABASE_POOL_URL`'e bağlamayı gerektirir. O değişken tanımsız olduğunda — lokal
+geliştirme, CI, `docker compose` ile ayağa kalkan her kurulum — Prisma **hiç** çalışmaz;
+`env()` içinde geri düşüş ifade edilemez. Programatik çözüm aynı ayrımı sağlar ve havuz
+yapılandırılmamışken hiçbir şeyi değiştirmez.
+
+Bu kural bir yorumla değil, bir testle korunuyor: `integration/db-connection.spec.ts` şema
+dosyasını okur ve `datasource` bloğunda `DATABASE_POOL_URL` geçerse **kırmızıya döner**.
+
+### Uygulama başına `connection_limit`
+
+Havuzlanmış adrese, operatör kendisi belirtmemişse `connection_limit=5` eklenir.
+
+Pooler'daki limit **sunucu genelindedir**; istemci tarafında sınır koymazsak tek bir instance
+havuzun tamamını tüketip diğer instance'ları aç bırakabilir. 5, Neon'un pooled endpoint'inin
+karşıladığı istemci sayısıyla serverless instance başına makul bir paydır.
+
+**Operatörün açık tercihi ezilmez:** adreste zaten bir `connection_limit` varsa dokunulmaz.
+Sessizce 20'yi 5'e düşürmek, yapılandırmayı yalancı hale getirirdi.
+
+### Ölçüm: 50 eşzamanlı kimlikli istek
+
+Kabul kriteri varsayımla değil, ölçümle kapatıldı. Sonuç ve yöntem PR'da; özet: 50 eşzamanlı
+kimlikli `GET /api/users/me` isteği (her biri session revocation sorgusunu tetikler) **sıfır
+hata** ile tamamlandı, `too many connections` (P1001) veya havuz zaman aşımı (P2024)
+görülmedi.
+
+Ölçüm **lokal PostgreSQL'e** karşı yapıldı; Neon'un pooler'ı henüz hesap bağlı olmadığı için
+devrede değildi. Yani ölçülen şey **Prisma'nın kendi havuz davranışıdır** — 50 eşzamanlı istek
+sınırlı sayıda bağlantı üzerinden sıraya girer, yeni bağlantı açmaya çalışıp reddedilmez. Bu,
+kabul kriterinin doğrulanabilir yarısıdır.
+
+### Kalan risk / kapsam dışı
+
+- **Neon pooler'ı gerçek trafikle doğrulanmadı.** `DATABASE_POOL_URL` production ortamına
+  konduktan sonra aynı ölçüm oraya karşı tekrarlanmalıdır; bu, hesap erişimi gerektirdiği için
+  bu PR'ın dışındadır.
+- **`connection_limit=5` bir başlangıç değeridir**, ölçülmüş bir optimum değil. Doğru değer
+  instance sayısına ve Neon planının bağlantı kotasına bağlıdır; ilk yük altında gözden
+  geçirilmelidir.
+- **Deployment hedefi hâlâ bağlayıcı değil.** Migration'ların hangi adımda ve hangi adresle
+  koşacağı (`DATABASE_URL` ile, pooler'sız) `docs/deployment.md`'ye yazıldı, ama pipeline
+  kurulmadı — `#185`'in konusu.
+- **`jwt` callback sorgusu değiştirilmedi.** Issue açıkça bunu şart koşuyordu; bağlantı
+  yönetimi o sorguyu ucuzlatmaz, yalnızca yükünü taşınabilir kılar.

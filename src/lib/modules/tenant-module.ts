@@ -12,6 +12,7 @@ import {
   MODULE_DEFINITIONS,
   modulesDependingOn,
   type ModuleKey,
+  type ModuleSeed,
 } from "./catalog";
 
 /**
@@ -94,6 +95,33 @@ const UNKNOWN_MODULE_ERROR = "Unknown module key";
 const INVALID_ENABLED_ERROR = "enabled must be a boolean";
 const SERIALIZATION_CONFLICT_ERROR = "Temporary write conflict, please retry";
 
+/**
+ * Seed başarısız olduğunda dönen hata (Issue #154).
+ *
+ * 500 DEĞİL: kullanıcı bir sunucu çökmesi değil, tamamlanmamış bir işlem görmeli. Transaction
+ * ROLLBACK olduğu için modül AÇILMAMIŞTIR — yani durum tutarlıdır ve tekrar denemek
+ * mantıklıdır. 409 da değil: bu bir iş kuralı ihlali değil, kurulum hatasıdır.
+ *
+ * BİLİNEN SINIR: kalıcı olarak başarısız olan bir seed her denemede aynı 503'ü döndürür;
+ * gerçek neden yalnızca sunucu logundadır.
+ */
+const SEED_FAILED_ERROR = "Module could not be enabled: default data setup failed";
+
+export type SetModuleEnabledOptions = {
+  /**
+   * Seed fonksiyonlarını katalog yerine buradan alır.
+   *
+   * NEDEN VAR: bugün katalogdaki hiçbir modülün seed'i yok (gerçek veri #157'yi bekliyor),
+   * dolayısıyla mekanizmayı test etmenin başka yolu yok. Katalogu test içinde mutasyona
+   * uğratmak REDDEDİLDİ: paylaşılan global durumu değiştirir ve testler arası sızıntı üretir.
+   *
+   * Bu bir BYPASS DEĞİLDİR — seed'i atlamaz, yalnızca kaynağını değiştirir; `seededAt`
+   * mantığı, transaction sınırı ve rollback davranışı aynen çalışır (`emailSender` ve
+   * `probeDatabase` seam'leriyle aynı desen).
+   */
+  seeds?: Partial<Record<ModuleKey, ModuleSeed>>;
+};
+
 function missingDependencyError(missing: readonly ModuleKey[]): string {
   return `Enable the required module(s) first: ${missing.join(", ")}`;
 }
@@ -121,6 +149,7 @@ export async function setModuleEnabled(
   moduleKey: string,
   enabled: unknown,
   actorUserId: string,
+  options: SetModuleEnabledOptions = {},
 ): Promise<SetModuleEnabledResult> {
   if (!isModuleKey(moduleKey)) {
     return { ok: false, status: 400, error: UNKNOWN_MODULE_ERROR };
@@ -133,12 +162,15 @@ export async function setModuleEnabled(
   const now = new Date();
 
   let conflict: string | null = null;
+  // Seed hatasi `runSerializable`in retry'ina takilmasin diye bayrakla disariya tasinir:
+  // ayni seed tekrar denendiginde ayni sekilde patlar, tekrar denemek bosunadir.
+  let seedFailed = false;
 
   try {
     await runSerializable(async (tx) => {
       const rows = await tx.tenantModule.findMany({
         where: tenantScoped(tenantId, {}),
-        select: { moduleKey: true, enabled: true },
+        select: { moduleKey: true, enabled: true, seededAt: true },
       });
       const enabledKeys = new Set(
         rows.filter((row) => row.enabled).map((row) => row.moduleKey),
@@ -167,21 +199,54 @@ export async function setModuleEnabled(
       //
       // `tenantId` `where`de AÇIKÇA yer alır (bileşik unique'in parçası); güncelleme yalnızca
       // o tenant'ın satırına ulaşabilir.
+      // VARSAYILAN VERİ KURULUMU (Issue #154).
+      //
+      // `seededAt` null ise ve modülün bir seed'i varsa, seed AYNI TRANSACTION içinde
+      // çalışır ve `seededAt` aynı yazmada doldurulur. Ayrı bir yazmada doldurmak, arada
+      // düşen bir istekte ÇİFT SEED üretirdi.
+      //
+      // Kapatıp tekrar açmak seed'i TEKRAR ÇALIŞTIRMAZ: `seededAt` bir kez dolduktan sonra
+      // hiç temizlenmez. Kapatma zaten veri silmez.
+      const existing = rows.find((row) => row.moduleKey === moduleKey);
+      const seed = options.seeds?.[moduleKey as ModuleKey] ?? definition.seed;
+      const shouldSeed = enabled && seed !== undefined && !existing?.seededAt;
+
+      if (shouldSeed) {
+        try {
+          await seed(tx, tenantId);
+        } catch (seedError) {
+          // Seed hatası transaction'ı ROLLBACK ettirir: modül açılmaz, yarım veri kalmaz.
+          // `runSerializable`ın retry'ı boşuna tetiklenmesin diye bayrakla taşınır.
+          console.error("[modules] seed failed", {
+            moduleKey,
+            error: seedError instanceof Error ? seedError.message : "unknown error",
+          });
+          seedFailed = true;
+          throw seedError;
+        }
+      }
+
       await tx.tenantModule.upsert({
         where: { tenantId_moduleKey: { tenantId, moduleKey } },
         create: {
           tenantId,
           moduleKey,
           enabled,
+          ...(shouldSeed ? { seededAt: now } : {}),
           ...(enabled ? { enabledAt: now } : { disabledAt: now }),
         },
         update: {
           enabled,
+          ...(shouldSeed ? { seededAt: now } : {}),
           ...(enabled ? { enabledAt: now } : { disabledAt: now }),
         },
       });
     });
   } catch (error) {
+    if (seedFailed) {
+      return { ok: false, status: 503, error: SEED_FAILED_ERROR };
+    }
+
     if (error instanceof SerializationConflictError) {
       // GEÇİCİ bir sunucu durumu; iş kuralı ihlali (409) DEĞİL.
       return { ok: false, status: 503, error: SERIALIZATION_CONFLICT_ERROR };

@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import type { Permission } from "@/lib/authz/permissions";
 
 /**
@@ -26,6 +28,18 @@ export type ModuleNavItem = {
   /** Menü öğesi yalnızca bu izne sahip role gösterilir. */
   permission: Permission;
 };
+
+/**
+ * Bir modül bir tenant'ta İLK KEZ açıldığında çalışan varsayılan veri kurulumu (Issue #154).
+ *
+ * `tx` ZORUNLUDUR, `prisma` DEĞİL: seed, modülü açan transaction'ın İÇİNDE çalışmalıdır.
+ * Ayrı bir bağlantıda çalıştırmak, seed başarılı olup modülün açılmaması (ya da tersi)
+ * durumunu mümkün kılardı — ikisi tek bir atomik karardır.
+ *
+ * SEED KENDİ BAŞINA DA IDEMPOTENT yazılır (savunmanın ikinci katmanı): unique
+ * constraint'lere dayanır, "önce say sonra ekle" YAPMAZ. Birinci katman `seededAt`tir.
+ */
+export type ModuleSeed = (tx: Prisma.TransactionClient, tenantId: string) => Promise<void>;
 
 export type ModuleDefinition = {
   key: ModuleKey;
@@ -56,6 +70,14 @@ export type ModuleDefinition = {
    * duruş. Menüyü modül-farkında kılan mekanizma #152'nin konusudur; bu alan onun sözleşmesidir.
    */
   nav: readonly ModuleNavItem[];
+  /**
+   * Varsayılan veri kurulumu (Issue #154). OPSİYONELDİR ve bugün hiçbir modülde TANIMLI
+   * DEĞİL — mekanizma hazır, ama kurulacak veri henüz yok: CRM'in aşama şablonu kendi
+   * modellerini bekliyor (#157), tahsilatın varsayılanı yok. Uydurma bir seed yazmak,
+   * var olmayan tablolara referans veren ve derlenmeyen bir katalog üretirdi (`permissions`
+   * ve `nav` alanlarının başlangıçta boş bırakılmasıyla aynı gerekçe).
+   */
+  seed?: ModuleSeed;
 };
 
 /**

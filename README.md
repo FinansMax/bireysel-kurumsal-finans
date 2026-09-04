@@ -1151,6 +1151,13 @@ Bir tenant'a yeni kullanıcı davet etme akışı (`src/lib/tenants/invitation.t
 
 ### Yetki ve izolasyon
 
+### Tahsilat para birimi doğrulaması (Issue #165)
+
+Tahsilat tarafı `Account.currency` ile aynı biçimsel doğrulamayı kullanır: üç büyük harf.
+`Intl.supportedValuesOf("currency")` kullanılmaz; aksi halde aynı alan iki farklı katılıkta
+doğrulanır ve ICU sürümüne bağlı davranış oluşur. Tam ISO listesi ve kur dönüşümü ayrı bir ürün
+kararıdır.
+
 - **`VIEW_ACCOUNTS` ile `MANAGE_ACCOUNTS` ayrı izinlerdir.** MEMBER hesapları **görür** ama
   oluşturamaz/güncelleyemez/silemez; ADMIN ve OWNER yönetebilir. Gerekçe: finansal kayıtları
   okumak ekibin günlük işidir, hesap açmak/silmek ve bakiyeyi elle değiştirmek yönetim işidir.

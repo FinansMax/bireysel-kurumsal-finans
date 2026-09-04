@@ -51,6 +51,8 @@ export const RATE_LIMIT_POLICIES = {
   // fazlasıyla karşılar; kimse 15 dakikada beşten fazla kez tüm cihazlarından çıkmaz.
   REVOKE_SESSIONS: { limit: 5, windowMs: 15 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
+  // 60/dk, meşru toplu tahsilat girişine alan bırakırken pahalı DB yazımlarının sınırsız
+  // tetiklenmesini engeller (Issue #165).
   COLLECTIONS_MANAGE: { limit: 60, windowMs: 1 * MINUTES },
   // VERIFY_EMAIL 10/15dk (Issue #190): token 256 bit olduğu için brute-force birincil tehdit
   // DEĞİLDİR; amaç, kimlik istemeyen ve her çağrıda DB'ye yazan bu endpoint'in sınırsız

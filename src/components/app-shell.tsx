@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { ModuleNavLink } from "@/lib/modules/nav";
 
 import { AppSidebar } from "./app-sidebar";
+import { EmailVerificationBanner } from "./email-verification-banner";
 import { type SwitchableTenant } from "./tenant-switcher";
 
 /**
@@ -18,6 +19,7 @@ import { type SwitchableTenant } from "./tenant-switcher";
  */
 export function AppShell({
   userEmail,
+  emailVerified,
   tenants,
   activeTenantId,
   moduleLinks,
@@ -25,6 +27,11 @@ export function AppShell({
   children,
 }: {
   userEmail: string;
+  /**
+   * Sunucuda okunmuş doğrulama durumu (#190). Kabuk bunu KARAR olarak değil, GÖSTERİM girdisi
+   * olarak alır — asıl kapı ilgili endpoint'lerin içindedir (invariant #3).
+   */
+  emailVerified: boolean;
   tenants: SwitchableTenant[];
   activeTenantId: string | null;
   /** Açık modüllerin menü linkleri (#152); sunucuda hesaplanır, kabuk yalnızca taşır. */
@@ -49,6 +56,13 @@ export function AppShell({
        * tablonun kendi kutusunda kalır (bkz. `components/ui/table.tsx` → `TableScroll`).
        */}
       <div className="flex min-w-0 flex-1 flex-col">
+        {/*
+          SERIT ana icerik alaninin DISINDA ve en üstte: sayfa içeriğinin bir parçası değil, hesabın
+          durumudur. İçeriğin içine koymak, her sayfanın kendi başlığından sonra farklı bir
+          yerde belirmesine yol açardı.
+        */}
+        {emailVerified ? null : <EmailVerificationBanner email={userEmail} />}
+
         {/*
          * `pt-[4.25rem]` MOBİLDE ZORUNLU: sidebar'ın mobil üst çubuğu `fixed`tir ve akışta yer
          * kaplamaz — bu boşluk olmadan sayfa başlığı çubuğun ALTINDA kalıyordu.

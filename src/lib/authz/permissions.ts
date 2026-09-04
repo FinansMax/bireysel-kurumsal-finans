@@ -42,6 +42,12 @@ export const PERMISSIONS = {
   // kolay yoludur ve bu yüzden MEMBER'a verilmez.
   VIEW_DEBT_CREDITS: "debt-credits:view",
   MANAGE_DEBT_CREDITS: "debt-credits:manage",
+  // Tahsilat ve ödeme planı (Issue #165). Finansal modellerdeki genel kalıbın aynısı: MEMBER
+  // planı ve taksitleri GÖRÜR, ama kuramaz/iptal edemez/tutarını değiştiremez. Bir taksitin
+  // tutarını ya da vadesini değiştirmek, tenant'ın ALACAĞINI yeniden yazmaktır —
+  // `MANAGE_DEBT_CREDITS` ile aynı sınıfta bir yetkidir ve aynı gerekçeyle MEMBER'a verilmez.
+  VIEW_COLLECTIONS: "collections:view",
+  MANAGE_COLLECTIONS: "collections:manage",
   // Modül sistemi (Issue #151). GÖRÜNTÜLEME her role verilir — menüyü kurabilmek için hangi
   // modüllerin açık olduğunu BİLMEK gerekir; bu bilgi bir sır değildir.
   //
@@ -86,6 +92,8 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.MANAGE_TRANSACTIONS,
     PERMISSIONS.VIEW_DEBT_CREDITS,
     PERMISSIONS.MANAGE_DEBT_CREDITS,
+    PERMISSIONS.VIEW_COLLECTIONS,
+    PERMISSIONS.MANAGE_COLLECTIONS,
     PERMISSIONS.VIEW_MODULES,
     PERMISSIONS.MANAGE_MODULES,
   ],
@@ -105,6 +113,8 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.MANAGE_TRANSACTIONS,
     PERMISSIONS.VIEW_DEBT_CREDITS,
     PERMISSIONS.MANAGE_DEBT_CREDITS,
+    PERMISSIONS.VIEW_COLLECTIONS,
+    PERMISSIONS.MANAGE_COLLECTIONS,
     // ADMIN modülleri GÖRÜR ama AÇAMAZ: ürün yüzeyini değiştirmek OWNER kararıdır.
     PERMISSIONS.VIEW_MODULES,
   ],
@@ -117,6 +127,7 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.VIEW_CATEGORIES,
     PERMISSIONS.VIEW_TRANSACTIONS,
     PERMISSIONS.VIEW_DEBT_CREDITS,
+    PERMISSIONS.VIEW_COLLECTIONS,
     PERMISSIONS.VIEW_MODULES,
   ],
 };

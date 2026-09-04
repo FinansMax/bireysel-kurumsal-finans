@@ -3013,29 +3013,90 @@ edilemeyecek katmanlar (auth davranışı, şema/migration uyumu).
 Açık PR sayısı 5 ile sınırlı — sınırsız bırakmak, incelenmeyen PR'ların birikip hepsinin
 görmezden gelinmesiyle sonuçlanır.
 
-### `npm audit` CI job'ı EKLENMEDİ — karar bekliyor
+### `npm audit` CI job'ı — eşik `critical`
 
-Issue bir `npm audit --audit-level=high` job'ı istiyor. **Bugün eklenirse CI anında kırmızıya
-döner:** mevcut ağaçta üç yüksek seviye açık var.
+CI'da yedinci bir job var: `npm audit --omit=dev --audit-level=critical`. Eşiğin `high`
+değil `critical` olması bilinçli bir karardır ve gerekçesi şudur.
+
+#### Önce yanlış çıkan varsayım
+
+"`prisma` CLI zinciri `devDependencies` altındadır, dolayısıyla `--omit=dev` onu eler"
+varsayımı **yanlıştır**. `@prisma/client` — ki o bir **production** bağımlılığıdır —
+`prisma`'yı `peerDependencies` içinde `"prisma": "*"` olarak ilan eder. npm bunu bir
+**production kenarı** sayar; zincir `--omit=dev` ile kesilmez.
+
+Ölçüldü, varsayılmadı:
+
+```bash
+npm audit --omit=dev --audit-level=high   # exit 1 - uc yuksek advisory raporlaniyor
+```
 
 ```
-@prisma/config  high
-deepmerge-ts    high   GHSA-ggr8-5vv4-36mx (stack exhaustion)
-prisma          high
+deepmerge-ts  <8.0.0   Severity: high
+  GHSA-ggr8-5vv4-36mx  (stack exhaustion on recursive object graphs)
+  @prisma/config  -> depends on vulnerable deepmerge-ts
+    prisma        -> depends on vulnerable @prisma/config
+3 high severity vulnerabilities
 ```
 
-`npm audit` bunlar için tek bir çözüm öneriyor: **`prisma@6.12.0`** — yani 6.19.3'ten
-**kırıcı bir düşürme** (`isSemVerMajor: true`). Ölçüldü: `--audit-level=high` exit **1**,
-`--audit-level=critical` exit **0**; `--omit=dev` de temiz **değil** (açık üretim ağacına
-uzanıyor).
+`npm audit`'in tek önerisi `prisma@6.12.0` — 6.19.3'ten **kırıcı bir düşürme**.
 
-Üç seçenek var ve üçü de bir karar gerektiriyor:
+#### Sonra ölçülen şey: bu paketler kod yolunda YOK
 
-1. Prisma'yı 6.12.0'a düşürmek (şema/migration uyumu yeniden doğrulanmalı),
-2. Eşiği `critical`'a çekmek (issue'nun istediğinden zayıf),
-3. Bu üç advisory'yi gerekçesiyle allowlist'e almak.
+Ağaçta görünmek ile **çalıştırılan koda ulaşmak** aynı şey değildir. Ölçüm (komutlar
+tekrarlanabilir, `npm run build` sonrası koşulur):
 
-Karar verilene kadar job **eklenmedi**; eklemek, CI'ı yeşil tutma kuralını ihlal ederdi.
+```bash
+# 1) Deploy edilen cikti - sifir eslesme beklenir
+grep -rl "deepmerge\|@prisma/config" .next/server .next/static | wc -l          # 0
+
+# 2) Prisma client'in CALISMA ZAMANI paketi
+grep -c "deepmerge" node_modules/@prisma/client/runtime/client.js                # 0
+grep -c "@prisma/config" node_modules/@prisma/client/runtime/client.js           # 1 (asagiya bakin)
+
+# 3) Gercek bir import/require var mi
+grep -rno 'require("deepmerge-ts")\|require("@prisma/config")\|from "deepmerge-ts"\|from "@prisma/config"' \
+  node_modules/@prisma/client/ | wc -l                                          # 0
+```
+
+İkinci komuttaki **tek** eşleşme bir import değil, pakete gömülü bir package.json metadata
+dizesidir: `dependencies:{"@prisma/config":"workspace:*",...}`. Yani `deepmerge-ts` ve
+`@prisma/config` **çalışma zamanında hiç çağrılmıyor**; `prisma` zinciri yalnızca CLI
+(migration/generate) yolunda kullanılıyor ve o yol deploy edilen sunucu paketine girmiyor.
+
+#### Bu yüzden eşik `critical`
+
+Yakalanması gereken şey **deploy edilen koda ULAŞAN** açıktır. Ağaçta duran ama çağrılmayan bir
+paket için CI'ı kalıcı kırmızı tutmanın sonu bellidir: bir süre sonra herkes audit çıktısını
+görmezden gelir ve araç, gerçek bir bulguyu bildirdiği gün de susmuş sayılır. Kalıcı kırmızı bir
+kapı, kapı değildir.
+
+**Görünürlük kaybedilmiyor.** Ölçüldü: `--audit-level` **yalnızca çıkış kodunu** değiştirir,
+çıktıyı değil. Job her koşuda üç `high` bulgunun tamamını basar ve yine de yeşil kalır — bu
+yüzden ayrı bir "raporlama" adımına gerek duyulmadı.
+
+`--omit=dev` korunuyor: geliştirme araçlarındaki bir açık deploy edilen koda ulaşmaz.
+
+Job `npm ci` **çalıştırmaz**: `npm audit` `package-lock.json`'dan çalışır ve
+`node_modules`'a ihtiyaç duymaz (doğrulandı — yalnızca `package.json` + lock dosyası
+kopyalanmış boş bir dizinde aynı raporu üretti). Kurulum eklemek işi dakikalarca uzatır,
+taramaya hiçbir şey katmaz.
+
+#### KABUL EDİLEN KALAN RİSK
+
+Eşik `critical` olduğu için, ileride kod yolunda **gerçekten bulunan** yüksek seviyeli bir
+açık da **CI'ı kırmayacaktır.** Bu, bu kararın bedelidir ve küçümsenmiyor.
+
+Karşı önlemler — üçü birlikte, biri eksikse risk kabul edilebilir değildir:
+
+1. **Takip issue'su zorunludur ve açık tutulur** — **#227**. Üç advisory'nin durumu orada izlenir; Prisma
+   `deepmerge-ts@^8`'e geçtiği anda eşik **`high`'a çekilir**.
+2. **Audit çıktısı her sürümde okunur.** Job yeşil olsa da çıktısı bilgi taşır; "yeşil" onu
+   okumamanın gerekçesi değildir.
+3. **Bağımlılık taraması tek başına yetmez** — bu, ayrı ve daha genel bir karar olarak zaten
+   yazılı (bkz. "Güvenlik kararı: bağımlılık taraması tek başına yetmez"). Next.js'in iki
+   Critical RCE advisory'si `npm audit` tarafından **hiç bildirilmemişti**; framework
+   advisory'leri ayrıca takip edilir.
 
 ## Modül seed mekanizması (Issue #154)
 
@@ -3313,6 +3374,90 @@ kabul kriterinin doğrulanabilir yarısıdır.
   kurulmadı — `#185`'in konusu.
 - **`jwt` callback sorgusu değiştirilmedi.** Issue açıkça bunu şart koşuyordu; bağlantı
   yönetimi o sorguyu ucuzlatmaz, yalnızca yükünü taşınabilir kılar.
+
+## Yedekleme ve geri dönüş (Issue #185)
+
+> **RPO = 24 saat. RTO = 4 saat.**
+>
+> Prosedür: `docs/runbook-restore.md` · Politika ve saklama süreleri: `docs/data-retention.md`
+
+Ürün müşterinin **parasal** verisini tutuyor. Bu iki sayı yazılmadan yedekleme tasarımı
+yapılamaz; "elimizde yedek var" bir politika değildir.
+
+### Neden bu iki sayı
+
+**RPO 24 saat** — en kötü durumda 24 saate kadar veri kaybını göze alıyoruz. Bu bir **tavandır**,
+beklenen değer değil: birincil katman olan point-in-time recovery kaybı dakikalar seviyesinde
+tutar. 24 saat, PITR'ın da kullanılamadığı senaryoyu (hesap kilitlenmesi, sağlayıcı kaybı)
+karşılar.
+
+**RTO 4 saat** — ölçülen `pg_restore` süresine göre çok geniştir ve öyle olması kasıtlıdır.
+Ölçülen süre yalnızca geri yüklemedir; gerçek olayda kararın verilmesi, doğru yedeğin seçilmesi,
+indirme, deployment geçişi ve doğrulama eklenir. Dar bir RTO yazmak, karşılanamayacak bir söz
+vermek olurdu.
+
+### İki katman, ve ikincisinin neden var olduğu
+
+| Katman | Ne | Saklama |
+| --- | --- | --- |
+| **Birincil** | Neon otomatik yedek + **PITR** | En az 7 gün hedefleniyor |
+| **İkincil** | Haftalık **taşınabilir** `pg_dump -Fc`, ayrı nesne deposunda | **8 hafta** |
+
+Sağlayıcının kendi yedeği, **hesabın kilitlenmesi** ya da sağlayıcının kendisinin kaybedilmesi
+durumunda erişilemez; snapshot formatı da sağlayıcıya özeldir ve başka bir Postgres'e taşınamaz.
+`pg_dump -Fc` çıktısı herhangi bir Postgres 16'ya `pg_restore` ile yüklenir. İkinci katman,
+**sağlayıcı kilidini kıran tek şeydir** (#95'ten devralınan kısıt) ve birincinin *yerine* değil
+*yanına* gelir.
+
+**8 hafta neden:** bir veri bozulması her zaman aynı gün fark edilmez. Yalnızca son dökümü
+tutmak, "bozulma zaten dökümün içinde" senaryosunda hiçbir işe yaramaz.
+
+**Yedekleme anahtarı yalnızca YAZMA yetkilidir.** Sunucusu ele geçirilen bir sistemde o anahtarla
+yedekler okunamaz ve silinemez. Fidye yazılımı senaryosunda yedekleri koruyan tek şey budur.
+
+### Döküm pooler üzerinden alınmaz
+
+`pg_dump` uzun süren tek bir oturum açar ve tutarlı bir snapshot için oturum durumuna güvenir;
+PgBouncer transaction modunda bu bozulur ve döküm **hata vermeden tutarsız** çıkabilir.
+`scripts/backup-dump.sh` adreste `-pooler` görürse **çalışmayı reddeder**. Aynı gerekçe
+migration'lar için de geçerlidir (bkz. "Veritabanı bağlantı yönetimi (Issue #187)").
+
+### Sessiz yedeksizliğe karşı
+
+Bir yedekleme işinin en tehlikeli hâli, **başarılı görünüp işe yaramaz bir dosya üretmesidir**.
+Script bu yüzden yüklemeden önce dökümü doğrular: `pg_restore --list` ile okunabilirlik, kayıt
+sayısı eşiği ve dökümde **`_prisma_migrations` tablosunun varlığı**. Sonuncusu olmadan geri
+dönüş, migration durumu bilinmeyen bir veritabanı üretir.
+
+### Prova yapıldı — 2026-09-03
+
+"Test edilmemiş bir yedek, yedek değildir." Prosedür varsayılmadı, koşuldu: 31 MB'lık kaynaktan
+`pg_dump -Fc` (**518 ms**) → **boş** hedef veritabanı → `pg_restore` (**639 ms**) → doğrulama.
+
+Altı tablonun kayıt sayısı, 13 tablonun tamamı, **15 uygulanmış migration** ve son migration adı
+kaynakla **birebir** eşleşti; yarım kalmış migration yok. Ayrıntılar ve **dürüst sınırlar**
+(Neon'a karşı değil lokal Postgres 16'ya karşı, 31 MB production ölçeği değil, PITR provası
+yapılmadı): `docs/runbook-restore.md` § 7.
+
+### Geri dönüşten sonra: `AUTH_SECRET`
+
+Geri dönüş oturumları geçersiz kılmaz — `credentialsChangedAt` ve `sessionsRevokedAt` alanları
+da geri sarılır. Yani **geri alınmış bir şifre değişikliği, eski oturumu yeniden geçerli kılar**.
+Olay bir güvenlik ihlaliyse `AUTH_SECRET` döndürülmelidir; runbook § 8 bunu adım olarak taşır.
+
+### Kalan risk / benden bağımsız yapılamayanlar
+
+Bu bölüm hedef durumu tarif eder. Aşağıdakiler **hesap erişimi** gerektirdiği için yapılmadı ve
+**#185 bunlar tamamlanmadan kapatılmamalıdır**:
+
+- Neon'da otomatik yedekleme + **PITR'ın açılması** ve saklama süresinin belgelenmesi.
+- Nesne deposu bucket'ı, şifreleme, **yalnızca yazma** yetkili anahtar.
+- Haftalık işin **zamanlanması** ve son üç dökümün varlığının doğrulanması.
+- Provanın **Neon'a karşı** tekrarlanması.
+- `scripts/backup-dump.sh`'in S3 yükleme adımı **gerçek bir depoya karşı çalıştırılmadı**;
+  döküm alma, doğrulama ve rotasyon mantığı taklit bir `aws` CLI ile uçtan uca koşturuldu.
+- **"Hesabımı sil" akışı yok** — saklama tablosundaki "hesap silinene kadar" satırları bugün
+  fiilen *süresiz* demektir. Ayrı bir issue gerekir.
 
 ## İki faktörlü doğrulama — TOTP (Issue #193)
 

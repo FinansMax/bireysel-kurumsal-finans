@@ -27,6 +27,9 @@ const MANAGEMENT_PERMISSIONS: Permission[] = [
   // İşlem yönetimi (Issue #53) da bir yönetim iznidir: bir işlem kaydetmek/düzeltmek/silmek,
   // dayandığı hesabın BAKİYESİNİ değiştirir.
   PERMISSIONS.MANAGE_TRANSACTIONS,
+  // Tahsilat yönetimi (Issue #165) da bir yönetim iznidir: bir taksitin tutarını ya da
+  // vadesini değiştirmek, tenant'ın ALACAĞINI yeniden yazar.
+  PERMISSIONS.MANAGE_COLLECTIONS,
 ];
 
 test.describe("hasPermission() — tablo-driven matris", () => {

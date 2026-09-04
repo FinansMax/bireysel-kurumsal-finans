@@ -3013,29 +3013,90 @@ edilemeyecek katmanlar (auth davranışı, şema/migration uyumu).
 Açık PR sayısı 5 ile sınırlı — sınırsız bırakmak, incelenmeyen PR'ların birikip hepsinin
 görmezden gelinmesiyle sonuçlanır.
 
-### `npm audit` CI job'ı EKLENMEDİ — karar bekliyor
+### `npm audit` CI job'ı — eşik `critical`
 
-Issue bir `npm audit --audit-level=high` job'ı istiyor. **Bugün eklenirse CI anında kırmızıya
-döner:** mevcut ağaçta üç yüksek seviye açık var.
+CI'da yedinci bir job var: `npm audit --omit=dev --audit-level=critical`. Eşiğin `high`
+değil `critical` olması bilinçli bir karardır ve gerekçesi şudur.
+
+#### Önce yanlış çıkan varsayım
+
+"`prisma` CLI zinciri `devDependencies` altındadır, dolayısıyla `--omit=dev` onu eler"
+varsayımı **yanlıştır**. `@prisma/client` — ki o bir **production** bağımlılığıdır —
+`prisma`'yı `peerDependencies` içinde `"prisma": "*"` olarak ilan eder. npm bunu bir
+**production kenarı** sayar; zincir `--omit=dev` ile kesilmez.
+
+Ölçüldü, varsayılmadı:
+
+```bash
+npm audit --omit=dev --audit-level=high   # exit 1 - uc yuksek advisory raporlaniyor
+```
 
 ```
-@prisma/config  high
-deepmerge-ts    high   GHSA-ggr8-5vv4-36mx (stack exhaustion)
-prisma          high
+deepmerge-ts  <8.0.0   Severity: high
+  GHSA-ggr8-5vv4-36mx  (stack exhaustion on recursive object graphs)
+  @prisma/config  -> depends on vulnerable deepmerge-ts
+    prisma        -> depends on vulnerable @prisma/config
+3 high severity vulnerabilities
 ```
 
-`npm audit` bunlar için tek bir çözüm öneriyor: **`prisma@6.12.0`** — yani 6.19.3'ten
-**kırıcı bir düşürme** (`isSemVerMajor: true`). Ölçüldü: `--audit-level=high` exit **1**,
-`--audit-level=critical` exit **0**; `--omit=dev` de temiz **değil** (açık üretim ağacına
-uzanıyor).
+`npm audit`'in tek önerisi `prisma@6.12.0` — 6.19.3'ten **kırıcı bir düşürme**.
 
-Üç seçenek var ve üçü de bir karar gerektiriyor:
+#### Sonra ölçülen şey: bu paketler kod yolunda YOK
 
-1. Prisma'yı 6.12.0'a düşürmek (şema/migration uyumu yeniden doğrulanmalı),
-2. Eşiği `critical`'a çekmek (issue'nun istediğinden zayıf),
-3. Bu üç advisory'yi gerekçesiyle allowlist'e almak.
+Ağaçta görünmek ile **çalıştırılan koda ulaşmak** aynı şey değildir. Ölçüm (komutlar
+tekrarlanabilir, `npm run build` sonrası koşulur):
 
-Karar verilene kadar job **eklenmedi**; eklemek, CI'ı yeşil tutma kuralını ihlal ederdi.
+```bash
+# 1) Deploy edilen cikti - sifir eslesme beklenir
+grep -rl "deepmerge\|@prisma/config" .next/server .next/static | wc -l          # 0
+
+# 2) Prisma client'in CALISMA ZAMANI paketi
+grep -c "deepmerge" node_modules/@prisma/client/runtime/client.js                # 0
+grep -c "@prisma/config" node_modules/@prisma/client/runtime/client.js           # 1 (asagiya bakin)
+
+# 3) Gercek bir import/require var mi
+grep -rno 'require("deepmerge-ts")\|require("@prisma/config")\|from "deepmerge-ts"\|from "@prisma/config"' \
+  node_modules/@prisma/client/ | wc -l                                          # 0
+```
+
+İkinci komuttaki **tek** eşleşme bir import değil, pakete gömülü bir package.json metadata
+dizesidir: `dependencies:{"@prisma/config":"workspace:*",...}`. Yani `deepmerge-ts` ve
+`@prisma/config` **çalışma zamanında hiç çağrılmıyor**; `prisma` zinciri yalnızca CLI
+(migration/generate) yolunda kullanılıyor ve o yol deploy edilen sunucu paketine girmiyor.
+
+#### Bu yüzden eşik `critical`
+
+Yakalanması gereken şey **deploy edilen koda ULAŞAN** açıktır. Ağaçta duran ama çağrılmayan bir
+paket için CI'ı kalıcı kırmızı tutmanın sonu bellidir: bir süre sonra herkes audit çıktısını
+görmezden gelir ve araç, gerçek bir bulguyu bildirdiği gün de susmuş sayılır. Kalıcı kırmızı bir
+kapı, kapı değildir.
+
+**Görünürlük kaybedilmiyor.** Ölçüldü: `--audit-level` **yalnızca çıkış kodunu** değiştirir,
+çıktıyı değil. Job her koşuda üç `high` bulgunun tamamını basar ve yine de yeşil kalır — bu
+yüzden ayrı bir "raporlama" adımına gerek duyulmadı.
+
+`--omit=dev` korunuyor: geliştirme araçlarındaki bir açık deploy edilen koda ulaşmaz.
+
+Job `npm ci` **çalıştırmaz**: `npm audit` `package-lock.json`'dan çalışır ve
+`node_modules`'a ihtiyaç duymaz (doğrulandı — yalnızca `package.json` + lock dosyası
+kopyalanmış boş bir dizinde aynı raporu üretti). Kurulum eklemek işi dakikalarca uzatır,
+taramaya hiçbir şey katmaz.
+
+#### KABUL EDİLEN KALAN RİSK
+
+Eşik `critical` olduğu için, ileride kod yolunda **gerçekten bulunan** yüksek seviyeli bir
+açık da **CI'ı kırmayacaktır.** Bu, bu kararın bedelidir ve küçümsenmiyor.
+
+Karşı önlemler — üçü birlikte, biri eksikse risk kabul edilebilir değildir:
+
+1. **Takip issue'su zorunludur ve açık tutulur** — **#227**. Üç advisory'nin durumu orada izlenir; Prisma
+   `deepmerge-ts@^8`'e geçtiği anda eşik **`high`'a çekilir**.
+2. **Audit çıktısı her sürümde okunur.** Job yeşil olsa da çıktısı bilgi taşır; "yeşil" onu
+   okumamanın gerekçesi değildir.
+3. **Bağımlılık taraması tek başına yetmez** — bu, ayrı ve daha genel bir karar olarak zaten
+   yazılı (bkz. "Güvenlik kararı: bağımlılık taraması tek başına yetmez"). Next.js'in iki
+   Critical RCE advisory'si `npm audit` tarafından **hiç bildirilmemişti**; framework
+   advisory'leri ayrıca takip edilir.
 
 ## Modül seed mekanizması (Issue #154)
 

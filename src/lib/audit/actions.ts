@@ -46,6 +46,15 @@ export const AUDIT_ACTIONS = {
   DEBT_CREDIT_CREATED: "DEBT_CREDIT_CREATED",
   DEBT_CREDIT_UPDATED: "DEBT_CREDIT_UPDATED",
   DEBT_CREDIT_DELETED: "DEBT_CREDIT_DELETED",
+  // Tahsilat planı ve taksitleri (Issue #165). Bir ödeme planı, tenant'ın ALACAĞININ ne zaman
+  // ve hangi tutarlarda tahsil edileceğini yazan kayıttır: bir taksitin tutarını düşürmek ya da
+  // planı iptal etmek, `DEBT_CREDIT_UPDATED` ile aynı sınıfta bir yükümlülük değişikliğidir.
+  // Taksit TAHSİLATI buraya dahil DEĞİLDİR: para hareketi ürettiği için kendi action'ını kendi
+  // issue'sunda (#166) getirir.
+  COLLECTION_PLAN_CREATED: "COLLECTION_PLAN_CREATED",
+  COLLECTION_PLAN_UPDATED: "COLLECTION_PLAN_UPDATED",
+  COLLECTION_PLAN_CANCELLED: "COLLECTION_PLAN_CANCELLED",
+  COLLECTION_INSTALLMENT_UPDATED: "COLLECTION_INSTALLMENT_UPDATED",
   // Modül açma/kapama (Issue #151). Bir modülü açmak tenant'ın ÜRÜN YÜZEYİNİ değiştirir: yeni
   // ekranlar, yeni izinler, yeni veri. Kapatmak ise o verinin görünmez olması demektir. İkisi
   // de "kim ne zaman karar verdi" sorusunun yanıtsız kalmaması gereken olaylardır.
@@ -63,6 +72,8 @@ export const AUDIT_TARGET_TYPES = {
   CATEGORY: "CATEGORY",
   TRANSACTION: "TRANSACTION",
   DEBT_CREDIT: "DEBT_CREDIT",
+  PAYMENT_PLAN: "PAYMENT_PLAN",
+  PAYMENT_INSTALLMENT: "PAYMENT_INSTALLMENT",
   // `targetId` bir satır id'si DEĞİL, modül anahtarıdır ("crm"): modül kapalıyken satır hiç
   // olmayabilir ve kayıt yine de anlamlı olmalıdır.
   MODULE: "MODULE",

@@ -110,7 +110,22 @@ function addMonths(date: Date, months: number): Date {
 
 /**
  * Yeni ödeme planı ve bağlı taksitlerini sunucu tarafında oluşturur.
- * Eşzamanlılık kuralı (aynı deal için tek ACTIVE plan) runSerializable() ile garanti edilir.
+ *
+ * NEDEN `runSerializable()`, NEDEN DOĞRUDAN `$transaction` DEĞİL: "aynı deal için tek ACTIVE
+ * plan" kuralı bir OKUMAYA dayanıyor (önce aktif plan var mı diye bakılıyor, sonra yazılıyor).
+ * Bu, "önce kontrol et sonra yaz" desenidir ve iki isteğin arasına giren üçüncü bir istek
+ * invariant'ı bozar — `docs/architecture.md` bunun için `Serializable` izolasyon + retry
+ * öngörür. `prisma.$transaction(..., { isolationLevel: Serializable })`'ı doğrudan çağırmak
+ * retry'ı ATLAR: o durumda serialization hatası (`P2034`) kullanıcıya **500** olarak yansırdı
+ * (Issue #122'de tam olarak bu oldu). Retry'ın TEK giriş noktası `runSerializable()`tır.
+ *
+ * NEDEN `dealId` ÜZERİNDE `@unique` YOK: unique kısıt duruma bakmaz — iptal edilmiş bir planın
+ * bulunduğu deal'e ikinci bir plan açmayı da imkânsız kılardı. Kural "aynı anda tek AKTİF plan";
+ * iptal edilenler geçmiş kayıt olarak durur.
+ *
+ * Retry'lar tükenirse `503` dönülür, `409` DEĞİL: bu kod tabanında `409` bir iş kuralı
+ * ihlalidir ("zaten aktif plan var"), `503` ise "şu an olmadı, tekrar dene" demektir. İkisini
+ * karıştırmak, geçici bir çakışmayı kullanıcıya kalıcı bir hata gibi gösterirdi.
  */
 export async function createPaymentPlan(
   tenantId: string,
@@ -150,7 +165,19 @@ export async function createPaymentPlan(
     const downDec = new Prisma.Decimal(params.downPayment);
     const netDec = totalDec.sub(downDec);
 
-    // Her bir taksit tutarı: net tutar / taksit sayısı (4 basamak hassasiyet, aşağı yuvarlama)
+    // TAKSİT DAĞITIMI: aşağı yuvarla, ARTIĞI SON TAKSİTE EKLE.
+    //
+    // NEDEN AŞAĞI YUVARLAMA: yukarı yuvarlamak taksitler toplamını net tutarın ÜZERİNE çıkarır
+    // ve müşteriden borcundan fazlası istenir. Aşağı yuvarlamada eksik kalan kısım bilinir ve
+    // tek bir yere — son taksite — eklenerek kapatılır; toplam DAİMA `totalAmount - downPayment`
+    // eder. "Her taksite eşit dağıt" alternatifi reddedildi: kalan, taksit sayısına tam
+    // bölünmediğinde aynı sorunu bir alt basamakta tekrar üretirdi.
+    //
+    // NEDEN SON TAKSİT, NEDEN İLK DEĞİL: kuruş farkı ödemenin EN GEÇ noktasına bırakılır;
+    // ilk taksite eklemek, planın hemen başında "neden 1 kuruş fazla" sorusunu doğururdu.
+    //
+    // NEDEN 4 BASAMAK: sütun `Decimal(19,4)`. Daha fazlası veritabanında zaten kesilirdi ve
+    // kesilen kısım hiçbir yerde toplanmadığı için toplam tutmazdı.
     const baseInstallmentDec = netDec.div(params.installmentCount).toDecimalPlaces(4, Prisma.Decimal.ROUND_DOWN);
     if (baseInstallmentDec.lte(0)) {
       return {

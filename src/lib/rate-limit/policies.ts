@@ -51,6 +51,16 @@ export const RATE_LIMIT_POLICIES = {
   // fazlasıyla karşılar; kimse 15 dakikada beşten fazla kez tüm cihazlarından çıkmaz.
   REVOKE_SESSIONS: { limit: 5, windowMs: 15 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
+  // COLLECTIONS_MANAGE 60/dk (Issue #165): buradaki işlemler AUTHENTICATED ve YETKİLİDİR
+  // (OWNER/ADMIN), yani tehdit anonim spam değil; limit bir kötüye kullanım kapısından çok bir
+  // EMNİYET SUBABIDIR — hatalı bir istemci döngüsünün ya da çift tıklamanın veritabanını
+  // dövmesini engeller. Plan kurma `runSerializable()` içinde çalıştığı için pahalıdır ve
+  // eşzamanlı tekrarlar serialization çakışması üretir.
+  //
+  // 60 SEÇİLDİ çünkü tahsilat ekranı TOPLU kullanım içindir: bir kullanıcı vadesi geçen
+  // taksitleri sırayla işaretlerken dakikada onlarca PATCH atabilir. `TENANT_CREATE` (10/10dk)
+  // gibi dar bir limit burada meşru işi keserdi — o endpoint kaynak YARATIYOR, bu ise var olan
+  // kayıtları düzenliyor. Daha yükseği (ör. 600) ise emniyet subabı olmaktan çıkardı.
   COLLECTIONS_MANAGE: { limit: 60, windowMs: 1 * MINUTES },
   // VERIFY_EMAIL 10/15dk (Issue #190): token 256 bit olduğu için brute-force birincil tehdit
   // DEĞİLDİR; amaç, kimlik istemeyen ve her çağrıda DB'ye yazan bu endpoint'in sınırsız

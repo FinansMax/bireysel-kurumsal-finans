@@ -256,16 +256,24 @@ export async function updatePaymentPlan(
     data: { notes },
   });
 
-  if (updateResult.count === 0) {
+  // `=== 1`, `!== 0` DEĞİL (docs/security-invariants.md #1'in yazılı deseni). Pratikte sonuç
+  // aynı — `id` + `tenantId` en fazla bir satır eşler — ama iddia farklıdır: "tam olarak bir
+  // satır etkilendi". `=== 0` kontrolü beklenmedik bir çoklu eşleşmeyi SESSİZCE kabul ederdi ve
+  // bu desen kopyalanarak yayıldığı için ilk sapma önemlidir.
+  if (updateResult.count !== 1) {
     return { ok: false, status: 404, error: "Ödeme planı bulunamadı." };
   }
 
-  const updatedPlan = await prisma.paymentPlan.findFirst({
+  // `findFirstOrThrow`, `findFirst` + `updated!` DEĞİL (`src/lib/finance/account.ts` ile aynı
+  // desen). Non-null zorlama, iki sorgu arasında satır silinirse çalışma zamanında `null`
+  // üzerinde patlardı; `OrThrow` aynı durumu framework'ün 500'üne çevirir — beklenmeyen bir
+  // hatayı beklenen bir sonuç gibi göstermeden.
+  const updatedPlan = await prisma.paymentPlan.findFirstOrThrow({
     where: tenantScoped(tenantId, { id: planId }),
     select: PAYMENT_PLAN_SELECT,
   });
 
-  return { ok: true, data: updatedPlan! };
+  return { ok: true, data: updatedPlan };
 }
 
 /**
@@ -308,12 +316,15 @@ export async function cancelPaymentPlan(
       data: { status: InstallmentStatus.CANCELLED },
     });
 
-    const updated = await tx.paymentPlan.findFirst({
+    // Okuma AYNI transaction içinde: yukarıdaki `updateMany` satırı zaten kilitledi, dolayısıyla
+    // araya bir silme giremez. `OrThrow`, non-null zorlamanın yerine geçer — imkânsız olduğunu
+    // düşündüğümüz durum gerçekleşirse sessizce `null` yaymak yerine yükselir.
+    const updated = await tx.paymentPlan.findFirstOrThrow({
       where: tenantScoped(tenantId, { id: planId }),
       select: PAYMENT_PLAN_WITH_INSTALLMENTS_SELECT,
     });
 
-    return { ok: true as const, data: updated! };
+    return { ok: true as const, data: updated };
     });
 
     if (!result.ok) {
@@ -420,11 +431,13 @@ export async function updateInstallment(
         return { ok: false as const, status: 404 as const, error: "Taksit bulunamadı." };
       }
 
-      const updated = await tx.paymentInstallment.findFirst({
+      // Aynı transaction, aynı gerekçe: `updateMany` satırı kilitledi, `OrThrow` non-null
+      // zorlamanın yerine geçiyor.
+      const updated = await tx.paymentInstallment.findFirstOrThrow({
         where: tenantScoped(tenantId, { id: installmentId }),
         select: PAYMENT_INSTALLMENT_SELECT,
       });
-      return { ok: true as const, data: updated! };
+      return { ok: true as const, data: updated };
     });
     return result;
   } catch (error) {

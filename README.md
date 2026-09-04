@@ -2279,6 +2279,41 @@ kontrollerinin ikinci bir kopyasını doğururdu.
   issue.
 - **Saat dilimi yok (#134)** — vade ve "bugün" karşılaştırması UTC.
 
+## Tahsilat: para birimi doğrulaması iki yerde iki katılıkta (Issue #205)
+
+Kayda geçmiş, **bilinçli** bir tutarsızlık.
+
+| Yer | Doğrulama |
+| --- | --- |
+| `Account.currency` | **Biçimsel** — üç büyük harf. `prisma/schema.prisma` gerekçesi: "tam ISO listesi bir bağımlılık gerektirir." |
+| `src/lib/collections/validation.ts` | **ICU listesi** — `Intl.supportedValuesOf("currency")` |
+
+**Şemadaki gerekçe artık geçerli değil.** `Intl.supportedValuesOf("currency")` ISO 4217 listesini
+**bağımlılık eklemeden** veriyor ve liste, tzdata gibi platformla birlikte güncelleniyor —
+`src/lib/time/tenant-time.ts`'in IANA saat dilimlerini elle tutulan bir allowlist yerine `Intl`e
+sorma kararıyla aynı duruş.
+
+### Karar: tahsilat tarafı gevşetilmedi
+
+Reddedilen alternatifler:
+
+- **Tahsilatı biçimsel doğrulamaya indirmek.** Çalışan ve daha sıkı bir kontrolü, yalnızca başka
+  bir yerdeki daha zayıf kontrole benzesin diye zayıflatmak olurdu. Tutarlılık, doğruluğun önüne
+  geçmez.
+- **`Account` tarafını da ICU listesine çekmek.** Doğru yön, ama bu bir **davranış
+  değişikliğidir**: bugün kabul edilen `"XYZ"` gibi kodlar reddedilmeye başlar ve mevcut kayıtlar
+  etkilenebilir. #205'in kapsamı "yorum ve gerekçe" işiydi; davranış değiştiren bir adım oraya
+  sığmaz.
+
+**Yön belli, adım ayrı:** hizalama kendi issue'sunda yapılır ve şemadaki eskimiş gerekçe orada
+güncellenir. Bu bölüm, o adıma kadar tutarsızlığın **sebebini** kayda geçirir — bilinmeyen bir
+tutarsızlık ile kayda geçmiş bir tutarsızlık aynı şey değildir.
+
+**Kalan risk:** iki ekran aynı alana farklı katılıkta davranıyor. Bir kullanıcı hesabına
+`"XYZ"` para birimi yazabiliyor ama o para biriminde bir ödeme planı kuramıyor. Bugün görünür
+bir etkisi yok (para birimi ekranlarda seçim listesinden gelmiyor, elle yazılıyor ve pratikte
+`TRY` kullanılıyor), ama hizalama yapılana kadar bu fark duruyor.
+
 ## Modül sistemi — çekirdek (Issue #151)
 
 Ürünü "ham çekirdek + müşteriye göre açılan modüller" hâline getiren temel.

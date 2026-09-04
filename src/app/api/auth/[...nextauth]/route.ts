@@ -22,6 +22,31 @@ const CREDENTIALS_CALLBACK_PATH = "/api/auth/callback/credentials";
  *
  * Diğer tüm POST action'ları (signout, csrf, vb.) etkilenmeden `handlers.POST`'a geçer.
  */
+/**
+ * İstek gövdesinde bir ikinci faktör alanı var mı (Issue #193).
+ *
+ * GÖVDE KLONDAN OKUNUR: `request.formData()` gövdeyi tüketir ve `handlers.POST(request)`
+ * boş bir gövde görürdü — yani her giriş sessizce başarısız olurdu. `clone()` bunu önler.
+ *
+ * HATA YUTULUR VE `false` DÖNÜLÜR: bu fonksiyonun işi yalnızca "daha dar limiti uygula mı"
+ * kararıdır. Ayrıştırılamayan bir gövde zaten Auth.js tarafından reddedilecektir; burada
+ * fırlatmak, giriş akışını bir yardımcı kontrol yüzünden 500 ile düşürürdü.
+ */
+async function hasSecondFactorField(request: NextRequest): Promise<boolean> {
+  try {
+    const form = await request.clone().formData();
+    const totp = form.get("totp");
+    const recoveryCode = form.get("recoveryCode");
+
+    return (
+      (typeof totp === "string" && totp.trim().length > 0) ||
+      (typeof recoveryCode === "string" && recoveryCode.trim().length > 0)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(request: NextRequest) {
   const { pathname } = new URL(request.url);
 
@@ -29,6 +54,22 @@ export async function POST(request: NextRequest) {
     const rateLimitResponse = await checkRateLimit(request, RATE_LIMIT_BUCKETS.SIGNIN, RATE_LIMIT_POLICIES.SIGNIN);
     if (rateLimitResponse) {
       return rateLimitResponse;
+    }
+
+    // İKİNCİ FAKTÖR İÇİN AYRI VE DAHA DAR BİR LİMİT (Issue #193).
+    //
+    // NEDEN AYRI: TOTP kodu yalnızca 6 hanedir (10^6) ve ±1 pencere toleransı yüzünden her an
+    // ÜÇ kod geçerlidir. Şifrenin aksine bu, brute-force'un gerçekten uygulanabilir olduğu bir
+    // sırdır. SIGNIN'in 10/5dk'sı şifre için makul, ikinci faktör için fazla cömerttir.
+    //
+    // İKİSİ BİRDEN uygulanır (SIGNIN önce, TOTP sonra): kod taşıyan bir istek her iki sayacı da
+    // tüketir. Yalnızca TOTP bucket'ını uygulamak, kodu boş bırakıp SIGNIN limitini ayrı bir
+    // havuz gibi kullanmayı mümkün kılardı.
+    if (await hasSecondFactorField(request)) {
+      const totpLimitResponse = await checkRateLimit(request, RATE_LIMIT_BUCKETS.TOTP, RATE_LIMIT_POLICIES.TOTP);
+      if (totpLimitResponse) {
+        return totpLimitResponse;
+      }
     }
   }
 

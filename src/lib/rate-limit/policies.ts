@@ -50,6 +50,12 @@ export const RATE_LIMIT_POLICIES = {
   // sürekli dışarı atılmasına (kendine DoS) yol açar. 5, gerçek "her yerden çıkış" ihtiyacını
   // fazlasıyla karşılar; kimse 15 dakikada beşten fazla kez tüm cihazlarından çıkmaz.
   REVOKE_SESSIONS: { limit: 5, windowMs: 15 * MINUTES },
+  // TOTP 5/5dk (Issue #193): ikinci faktor kodu YALNIZCA 6 HANEDIR - 10^6 olasilik, ve ±1
+  // pencere toleransi yuzunden her an UC kod gecerlidir. Bu, brute-force'un gercekten
+  // uygulanabilir oldugu nadir yerlerden biridir; limit burada sifre kadar kritiktir.
+  // 5, gercek bir kullanicinin yanlis yazma payini karsilar, saldirgana ise dakikada bir
+  // avuc deneme birakir.
+  TOTP: { limit: 5, windowMs: 5 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
   COLLECTIONS_MANAGE: { limit: 60, windowMs: 1 * MINUTES },
   // VERIFY_EMAIL 10/15dk (Issue #190): token 256 bit olduğu için brute-force birincil tehdit
@@ -81,6 +87,7 @@ export const RATE_LIMIT_BUCKETS = {
   RESET_PASSWORD: "auth:reset-password",
   CHANGE_PASSWORD: "auth:change-password",
   REVOKE_SESSIONS: "auth:revoke-sessions",
+  TOTP: "auth:totp",
   TENANT_CREATE: "tenant:create",
   COLLECTIONS_MANAGE: "collections:manage",
   VERIFY_EMAIL: "auth:verify-email",

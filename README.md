@@ -3458,3 +3458,149 @@ Bu bölüm hedef durumu tarif eder. Aşağıdakiler **hesap erişimi** gerektird
   döküm alma, doğrulama ve rotasyon mantığı taklit bir `aws` CLI ile uçtan uca koşturuldu.
 - **"Hesabımı sil" akışı yok** — saklama tablosundaki "hesap silinene kadar" satırları bugün
   fiilen *süresiz* demektir. Ayrı bir issue gerekir.
+
+## İki faktörlü doğrulama — TOTP (Issue #193)
+
+Finansal veriye erişen bir üründe tek faktör yetmez: şifresi sızmış bir hesap, bu değişiklikten
+önce doğrudan tüm tenant verisine erişiyordu.
+
+### Bağımlılık eklenmedi
+
+RFC 6238'in tamamı bir HMAC ve bir sayaçtır; Node'un `crypto` modülü ikisini de veriyor.
+`src/lib/auth/totp.ts` base32 (RFC 4648), HOTP (RFC 4226) ve TOTP'yi içerir ve doğruluğu
+**spesifikasyonun kendi test vektörleriyle** kanıtlanır — kendi encode'umuzu kendi decode'umuzla
+okumak bir şey kanıtlamazdı.
+
+**SHA-1 kullanılıyor ve bu doğrudur.** SHA-1 çakışma saldırılarına karşı kırıktır, ama TOTP onu
+bir HMAC anahtarıyla, tek yönlü ve kısa ömürlü bir kod üretmek için kullanır; HMAC-SHA1'e karşı
+pratik bir saldırı yoktur. Daha önemlisi RFC 6238'in varsayılanıdır ve yaygın authenticator
+uygulamalarının **tamamı** bunu bekler. SHA-256'ya geçmek güvenliği ölçülebilir şekilde
+artırmaz, ama kullanıcıların bir kısmının uygulamasını bozar.
+
+### Sır HASH'LENMEZ, ŞİFRELENİR
+
+Şifreler ve token'lar tek yönlü hash'lenir çünkü doğrulama "aynı şeyi hash'le, karşılaştır" ile
+yapılır. TOTP'de bu **mümkün değildir**: kod, sırdan **hesaplanır**, yani sır doğrulama anında
+geri okunmak zorundadır.
+
+Yapılabilecek en iyi şey, DB dump'ı sızdığında sırların işe yaramaz olmasıdır: **AES-256-GCM**,
+anahtar `AUTH_SECRET`'ten **HKDF** ile türetilir. HKDF zorunludur çünkü `AUTH_SECRET` zaten
+JWT için kullanılıyor — aynı ham anahtar malzemesini iki kriptografik amaçla kullanmak, birindeki
+zayıflığı diğerine taşır (key separation).
+
+GCM tercih edildi çünkü **kimlik doğrulamalıdır**: DB'ye yazma erişimi olan biri ciphertext'i
+değiştirirse çözme başarısız olur. CBC bunu fark ettirmezdi.
+
+**NE KORUMAZ:** uygulama sunucusu ele geçirilirse `AUTH_SECRET` de saldırgandadır ve sırlar
+açılabilir. Bu, sunucuda çözülmesi gereken her sır için geçerli olan kaçınılmaz sınırdır ve
+kabul edilmiştir.
+
+### Üç adımlı kurulum: `confirmedAt` dolana kadar 2FA AKTİF DEĞİLDİR
+
+"Başlat → doğrula → aktif". Tek adımda aktifleştirmek, QR'ı okuyamamış ya da yanlış cihaza
+eklemiş bir kullanıcıyı **kendi hesabından kalıcı olarak kilitlerdi**.
+
+**Kurtarma kodları kurulumun BAŞINDA üretilir**, sonunda değil. Sonunda üretmek, "authenticator
+eklendi ama kurtarma kodu görülmedi" penceresi bırakırdı; o pencerede telefonunu kaybeden
+kullanıcı kilitlenir. 2FA, kurtarma kodları olmadan aktifleştirilemez.
+
+10 kod, her biri 16 karakter (~79 bit). Alfabede **`0/O` ve `1/I/L` yoktur**: kullanıcı bu
+kodu elle yazar ve görsel karışıklık, doğru kodun reddedilmesine yol açardı. DB'de yalnızca
+SHA-256 hash'leri durur ve tüketim **atomik koşullu `updateMany`** ile yapılır
+(`PasswordResetToken` ile aynı desen) — aynı kod eşzamanlı iki kez gönderilse bile yalnızca
+biri `count === 1` görür.
+
+### Replay: aynı kod ikinci kez kabul edilmez
+
+Bir TOTP kodu 30 saniye geçerlidir; o pencerede yakalanan bir kod aksi halde tekrar
+oynatılabilirdi. Son başarılı pencere `lastUsedStep` olarak saklanır ve karşılaştırma
+`<=` iledir — yalnızca "eşit"i engellemek, tolerans penceresi geçmişe de açık olduğu için
+bir önceki pencerenin kodunu oynatmaya izin verirdi.
+
+Yazma **koşulludur** (`lastUsedStep < step`): aynı kodla eşzamanlı iki giriş denemesinde
+yalnızca biri kazanır. "Önce oku, sonra yaz" bu yarışı açık bırakırdı.
+
+**Kurulum ve giriş aynı pencereyi paylaşır:** doğrulama başarılı olduğunda `confirmedAt` ile
+birlikte `lastUsedStep` de yazılır, yoksa kurulumda kullanılan kod hemen bir girişte tekrar
+kullanılabilirdi.
+
+**Tolerans ±1 penceredir.** Telefon saati kaymasını ve kodu yazma süresini karşılar. Daha geniş
+bir pencere, yakalanan bir kodun geçerlilik süresini ve aynı anda geçerli kod sayısını doğrudan
+büyütürdü.
+
+### Giriş akışı: Auth.js Credentials provider'ına entegrasyon
+
+Bu, akışın en kritik noktasıdır. Auth.js `authorize()`tan yalnızca `User | null` bekler ve
+`null` genel bir `CredentialsSignin` hatasına dönüşür. Bu **tek kanal**, "şifre yanlış" ile
+"şifre doğru ama kod gerekiyor" durumlarını ayırt edemez — ayırt edilmezse 2FA'lı bir kullanıcıya,
+**doğru şifresini girdiği hâlde** "şifreniz yanlış" denirdi.
+
+Çözüm `CredentialsSignin` alt sınıfı fırlatmaktır; `@auth/core` bu sınıfın `code` alanını
+yanıt URL'sine yazar. Ölçüldü: yanıt **302**'dir ve
+`location: /api/auth/signin?error=CredentialsSignin&code=totp_required` taşır.
+
+| Durum | `code` |
+| --- | --- |
+| Şifre yanlış / kullanıcı yok / şifresiz hesap | `credentials` |
+| Şifre doğru, 2FA aktif, kod gönderilmemiş | `totp_required` |
+| Şifre doğru, kod/kurtarma kodu yanlış | `totp_invalid` |
+
+**BU AYRIM BİR SIR SIZDIRMAZ.** `totp_required` ve `totp_invalid` yanıtlarına **yalnızca
+şifresi doğru** bir istekle ulaşılır. Şifreyi bilmeyen her zaman `credentials` alır; yani bu
+kod, hesabın 2FA kullandığını **zaten şifreyi bilen** birine söyler. `security/totp-security.spec.ts`
+bunu 2FA'lı ve 2FA'sız iki hesabı yanlış şifreyle karşılaştırarak kanıtlar.
+
+**Reddedilen alternatif — ayrı bir "bu hesap 2FA kullanıyor mu" endpoint'i:** kimliksiz
+çağrılabilen böyle bir uç, bir e-postanın kayıtlı olup olmadığını sızdıran bir oracle olurdu.
+
+**Sıra sabittir: şifre HER ZAMAN ikinci faktörden önce doğrulanır.** Tersi, ikinci faktörü
+şifreyi bilmeyen birine karşı da denenebilir kılar ve `AUTH_TOTP_FAILURE` kayıtlarını
+(aktörü bilinen olaylar olarak) anlamsızlaştırırdı.
+
+### `AUTH_LOGIN_SUCCESS` yalnızca HER İKİ faktör geçtiğinde yazılır
+
+Bu olay "bir oturum verildi" demektir. Şifresi doğru ama kodu yanlış bir denemeyi başarı saymak,
+audit log'u hiç var olmamış bir oturum hakkında yanıltırdı.
+
+`AUTH_TOTP_FAILURE` kaydında **aktör bilinir ve yazılır** — `AUTH_LOGIN_FAILURE`'ın aksine.
+Buraya yalnızca şifresi doğru bir istekle gelinir, dolayısıyla kayıt bir enumeration sinyali
+taşımaz. Arka arkaya gelen `AUTH_TOTP_FAILURE`, sızmış bir şifreyle ikinci faktörü kırma
+girişiminin en doğrudan göstergesidir.
+
+**Kodsuz ilk deneme FAILURE YAZMAZ:** o bir saldırı değil, akışın ikinci adımıdır. Yazsaydı her
+normal giriş bir "failure" üretir ve gerçek saldırı sinyali gürültüye boğulurdu.
+
+### Rate limit: `auth:totp`, 5/5dk
+
+Kod **yalnızca 6 hanedir** (10⁶) ve ±1 tolerans yüzünden her an **üç** kod geçerlidir. Şifrenin
+aksine bu, brute-force'un gerçekten uygulanabilir olduğu bir sırdır; `SIGNIN`'in 10/5dk'sı
+şifre için makul, ikinci faktör için fazla cömerttir.
+
+Kod taşıyan bir giriş isteği **iki sayacı birden** tüketir (`auth:sign-in` + `auth:totp`).
+Yalnızca TOTP bucket'ını uygulamak, kodu boş bırakıp `SIGNIN` limitini ayrı bir havuz gibi
+kullanmayı mümkün kılardı. Gövde, `handlers.POST`'a devretmeden önce bir **klondan** okunur —
+`request.formData()` gövdeyi tüketir ve her giriş sessizce başarısız olurdu.
+
+### 2FA kapatma MEVCUT ŞİFREYİ ister
+
+Kapatmak hesabın koruma seviyesini **düşüren** bir işlemdir. Çalınmış bir session cookie'si ile
+tek çağrıda kapatılabilseydi, 2FA'nın koruduğu şeyi 2FA'nın kendi kapatma ucundan aşmak mümkün
+olurdu. Aynı gerekçe `change-password` akışında da geçerlidir.
+
+Kapatma **kurtarma kodlarını da siler**: 2FA yeniden açıldığında, kullanıcının artık sakladığını
+sanmadığı eski kodların geçerli kalması bir arka kapı olurdu.
+
+### Kalan risk / kapsam dışı
+
+- **ARAYÜZ YOK.** Bu issue API katmanını kapsıyor (kapsam listesinde UI maddesi yok; bu repo'da
+  UI istenen issue'lar bunu "API + UI" diye yazar). Bugünkü giriş ekranı `totp` alanını
+  **göndermiyor**, dolayısıyla 2FA uçtan uca **kullanılabilir değil** — ayrı bir issue gerekir.
+- **QR kodu üretilmiyor.** `otpauth://` URI'si dönülüyor; onu QR'a çevirmek bir bağımlılık
+  ister ve bu, açık onay gerektiren bir karardır (CLAUDE.md § 4). Kullanıcı bugün sırrı elle
+  girebilir.
+- **Zaman kayması ölçülmedi.** ±1 pencere, saati ciddi biçimde kaymış bir cihazda yetmeyebilir;
+  bunun görünür bir teşhisi (ör. "cihazınızın saati doğru mu") yok.
+- **Sunucu ele geçirilirse sırlar açılabilir** (yukarıda). Donanım anahtarına (WebAuthn/passkey)
+  geçmek bunu çözer ve issue'da açıkça kapsam dışıdır.
+- **Tenant seviyesinde "2FA zorunlu" politikası yok** — issue'da kapsam dışı.
+- **SMS/e-posta OTP yok** — bilinçli: daha zayıf ve maliyetli.

@@ -8,7 +8,30 @@ import {
   createSessionCookieHeader,
 } from "./support/session";
 
+/**
+ * Bu suite'in ürettiği kayıtlar (docs/testing.md #4).
+ *
+ * NEDEN GEREKLİ: suite'ler PAYLAŞILAN bir veritabanına karşı koşuyor. Biriken tenant/user
+ * satırları listeleri şişirir ve "kullanıcının kaç tenant'ı var" gibi SAYIYA bakan başka
+ * testlerin varsayımlarını zamanla bozar — üstelik bunu tek bir koşuda değil, onuncu koşuda
+ * yapar; teşhis edilmesi en zor test kırılması budur.
+ *
+ * TENANT SİLMEK YETMEZ: `User` bir tenant'a bağlı değildir (üyelik ayrı bir tablodur), yani
+ * tenant silinse bile kullanıcı satırı kalırdı.
+ */
+const createdTenantIds: string[] = [];
+const createdUserIds: string[] = [];
+
 test.afterAll(async () => {
+  // Sıra ÖNEMLİ: üyelikler `onDelete: Cascade` ile tenant'a bağlı, dolayısıyla önce tenant
+  // silinir; sonra kullanıcı satırları serbest kalır.
+  if (createdTenantIds.length > 0) {
+    await prisma.tenant.deleteMany({ where: { id: { in: createdTenantIds } } });
+  }
+  if (createdUserIds.length > 0) {
+    await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+  }
+
   await prisma.$disconnect();
 });
 
@@ -17,7 +40,7 @@ async function createTenant(
   modules: { crm?: boolean; collections?: boolean } = {},
 ) {
   const { crm = true, collections = true } = modules;
-  return prisma.tenant.create({
+  const tenant = await prisma.tenant.create({
     data: {
       name: label,
       slug: `${label.toLowerCase()}-${randomUUID()}`,
@@ -32,11 +55,15 @@ async function createTenant(
     },
     select: { id: true },
   });
+
+  createdTenantIds.push(tenant.id);
+  return tenant;
 }
 
 async function createUserWithMembership(role: MembershipRole, tenantId: string) {
   const email = `sec-collections-${randomUUID()}@example.com`;
   const user = await prisma.user.create({ data: { email }, select: { id: true } });
+  createdUserIds.push(user.id);
   await prisma.membership.create({ data: { userId: user.id, tenantId, role } });
 
   const cookie = combineCookieHeaders(

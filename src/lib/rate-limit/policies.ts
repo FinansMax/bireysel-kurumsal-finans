@@ -50,6 +50,11 @@ export const RATE_LIMIT_POLICIES = {
   // sürekli dışarı atılmasına (kendine DoS) yol açar. 5, gerçek "her yerden çıkış" ihtiyacını
   // fazlasıyla karşılar; kimse 15 dakikada beşten fazla kez tüm cihazlarından çıkmaz.
   REVOKE_SESSIONS: { limit: 5, windowMs: 15 * MINUTES },
+  // DATA_EXPORT 2/saat (Issue #194): uretim PAHALIDIR (tenant'in tum tablolarini okur, ZIP
+  // uretir, diske yazar) ve her calisma kalici bir dosya birakir. Sinirsiz birakmak, calinmis
+  // bir OWNER oturumuyla diski doldurmanin ve ayni veriyi tekrar tekrar disariya tasimanin
+  // yolu olurdu. 2, gercek bir tasima ihtiyacini fazlasiyla karsilar.
+  DATA_EXPORT: { limit: 2, windowMs: 60 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
   // VERIFY_EMAIL 10/15dk (Issue #190): token 256 bit olduğu için brute-force birincil tehdit
   // DEĞİLDİR; amaç, kimlik istemeyen ve her çağrıda DB'ye yazan bu endpoint'in sınırsız
@@ -80,6 +85,7 @@ export const RATE_LIMIT_BUCKETS = {
   RESET_PASSWORD: "auth:reset-password",
   CHANGE_PASSWORD: "auth:change-password",
   REVOKE_SESSIONS: "auth:revoke-sessions",
+  DATA_EXPORT: "tenant:data-export",
   TENANT_CREATE: "tenant:create",
   VERIFY_EMAIL: "auth:verify-email",
   RESEND_VERIFICATION: "auth:resend-verification",

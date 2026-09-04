@@ -61,3 +61,6 @@ prisma/*.db
 # AuditLog arşivi (Issue #188). Silinmeden önce dışa aktarılan denetim kayıtları KİŞİSEL VERİ
 # içerir; repository'ye asla girmemelidir. Production'da bu dizin soğuk depolamaya taşınır (#185).
 /.audit-archive/
+
+# Disa aktarma ve arsiv ciktilari (Issue #188, #194) - uretilen dosyalar repoya girmez
+.data/

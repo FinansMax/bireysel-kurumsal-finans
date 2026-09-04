@@ -87,6 +87,7 @@ model Tenant {
   transactions Transaction[]
   debtCredits  DebtCredit[]
   modules      TenantModule[]
+  dataExports  TenantDataExport[]
 }
 
 /// Bir tenant'ta bir modülün açık olup olmadığı (Issue #151).
@@ -386,6 +387,63 @@ model PasswordResetToken {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+}
+
+/// Bir tenant'ın verisinin dışa aktarılma durumu (Issue #194).
+///
+/// ÜRETİM EŞZAMANLI DEĞİLDİR: büyük bir tenant'ta ZIP üretimi HTTP zaman aşımını aşar. İstek
+/// `PENDING` bir kayıt bırakır; üretimi ayrı bir bakım işi yapar
+/// (`POST /api/maintenance/data-exports`). Aynı desen AuditLog saklama işinde de kullanılıyor
+/// (#188) — bu repo'da kuyruk altyapısı YOKTUR ve bir tane getirmek bu issue'nun kapsamı dışıdır.
+enum TenantDataExportStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+model TenantDataExport {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// İsteyen kullanıcı. KASITLI OLARAK FK DEĞİL: kullanıcı silinse bile dışa aktarmanın KİMİN
+  /// talebiyle üretildiği korunmalıdır. Kaydın kendisi kısa ömürlü olduğu için düz bir kimlik
+  /// yeterlidir; kalıcı iz zaten AuditLog'dadır.
+  requestedByUserId String
+
+  status TenantDataExportStatus @default(PENDING)
+
+  /// İndirme token'ı DÜZ METİN SAKLANMAZ; yalnızca SHA-256 hash'i (invariant #6,
+  /// `PasswordResetToken` ile aynı desen). Ham token yalnızca oluşturma yanıtında döner.
+  tokenHash String @unique
+
+  /// 24 saat. Üretilen dosya tenant'ın TÜM verisidir; süresiz bir bağlantı, sızdığında
+  /// süresiz bir veri sızıntısıdır.
+  expiresAt DateTime
+
+  /// null = henüz indirilmedi. Dolu = TEK KULLANIMLIK token tüketildi. Silme yerine
+  /// işaretleme: "bu dışa aktarma ne zaman indirildi" sorusunun cevabı burada.
+  downloadedAt DateTime?
+
+  /// Üretilen ZIP'in yolu. `READY` olmadan null'dur.
+  filePath String?
+  byteSize Int?
+
+  /// Tablo başına satır sayıları. Manifest ile aynı değerler; DB'de de tutulur ki "eksik mi
+  /// çıktı" sorusu dosyayı açmadan cevaplanabilsin.
+  rowCounts Json?
+
+  /// Başarısızlık nedeni — OPERATÖR içindir, kullanıcıya dönmez (invariant #7).
+  failureReason String?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId])
+  /// Bakım işi "en eski PENDING kayıt" sorgusunu bu index üzerinden yapar.
+  @@index([status, createdAt])
 }
 
 model TenantInvitation {

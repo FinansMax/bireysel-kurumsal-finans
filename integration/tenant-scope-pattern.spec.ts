@@ -467,6 +467,31 @@ test.describe("Tenant scoping pattern koruması — payment-plan.ts", () => {
     expect(COLLECTIONS_SOURCE).toMatch(/data:\s*\{\s*tenantId/);
   });
 
+  test("mutasyon sonucu `count === 1` ile doğrulanıyor, `=== 0` ile DEĞİL", () => {
+    // docs/security-invariants.md #1'in yazılı deseni `=== 1`. Pratikte sonuç aynı — `id` +
+    // `tenantId` en fazla bir satır eşler — ama iddia farklıdır: "tam olarak bir satır
+    // etkilendi". `=== 0` beklenmedik bir çoklu eşleşmeyi SESSİZCE kabul ederdi ve bu desen
+    // kopyalanarak yayılıyor (Issue #205).
+    expect(COLLECTIONS_SOURCE).not.toMatch(/count\s*===\s*0/);
+
+    // Kontrol grubu: doğru desen GERÇEKTEN kullanılıyor olmalı — aksi halde hiç `count`
+    // kontrolü olmayan bir dosya da bu testi geçerdi.
+    const strictChecks = COLLECTIONS_SOURCE.match(/count\s*!==\s*1/g)?.length ?? 0;
+    expect(strictChecks).toBeGreaterThanOrEqual(2);
+  });
+
+  test("güncelleme sonrası okuma non-null zorlama İÇERMİYOR", () => {
+    // `findFirst` + `updated!` iki sorgu arasında satır silinirse çalışma zamanında `null`
+    // üzerinde patlardı. `findFirstOrThrow` aynı durumu framework'ün 500'üne çevirir
+    // (`src/lib/finance/account.ts` ile aynı desen, Issue #205).
+    // Yorum satırları hariç tutulur: bu dosyada `updated!` ifadesi bir YORUMDA geçiyor
+    // (neden kullanılmadığını anlatan not) ve testi yanlışlıkla kırardı.
+    const code = COLLECTIONS_SOURCE.replace(/^\s*(\/\/|\*).*$/gm, "");
+
+    expect(code).not.toMatch(/data:\s*\w+!/);
+    expect(code).toContain("findFirstOrThrow(");
+  });
+
   test("taksit tutarı client'tan gelen bir listeden okunmuyor", () => {
     // #165'in kararı: taksitler SUNUCUDA türetilir. Birinin ileride istek gövdesindeki
     // `installments` alanını doğrudan yazmaya başlaması, planın toplamını client'a açardı.

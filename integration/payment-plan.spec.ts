@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
-import { Prisma, PaymentMethod, PaymentPlanStatus } from "@prisma/client";
+import { InstallmentStatus, Prisma, PaymentMethod, PaymentPlanStatus } from "@prisma/client";
 import { prisma } from "../src/lib/prisma";
 import {
   createPaymentPlan,
@@ -281,5 +281,152 @@ test.describe("PaymentPlan + PaymentInstallment İş Kuralları", () => {
     const cancelledUpdate = await updateInstallment(tenantId, installmentId, { notes: "değişmemeli" });
     expect(cancelledUpdate.ok).toBe(false);
     if (!cancelledUpdate.ok) expect(cancelledUpdate.status).toBe(409);
+  });
+});
+
+/**
+ * `listInstallments()` — filtrelerin BİRLEŞMESİ (Issue #205).
+ *
+ * NEDEN AYRI BİR BLOK: eski davranış hata VERMİYORDU, yalnızca yanlış cevap veriyordu.
+ * `overdue=true`, `from`/`to`/`status` koşullarının üzerine yazıyordu; "son 30 günde vadesi
+ * geçenler" sorusuna tüm zamanların gecikmiş taksitleri dönüyordu. Böyle bir hatayı yakalayan
+ * tek şey, iki filtreyi BİRLİKTE kullanan bir testtir.
+ */
+test.describe("listInstallments() — filtreler birlikte çalışır", () => {
+  /** Verilen gün sayısı kadar önce/sonra bir tarih. */
+  function daysFromNow(days: number): Date {
+    const date = new Date();
+    date.setDate(date.getDate() + days);
+    return date;
+  }
+
+  /**
+   * Üç taksitli bir plan kurar: biri 60 gün önce, biri 10 gün önce, biri 20 gün sonra vadeli.
+   * (Plan aylık kurulur, sonra vadeler doğrudan yazılır — kurulum testin konusu değil.)
+   */
+  async function seedPlanWithDueDates(): Promise<{
+    tenantId: string;
+    planId: string;
+    installmentIds: [string, string, string];
+  }> {
+    const tenantId = await seedTenant();
+    const dealId = await seedDeal(tenantId);
+
+    const created = await createPaymentPlan(tenantId, {
+      dealId,
+      totalAmount: "300.00",
+      currency: "TRY",
+      method: PaymentMethod.CASH,
+      downPayment: "0.00",
+      installmentCount: 3,
+      firstDueDate: new Date("2026-01-15"),
+      intervalMonths: 1,
+      notes: null,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error("plan kurulamadi");
+
+    const [first, second, third] = created.data.installments;
+    await prisma.paymentInstallment.updateMany({
+      where: { id: first.id, tenantId },
+      data: { dueDate: daysFromNow(-60) },
+    });
+    await prisma.paymentInstallment.updateMany({
+      where: { id: second.id, tenantId },
+      data: { dueDate: daysFromNow(-10) },
+    });
+    await prisma.paymentInstallment.updateMany({
+      where: { id: third.id, tenantId },
+      data: { dueDate: daysFromNow(20) },
+    });
+
+    return { tenantId, planId: created.data.id, installmentIds: [first.id, second.id, third.id] };
+  }
+
+  test("KRİTİK REGRESYON: overdue + tarih aralığı BİRLİKTE uygulanır", async () => {
+    const { tenantId, installmentIds } = await seedPlanWithDueDates();
+    const [eskiGecikmis, yeniGecikmis] = installmentIds;
+
+    // Kontrol grubu: aralıksız `overdue` İKİ gecikmiş taksiti de döner.
+    const hepsi = await listInstallments(tenantId, { overdue: true });
+    expect(hepsi.ok).toBe(true);
+    if (!hepsi.ok) return;
+    expect(hepsi.data.map((row) => row.id).sort()).toEqual([eskiGecikmis, yeniGecikmis].sort());
+
+    // Deney: son 30 gün + overdue → YALNIZCA 10 gün önce vadesi geçen.
+    const sonOtuzGun = await listInstallments(tenantId, {
+      from: daysFromNow(-30),
+      overdue: true,
+    });
+    expect(sonOtuzGun.ok).toBe(true);
+    if (!sonOtuzGun.ok) return;
+
+    // Eski davranışta `from` yok sayılıyordu ve bu liste İKİ kayıt dönüyordu.
+    expect(sonOtuzGun.data.map((row) => row.id)).toEqual([yeniGecikmis]);
+  });
+
+  test("overdue + to: üst sınır da korunur", async () => {
+    const { tenantId, installmentIds } = await seedPlanWithDueDates();
+    const [eskiGecikmis] = installmentIds;
+
+    const sonuc = await listInstallments(tenantId, { to: daysFromNow(-30), overdue: true });
+    expect(sonuc.ok).toBe(true);
+    if (!sonuc.ok) return;
+
+    expect(sonuc.data.map((row) => row.id)).toEqual([eskiGecikmis]);
+  });
+
+  test("overdue + status: kesişim alınır, status EZİLMEZ", async () => {
+    const { tenantId, installmentIds } = await seedPlanWithDueDates();
+    const [eskiGecikmis, yeniGecikmis] = installmentIds;
+
+    // Eski gecikmiş taksit PARTIAL yapılır; yeni olan PENDING kalır.
+    await prisma.paymentInstallment.updateMany({
+      where: { id: eskiGecikmis, tenantId },
+      data: { status: InstallmentStatus.PARTIAL, paidAmount: new Prisma.Decimal("10.00") },
+    });
+
+    const sadecePending = await listInstallments(tenantId, {
+      status: InstallmentStatus.PENDING,
+      overdue: true,
+    });
+    expect(sadecePending.ok).toBe(true);
+    if (!sadecePending.ok) return;
+    expect(sadecePending.data.map((row) => row.id)).toEqual([yeniGecikmis]);
+
+    // DUYARLILIK: aynı sorgu PARTIAL ile DİĞER kaydı döner — yani `status` gerçekten okunuyor.
+    const sadecePartial = await listInstallments(tenantId, {
+      status: InstallmentStatus.PARTIAL,
+      overdue: true,
+    });
+    expect(sadecePartial.ok).toBe(true);
+    if (!sadecePartial.ok) return;
+    expect(sadecePartial.data.map((row) => row.id)).toEqual([eskiGecikmis]);
+  });
+
+  test("kesişimi boş olan filtre BOŞ liste döner (hata değil)", async () => {
+    const { tenantId } = await seedPlanWithDueDates();
+
+    // "Ödenmiş ve gecikmiş" diye bir taksit yoktur. Bunu 400 ile reddetmek, #165'te birlikte
+    // kullanılabilir olarak tanımlanmış iki filtreyi keyfî biçimde yasaklamak olurdu.
+    const sonuc = await listInstallments(tenantId, {
+      status: InstallmentStatus.PAID,
+      overdue: true,
+    });
+
+    expect(sonuc.ok).toBe(true);
+    if (!sonuc.ok) return;
+    expect(sonuc.data).toEqual([]);
+  });
+
+  test("overdue olmadan status ve aralık eskisi gibi çalışıyor (regresyon yok)", async () => {
+    const { tenantId, installmentIds } = await seedPlanWithDueDates();
+    const [, , gelecek] = installmentIds;
+
+    const sonuc = await listInstallments(tenantId, { from: daysFromNow(1) });
+    expect(sonuc.ok).toBe(true);
+    if (!sonuc.ok) return;
+
+    expect(sonuc.data.map((row) => row.id)).toEqual([gelecek]);
   });
 });

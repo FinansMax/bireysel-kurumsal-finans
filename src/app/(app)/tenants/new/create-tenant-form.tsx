@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 
-import { API_ERROR_CODES } from "@/lib/api/error-codes";
+import { API_ERROR_CODES, toApiErrorCode, type ApiErrorCode } from "@/lib/api/error-codes";
 import { FormError, SubmitButton, TextField } from "@/components/auth-form";
 
 /**
@@ -77,21 +77,23 @@ const NETWORK_ERROR_STATUS = 0;
  * yok" denir ve çağıran taraf genel dala düşer. Burada throw etmek, asıl hatayı bir JSON
  * ayrıştırma hatasına çevirirdi.
  */
-async function readErrorCode(response: Response): Promise<string | null> {
+async function readErrorCode(response: Response): Promise<ApiErrorCode | null> {
   try {
     const body: unknown = await response.json();
     if (typeof body !== "object" || body === null || !("code" in body)) {
       return null;
     }
 
-    const { code } = body as { code: unknown };
-    return typeof code === "string" ? code : null;
+    // `toApiErrorCode()` daraltmayı TEK yerde yapar: aşağıdaki karşılaştırma böylece iki
+    // `string` arasında değil, union üzerinde olur ve yanlış/eskimiş bir koda bakan dal
+    // derlenmez (bkz. `src/lib/api/error-codes.ts`).
+    return toApiErrorCode((body as { code: unknown }).code);
   } catch {
     return null;
   }
 }
 
-function failureFor(status: number, code: string | null): SubmitFailure {
+function failureFor(status: number, code: ApiErrorCode | null): SubmitFailure {
   switch (status) {
     case 400:
       return {

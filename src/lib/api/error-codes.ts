@@ -36,3 +36,21 @@ export const API_ERROR_CODES = {
 } as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[keyof typeof API_ERROR_CODES];
+
+const KNOWN_CODES = new Set<string>(Object.values(API_ERROR_CODES));
+
+/**
+ * Ağdan gelen serbest bir değeri `ApiErrorCode` union'ına DARALTIR.
+ *
+ * NEDEN GEREKLİ: guard olmadan istemci tarafındaki karşılaştırma `string === string` olurdu ve
+ * TypeScript için her iki taraf da geçerli kalırdı. Bir kodu yeniden adlandırmak (ya da bir
+ * dalın artık var olmayan bir koda bakması) o zaman DERLEME HATASI vermez, yalnızca çalışma
+ * zamanında sessizce yanlış dala düşerdi — bu sözleşmenin önlemek için var olduğu hatanın ta
+ * kendisi. Union üzerinden geçince aynı yanlış, `tsc` tarafından yakalanır.
+ *
+ * Tanınmayan değer `null` olur: sunucu ileride bilmediğimiz bir kod eklerse istemci onu
+ * "kodsuz" sayar ve genel dala düşer — arayüzün eski sürümü yeni bir kodu YANLIŞ yorumlamaz.
+ */
+export function toApiErrorCode(value: unknown): ApiErrorCode | null {
+  return typeof value === "string" && KNOWN_CODES.has(value) ? (value as ApiErrorCode) : null;
+}

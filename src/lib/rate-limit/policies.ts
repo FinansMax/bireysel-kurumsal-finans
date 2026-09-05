@@ -67,6 +67,11 @@ export const RATE_LIMIT_POLICIES = {
   // `hasMore` nedeniyle birkaç kez arka arkaya çağrılmasına yer bırakır; insan eliyle
   // tetiklenen bir denemeyi de engellemez.
   MAINTENANCE: { limit: 10, windowMs: 15 * MINUTES },
+  // DATA_EXPORT 2/saat (Issue #194): uretim PAHALIDIR (tenant'in tum tablolarini okur, ZIP
+  // uretir, diske yazar) ve her calisma kalici bir dosya birakir. Sinirsiz birakmak, calinmis
+  // bir OWNER oturumuyla diski doldurmanin ve ayni veriyi tekrar tekrar disariya tasimanin
+  // yolu olurdu. 2, gercek bir tasima ihtiyacini fazlasiyla karsilar.
+  DATA_EXPORT: { limit: 2, windowMs: 60 * MINUTES },
 } as const satisfies Record<string, RateLimitPolicy>;
 
 /**
@@ -86,4 +91,5 @@ export const RATE_LIMIT_BUCKETS = {
   VERIFY_EMAIL: "auth:verify-email",
   RESEND_VERIFICATION: "auth:resend-verification",
   MAINTENANCE: "maintenance",
+  DATA_EXPORT: "tenant:data-export",
 } as const;

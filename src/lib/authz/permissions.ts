@@ -55,6 +55,11 @@ export const PERMISSIONS = {
   // BİLİNÇLİ istisnasıdır: bir modülü açmak tenant'ın ÜRÜN YÜZEYİNİ değiştirir (yeni ekranlar,
   // yeni izinler, yeni veri). Bu, `UPDATE_TENANT_SETTINGS` ile aynı sınıfta bir karardır —
   // matriste bugün OWNER-only olan tek izin odur.
+  // Tenant verisini disa aktarma (Issue #194). MANAGE_MODULES ve UPDATE_TENANT_SETTINGS ile
+  // AYNI SINIFTA, OWNER-only bir izindir: disa aktarma tenant'in TUM verisini - uye
+  // e-postalari ve audit log dahil - tek bir dosyada disariya cikarir. Bir ADMIN'in gunluk
+  // operasyon yetkisi bunu kapsamaz; bu bir SAHIPLIK kararidir.
+  EXPORT_TENANT_DATA: "tenant:export",
   VIEW_MODULES: "modules:view",
   MANAGE_MODULES: "modules:manage",
 } as const;
@@ -96,6 +101,7 @@ const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
     PERMISSIONS.MANAGE_COLLECTIONS,
     PERMISSIONS.VIEW_MODULES,
     PERMISSIONS.MANAGE_MODULES,
+    PERMISSIONS.EXPORT_TENANT_DATA,
   ],
   [MembershipRole.ADMIN]: [
     PERMISSIONS.VIEW_TENANT,

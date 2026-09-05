@@ -28,7 +28,16 @@ function uniqueEmail(prefix: string): string {
   return `${prefix}-${randomUUID()}@example.com`;
 }
 
-async function signUpAndSignIn(page: Page, prefix: string): Promise<string> {
+/**
+ * `verifyEmail: false` YALNIZCA 403 senaryosu içindir (Issue #232): orada doğrulanmamış olmak
+ * testin ÖN KOŞULU değil, KONUSUDUR. Diğer her testte hesap doğrulanır — bkz.
+ * `e2e/support/email-verification.ts`.
+ */
+async function signUpAndSignIn(
+  page: Page,
+  prefix: string,
+  options: { verifyEmail?: boolean } = {},
+): Promise<string> {
   const email = uniqueEmail(prefix);
 
   const created = await page.request.post("/api/auth/signup", {
@@ -37,7 +46,9 @@ async function signUpAndSignIn(page: Page, prefix: string): Promise<string> {
   });
   // #190: doğrulanmamış hesap çalışma alanı kuramaz; bu testin konusu doğrulama DEĞİL,
   // onun ÖN KOŞULU (bkz. e2e/support/email-verification.ts).
-  await markEmailVerified(email);
+  if (options.verifyEmail ?? true) {
+    await markEmailVerified(email);
+  }
   expect(created.status()).toBe(201);
 
   const signedIn = await signInWithCredentials(page.request, email, PASSWORD);
@@ -152,6 +163,167 @@ test.describe("/tenants/new — çalışma alanı oluşturma", () => {
     await expect(page).toHaveURL(/\/tenants\/new$/);
 
     expect(await listTenants(page)).toHaveLength(0);
+  });
+
+  /**
+   * Issue #232: form, 403'ün gerekçesini yutup "Lütfen daha sonra tekrar deneyin" gösteriyordu.
+   *
+   * Bu cümle sadece yetersiz değil, AKTİF OLARAK YANLIŞTI: beklemek durumu düzeltmez. Test
+   * hem doğru mesajın göründüğünü hem de yanlış olanın GÖRÜNMEDİĞİNİ doğrular — ikincisi
+   * olmadan, iki mesajı birden basan bir regresyon fark edilmezdi.
+   *
+   * Buradaki 403 GERÇEK sunucudan gelir ve `code: "EMAIL_NOT_VERIFIED"` taşır. Eşlemenin
+   * statüye değil KODA dayandığı, bir alttaki "tanınmayan 403" testiyle birlikte kanıtlanır:
+   * aynı statü, farklı kod, farklı sonuç.
+   */
+  test("doğrulanmamış hesap 403'ün gerekçesini görüyor, 'daha sonra tekrar deneyin' görmüyor", async ({
+    page,
+  }) => {
+    await signUpAndSignIn(page, "ui-tenant-unverified", { verifyEmail: false });
+
+    await page.goto("/tenants/new");
+    await fillForm(page, "Dogrulanmamis Sirket", `ui-unverified-${randomUUID()}`);
+    await submit(page);
+
+    await expect(formAlert(page)).toContainText("e-posta adresinizi doğrulamanız");
+    await expect(formAlert(page)).not.toContainText("daha sonra tekrar deneyin");
+
+    // Eyleme dönük kısım: kullanıcıya ne yapacağı SÖYLENMEKLE kalmaz, yapabileceği bir yol da
+    // sunulur.
+    await expect(
+      page.getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }),
+    ).toBeVisible();
+
+    await expect(page).toHaveURL(/\/tenants\/new$/);
+    // Kontrol grubu: 403 gerçekten sunucudan geldi, yani hiçbir kayıt oluşmadı.
+    expect(await listTenants(page)).toHaveLength(0);
+  });
+
+  test("403 aksiyonu MEVCUT endpoint'e gönderiyor ve düğme cooldown'a giriyor", async ({
+    page,
+  }) => {
+    await signUpAndSignIn(page, "ui-tenant-resend", { verifyEmail: false });
+
+    await page.goto("/tenants/new");
+    await fillForm(page, "Tekrar Gonder Sirketi", `ui-resend-${randomUUID()}`);
+    await submit(page);
+    await expect(formAlert(page)).toContainText("e-posta adresinizi doğrulamanız");
+
+    // İsteğin GERÇEKTEN atıldığı ve DOĞRU endpoint'e gittiği doğrulanır: yeni bir endpoint
+    // yazmamak #232'nin şartıydı (rate limit `RESEND_VERIFICATION` orada yaşıyor).
+    const resent = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/auth/resend-verification") &&
+        response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }).click();
+    expect((await resent).status()).toBe(200);
+
+    // Onay `role="status"` taşır, `role="alert"` DEĞİL — başarı bildirimi ekran okuyucuda
+    // hata gibi okunmamalı.
+    await expect(page.locator("form").getByRole("status")).toContainText(
+      "Doğrulama e-postası gönderildi",
+    );
+
+    // COOLDOWN: endpoint invariant #7 gereği hep aynı 200'ü döndüğü için ikinci tıklama görünür
+    // hiçbir şey değiştirmez; düğmenin tükenmesi, yanıtı AYRIŞTIRMADAN verilen tek geri
+    // bildirimdir.
+    await expect(page.getByRole("button", { name: "Gönderildi" })).toBeDisabled();
+
+    // Süre dolunca düğme GERİ AÇILIR. Bu beklenti olmadan, düğmeyi kalıcı olarak kilitleyen
+    // bir regresyon (ör. `setCoolingDown(false)` hiç çalışmaması) testten geçerdi.
+    await expect(
+      page.getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }),
+    ).toBeEnabled({ timeout: 15_000 });
+  });
+
+  /**
+   * Issue #232: 403 eşlemesi STATÜYE değil, yanıttaki `code` alanına dayanır.
+   *
+   * Önceki hâli "bu endpoint'te 403'ün tek kaynağı doğrulama kapısıdır" varsayımıyla
+   * çalışıyordu. Bu test, o varsayımın geri gelmesini engeller: aynı statü, tanınmayan bir
+   * kodla geldiğinde form ALAKASIZ bir hataya "e-postanızı doğrulayın" DEMEMELİ. Yukarıdaki
+   * gerçek-403 testiyle birlikte tam bir çift oluşturur — biri kodun tanındığını, bu ise
+   * tanınmadığında ne olduğunu kanıtlar.
+   *
+   * İki senaryo birden koşulur: tanınmayan bir kod VE hiç kod olmaması. İkincisi, koda geçmeden
+   * önceki bütün 403 üreticilerinin (ve ileride kod koymayı unutan her yeni dalın) doğru tarafa
+   * düştüğünü gösterir.
+   */
+  test("tanınmayan bir 403 kodu doğrulama mesajı üretmiyor", async ({ page }) => {
+    await signUpAndSignIn(page, "ui-tenant-403-code");
+
+    let forbiddenBody: Record<string, unknown> = {
+      error: "Forbidden",
+      code: "MAINTENANCE_MODE",
+    };
+
+    await page.route("**/api/tenants", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        body: JSON.stringify(forbiddenBody),
+      });
+    });
+
+    await page.goto("/tenants/new");
+
+    for (const senaryo of ["tanınmayan kod", "kod yok"]) {
+      await fillForm(page, "Yetkisiz Sirket", `ui-403-${randomUUID()}`);
+      await submit(page);
+
+      await expect(formAlert(page), senaryo).toContainText("Bu işlem için yetkiniz yok");
+      await expect(formAlert(page), senaryo).not.toContainText("doğrulamanız");
+      await expect(
+        page.getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }),
+        senaryo,
+      ).toHaveCount(0);
+
+      // İkinci tur: sunucu hiç `code` göndermiyor.
+      forbiddenBody = { error: "Forbidden" };
+    }
+  });
+
+  /**
+   * Generic "daha sonra tekrar deneyin" metni SİLİNMEDİ, DARALTILDI: gerçekten geçici olan
+   * durumlarda hâlâ doğru cevap odur. Bu test o daralmanın diğer ucunu tutar — aksi halde
+   * "403 mesajı görünüyor" testi, herkese 403 mesajı basan bir regresyonda da yeşil kalırdı.
+   *
+   * 500 yanıtı ENJEKTE EDİLİR: sunucuyu gerçekten çökertmeden 5xx üretmenin başka yolu yok.
+   * Bir güvenlik mekanizması mock'lanmıyor (docs/testing.md #3) — mock'lanan şey, formun
+   * KARŞILAŞTIĞI yanıt. Hesap bilerek DOĞRULANMIŞ: mesajın kaynağının gerçek bir 403 değil,
+   * enjekte edilen 5xx olduğu böylece kesinleşir.
+   */
+  test("sunucu 5xx dönerse geçici hata mesajı gösteriliyor", async ({ page }) => {
+    await signUpAndSignIn(page, "ui-tenant-5xx");
+
+    await page.route("**/api/tenants", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Internal error" }),
+      });
+    });
+
+    await page.goto("/tenants/new");
+    await fillForm(page, "Bes Yuz Sirketi", `ui-5xx-${randomUUID()}`);
+    await submit(page);
+
+    await expect(formAlert(page)).toContainText("daha sonra tekrar deneyin");
+    // Doğrulama aksiyonu YALNIZCA 403'e aittir; geçici hatada gösterilmesi kullanıcıyı
+    // ilgisiz bir işe yönlendirirdi.
+    await expect(
+      page.getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }),
+    ).toHaveCount(0);
+    await expect(page).toHaveURL(/\/tenants\/new$/);
   });
 
   test("oturumsuz kullanıcı /tenants/new'a giremiyor", async ({ page }) => {

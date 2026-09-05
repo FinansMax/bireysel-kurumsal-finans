@@ -19,11 +19,11 @@ export const AUDIT_ACTIONS = {
   // Kullanıcının kendi iradesiyle tüm oturumlarını kapatması (Issue #186). Güvenlik açısından
   // kritik bir olaydır: "hesabım ele geçirildi mi" araştırmasında zaman çizelgesinin parçasıdır.
   AUTH_SESSIONS_REVOKED: "AUTH_SESSIONS_REVOKED",
+  TENANT_CREATED: "TENANT_CREATED",
   // Tenant verisinin disa aktarilmasi (Issue #194). Guvenlik olay zaman cizelgesinin
   // parcasidir: tek bir dosyada tenant'in TUM verisi disariya cikar. "Veri sizdi mi, ne
   // zaman, kim tarafindan" sorusunun cevabi burasidir.
   TENANT_DATA_EXPORTED: "TENANT_DATA_EXPORTED",
-  TENANT_CREATED: "TENANT_CREATED",
   MEMBERSHIP_ROLE_CHANGED: "MEMBERSHIP_ROLE_CHANGED",
   // Finansal hesap yaşam döngüsü (Issue #46). Bir hesabın oluşturulması/silinmesi ve
   // bakiyesinin elle değiştirilmesi, tenant içinde para akışını doğrudan etkileyen

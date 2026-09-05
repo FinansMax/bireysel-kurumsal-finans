@@ -88,6 +88,35 @@ test.describe("/settings/audit-log", () => {
     await expect(page.getByRole("cell", { name: `TENANT:${first}` })).toHaveCount(0);
   });
 
+  test("tablo iskeleti geçerli HTML üretiyor (thead tek satır, hydration hatası yok)", async ({
+    page,
+  }) => {
+    // GERÇEK BİR HATAYI KAPATIR: ekran ilk hâlinde `<Thead>` içine ayrıca `<Tr>` koyuyordu.
+    // `Thead` başlık satırını KENDİSİ üretir (`src/components/ui/table.tsx`), dolayısıyla DOM'a
+    // iç içe iki `<tr>` yazılıyordu. Tarayıcı bunu sessizce düzeltir — ekran gözle DOĞRU görünür —
+    // ama React sunucu çıktısıyla eşleşmeyen bir ağaç bulup hydration hatası verir. Görünür bir
+    // metne bakan hiçbir assertion bunu yakalamaz; bu yüzden yapıya ve konsola bakılır.
+    const hydrationErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() !== "error") return;
+      const text = message.text();
+      if (/hydrat|cannot be a child of/i.test(text)) hydrationErrors.push(text);
+    });
+
+    await signUpAndSignIn(page, "audit-markup");
+    await createAndActivateTenant(page);
+
+    await page.goto("/settings/audit-log");
+    await expect(page.getByRole("cell", { name: "TENANT_CREATED" })).toBeVisible();
+
+    // Başlıkta TAM OLARAK bir satır olmalı. İç içe `<tr>`'de bu sayı ikiye çıkar.
+    await expect(page.getByRole("table").locator("thead tr")).toHaveCount(1);
+    // DUYARLILIK: başlık hücreleri gerçekten o tek satırın içinde — kolonlar kaybolmuş değil.
+    await expect(page.getByRole("table").locator("thead tr > th")).toHaveCount(4);
+
+    expect(hydrationErrors).toEqual([]);
+  });
+
   test("çalışma alanı seçilmemişse boş durum gösteriliyor", async ({ page }) => {
     await signUpAndSignIn(page, "audit-no-tenant");
 

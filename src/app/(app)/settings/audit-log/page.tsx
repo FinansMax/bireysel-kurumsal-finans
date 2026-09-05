@@ -99,12 +99,10 @@ export default async function AuditLogPage({
           <TableScroll>
             <Table>
               <Thead>
-                <Tr>
-                  <Th>Tarih</Th>
-                  <Th>Olay</Th>
-                  <Th>Kim</Th>
-                  <Th>Hedef</Th>
-                </Tr>
+                <Th>Tarih</Th>
+                <Th>Olay</Th>
+                <Th>Kim</Th>
+                <Th>Hedef</Th>
               </Thead>
               <Tbody>
                 {entries.map((entry) => (

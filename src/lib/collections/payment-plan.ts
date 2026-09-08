@@ -330,7 +330,27 @@ export async function cancelPaymentPlan(
 }
 
 /**
+ * "Gecikmiş" sayılan taksit durumları.
+ *
+ * `OVERDUE` ayrı bir enum değeri DEĞİLDİR (#165 kararı): gecikmişlik sorgu anında
+ * `dueDate < now()` ile türetilir, böylece bir cron çalışmasa bile veritabanında bayat bir
+ * durum oluşmaz. Tahsil edilmiş (`PAID`) ya da iptal edilmiş (`CANCELLED`) bir taksit vadesi
+ * geçmiş olsa da gecikmiş değildir — iş bitmiştir.
+ */
+const OVERDUE_STATUSES: readonly InstallmentStatus[] = [
+  InstallmentStatus.PENDING,
+  InstallmentStatus.PARTIAL,
+];
+
+/**
  * Taksitleri filtre parametrelerine göre getirir.
+ *
+ * FİLTRELER BİRLEŞİR, BİRİ DİĞERİNİ EZMEZ (#205). Önceki hâlinde `overdue=true`,
+ * `whereClause.dueDate` ve `whereClause.status` alanlarının ÜZERİNE yazıyordu; daha önce
+ * kurulmuş `from`/`to`/`status` koşulları sessizce kayboluyordu. "Son 30 günde vadesi
+ * geçenler" sorusuna TÜM ZAMANLARIN gecikmiş taksitleri dönüyordu — hata vermeyen, yalnızca
+ * yanlış cevap veren bir filtre. Sessizce yanlış cevap veren bir filtre, hata veren filtreden
+ * kötüdür: kullanıcı yanlış olduğunu anlayamaz.
  */
 export async function listInstallments(
   tenantId: string,
@@ -348,20 +368,28 @@ export async function listInstallments(
     whereClause.planId = params.planId;
   }
 
-  if (params.status) {
-    whereClause.status = params.status;
+  // VADE: aralık ve "gecikmiş" koşulu AYNI filtre nesnesinde toplanır. Prisma bunları AND'ler,
+  // yani `?from=&to=&overdue=true` "bu aralıkta VE vadesi geçmiş" demektir.
+  const dueDate: Prisma.DateTimeFilter = {};
+  if (params.from) dueDate.gte = params.from;
+  if (params.to) dueDate.lte = params.to;
+  if (params.overdue) dueDate.lt = new Date();
+  if (Object.keys(dueDate).length > 0) {
+    whereClause.dueDate = dueDate;
   }
 
-  if (params.from || params.to) {
-    whereClause.dueDate = {};
-    if (params.from) whereClause.dueDate.gte = params.from;
-    if (params.to) whereClause.dueDate.lte = params.to;
-  }
-
-  // OVERDUE dinamik olarak türetilir: dueDate < now() ve status IN (PENDING, PARTIAL)
+  // DURUM: `overdue` verildiğinde sonuç, istenen durum ile gecikmiş sayılan durumların
+  // KESİŞİMİDİR. Kesişim boşsa (ör. `status=PAID&overdue=true`) sorgu bilerek boş liste döner:
+  // "ödenmiş ve gecikmiş" diye bir taksit yoktur ve bunu 400 ile reddetmek, birlikte
+  // kullanılabilir olarak tanımlanmış iki filtreyi keyfî biçimde yasaklamak olurdu.
   if (params.overdue) {
-    whereClause.dueDate = { lt: new Date() };
-    whereClause.status = { in: [InstallmentStatus.PENDING, InstallmentStatus.PARTIAL] };
+    whereClause.status = {
+      in: params.status
+        ? OVERDUE_STATUSES.filter((status) => status === params.status)
+        : [...OVERDUE_STATUSES],
+    };
+  } else if (params.status) {
+    whereClause.status = params.status;
   }
 
   const installments = await prisma.paymentInstallment.findMany({

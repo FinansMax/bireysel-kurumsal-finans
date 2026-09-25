@@ -79,10 +79,25 @@ export type CreatePaymentPlanParams = {
 /**
  * Servis katmanı yanıt tipi.
  * Uygulama genelinde throw edilmez; discriminated union dönülür.
+ *
+ * `500` BU UNION'DA YOKTUR ve olmamalıdır (Issue #205). `docs/architecture.md` → "Servis
+ * katmanı sözleşmesi": *"Beklenmeyen hatalar (DB down gibi) yakalanmaz; Next.js 500'e çevirir.
+ * Bu bilinçlidir — beklenen hataları result union'ı, beklenmeyenleri framework taşır."*
+ *
+ * Union'a `500` koymak, beklenmeyen bir hatayı BEKLENEN bir sonuç gibi göstermeye kapı açar:
+ * bir `catch` bloğu onu `{ ok: false, status: 500 }`e çevirir, çağıran taraf başarısızlığı
+ * "olağan" sayar ve hata hiçbir yere yükselmeden — stack'i, Sentry kaydı ve nedeni olmadan —
+ * yutulur. Bugün hiçbir yerde `500` dönülmüyordu; tipin bunu MÜMKÜN göstermesi, ilk deneyeni
+ * derleyicinin durdurmaması demekti.
+ *
+ * `503` KALIR ve bu tutarsızlık değildir: retry'lar tükendiğinde dönülen `503`, tanımlı ve
+ * BEKLENEN bir sonuçtur (`runSerializable()` sözleşmesi) — çağıran taraf "tekrar dene" der.
+ * `403` de kalır: yetkisizlik beklenen bir sonuçtur, bugün route guard'ında karşılanıyor olması
+ * onu beklenmeyen yapmaz.
  */
 export type CollectionServiceResult<T> =
   | { ok: true; data: T }
-  | { ok: false; status: 400 | 403 | 404 | 409 | 500 | 503; error: string };
+  | { ok: false; status: 400 | 403 | 404 | 409 | 503; error: string };
 
 /**
  * Vade tarihine takvim ayı ekler.
@@ -110,7 +125,22 @@ function addMonths(date: Date, months: number): Date {
 
 /**
  * Yeni ödeme planı ve bağlı taksitlerini sunucu tarafında oluşturur.
- * Eşzamanlılık kuralı (aynı deal için tek ACTIVE plan) runSerializable() ile garanti edilir.
+ *
+ * NEDEN `runSerializable()`, NEDEN DOĞRUDAN `$transaction` DEĞİL: "aynı deal için tek ACTIVE
+ * plan" kuralı bir OKUMAYA dayanıyor (önce aktif plan var mı diye bakılıyor, sonra yazılıyor).
+ * Bu, "önce kontrol et sonra yaz" desenidir ve iki isteğin arasına giren üçüncü bir istek
+ * invariant'ı bozar — `docs/architecture.md` bunun için `Serializable` izolasyon + retry
+ * öngörür. `prisma.$transaction(..., { isolationLevel: Serializable })`'ı doğrudan çağırmak
+ * retry'ı ATLAR: o durumda serialization hatası (`P2034`) kullanıcıya **500** olarak yansırdı
+ * (Issue #122'de tam olarak bu oldu). Retry'ın TEK giriş noktası `runSerializable()`tır.
+ *
+ * NEDEN `dealId` ÜZERİNDE `@unique` YOK: unique kısıt duruma bakmaz — iptal edilmiş bir planın
+ * bulunduğu deal'e ikinci bir plan açmayı da imkânsız kılardı. Kural "aynı anda tek AKTİF plan";
+ * iptal edilenler geçmiş kayıt olarak durur.
+ *
+ * Retry'lar tükenirse `503` dönülür, `409` DEĞİL: bu kod tabanında `409` bir iş kuralı
+ * ihlalidir ("zaten aktif plan var"), `503` ise "şu an olmadı, tekrar dene" demektir. İkisini
+ * karıştırmak, geçici bir çakışmayı kullanıcıya kalıcı bir hata gibi gösterirdi.
  */
 export async function createPaymentPlan(
   tenantId: string,
@@ -150,7 +180,19 @@ export async function createPaymentPlan(
     const downDec = new Prisma.Decimal(params.downPayment);
     const netDec = totalDec.sub(downDec);
 
-    // Her bir taksit tutarı: net tutar / taksit sayısı (4 basamak hassasiyet, aşağı yuvarlama)
+    // TAKSİT DAĞITIMI: aşağı yuvarla, ARTIĞI SON TAKSİTE EKLE.
+    //
+    // NEDEN AŞAĞI YUVARLAMA: yukarı yuvarlamak taksitler toplamını net tutarın ÜZERİNE çıkarır
+    // ve müşteriden borcundan fazlası istenir. Aşağı yuvarlamada eksik kalan kısım bilinir ve
+    // tek bir yere — son taksite — eklenerek kapatılır; toplam DAİMA `totalAmount - downPayment`
+    // eder. "Her taksite eşit dağıt" alternatifi reddedildi: kalan, taksit sayısına tam
+    // bölünmediğinde aynı sorunu bir alt basamakta tekrar üretirdi.
+    //
+    // NEDEN SON TAKSİT, NEDEN İLK DEĞİL: kuruş farkı ödemenin EN GEÇ noktasına bırakılır;
+    // ilk taksite eklemek, planın hemen başında "neden 1 kuruş fazla" sorusunu doğururdu.
+    //
+    // NEDEN 4 BASAMAK: sütun `Decimal(19,4)`. Daha fazlası veritabanında zaten kesilirdi ve
+    // kesilen kısım hiçbir yerde toplanmadığı için toplam tutmazdı.
     const baseInstallmentDec = netDec.div(params.installmentCount).toDecimalPlaces(4, Prisma.Decimal.ROUND_DOWN);
     if (baseInstallmentDec.lte(0)) {
       return {
@@ -256,16 +298,24 @@ export async function updatePaymentPlan(
     data: { notes },
   });
 
-  if (updateResult.count === 0) {
+  // `=== 1`, `!== 0` DEĞİL (docs/security-invariants.md #1'in yazılı deseni). Pratikte sonuç
+  // aynı — `id` + `tenantId` en fazla bir satır eşler — ama iddia farklıdır: "tam olarak bir
+  // satır etkilendi". `=== 0` kontrolü beklenmedik bir çoklu eşleşmeyi SESSİZCE kabul ederdi ve
+  // bu desen kopyalanarak yayıldığı için ilk sapma önemlidir.
+  if (updateResult.count !== 1) {
     return { ok: false, status: 404, error: "Ödeme planı bulunamadı." };
   }
 
-  const updatedPlan = await prisma.paymentPlan.findFirst({
+  // `findFirstOrThrow`, `findFirst` + `updated!` DEĞİL (`src/lib/finance/account.ts` ile aynı
+  // desen). Non-null zorlama, iki sorgu arasında satır silinirse çalışma zamanında `null`
+  // üzerinde patlardı; `OrThrow` aynı durumu framework'ün 500'üne çevirir — beklenmeyen bir
+  // hatayı beklenen bir sonuç gibi göstermeden.
+  const updatedPlan = await prisma.paymentPlan.findFirstOrThrow({
     where: tenantScoped(tenantId, { id: planId }),
     select: PAYMENT_PLAN_SELECT,
   });
 
-  return { ok: true, data: updatedPlan! };
+  return { ok: true, data: updatedPlan };
 }
 
 /**
@@ -308,12 +358,15 @@ export async function cancelPaymentPlan(
       data: { status: InstallmentStatus.CANCELLED },
     });
 
-    const updated = await tx.paymentPlan.findFirst({
+    // Okuma AYNI transaction içinde: yukarıdaki `updateMany` satırı zaten kilitledi, dolayısıyla
+    // araya bir silme giremez. `OrThrow`, non-null zorlamanın yerine geçer — imkânsız olduğunu
+    // düşündüğümüz durum gerçekleşirse sessizce `null` yaymak yerine yükselir.
+    const updated = await tx.paymentPlan.findFirstOrThrow({
       where: tenantScoped(tenantId, { id: planId }),
       select: PAYMENT_PLAN_WITH_INSTALLMENTS_SELECT,
     });
 
-    return { ok: true as const, data: updated! };
+    return { ok: true as const, data: updated };
     });
 
     if (!result.ok) {
@@ -330,7 +383,27 @@ export async function cancelPaymentPlan(
 }
 
 /**
+ * "Gecikmiş" sayılan taksit durumları.
+ *
+ * `OVERDUE` ayrı bir enum değeri DEĞİLDİR (#165 kararı): gecikmişlik sorgu anında
+ * `dueDate < now()` ile türetilir, böylece bir cron çalışmasa bile veritabanında bayat bir
+ * durum oluşmaz. Tahsil edilmiş (`PAID`) ya da iptal edilmiş (`CANCELLED`) bir taksit vadesi
+ * geçmiş olsa da gecikmiş değildir — iş bitmiştir.
+ */
+const OVERDUE_STATUSES: readonly InstallmentStatus[] = [
+  InstallmentStatus.PENDING,
+  InstallmentStatus.PARTIAL,
+];
+
+/**
  * Taksitleri filtre parametrelerine göre getirir.
+ *
+ * FİLTRELER BİRLEŞİR, BİRİ DİĞERİNİ EZMEZ (#205). Önceki hâlinde `overdue=true`,
+ * `whereClause.dueDate` ve `whereClause.status` alanlarının ÜZERİNE yazıyordu; daha önce
+ * kurulmuş `from`/`to`/`status` koşulları sessizce kayboluyordu. "Son 30 günde vadesi
+ * geçenler" sorusuna TÜM ZAMANLARIN gecikmiş taksitleri dönüyordu — hata vermeyen, yalnızca
+ * yanlış cevap veren bir filtre. Sessizce yanlış cevap veren bir filtre, hata veren filtreden
+ * kötüdür: kullanıcı yanlış olduğunu anlayamaz.
  */
 export async function listInstallments(
   tenantId: string,
@@ -348,20 +421,28 @@ export async function listInstallments(
     whereClause.planId = params.planId;
   }
 
-  if (params.status) {
-    whereClause.status = params.status;
+  // VADE: aralık ve "gecikmiş" koşulu AYNI filtre nesnesinde toplanır. Prisma bunları AND'ler,
+  // yani `?from=&to=&overdue=true` "bu aralıkta VE vadesi geçmiş" demektir.
+  const dueDate: Prisma.DateTimeFilter = {};
+  if (params.from) dueDate.gte = params.from;
+  if (params.to) dueDate.lte = params.to;
+  if (params.overdue) dueDate.lt = new Date();
+  if (Object.keys(dueDate).length > 0) {
+    whereClause.dueDate = dueDate;
   }
 
-  if (params.from || params.to) {
-    whereClause.dueDate = {};
-    if (params.from) whereClause.dueDate.gte = params.from;
-    if (params.to) whereClause.dueDate.lte = params.to;
-  }
-
-  // OVERDUE dinamik olarak türetilir: dueDate < now() ve status IN (PENDING, PARTIAL)
+  // DURUM: `overdue` verildiğinde sonuç, istenen durum ile gecikmiş sayılan durumların
+  // KESİŞİMİDİR. Kesişim boşsa (ör. `status=PAID&overdue=true`) sorgu bilerek boş liste döner:
+  // "ödenmiş ve gecikmiş" diye bir taksit yoktur ve bunu 400 ile reddetmek, birlikte
+  // kullanılabilir olarak tanımlanmış iki filtreyi keyfî biçimde yasaklamak olurdu.
   if (params.overdue) {
-    whereClause.dueDate = { lt: new Date() };
-    whereClause.status = { in: [InstallmentStatus.PENDING, InstallmentStatus.PARTIAL] };
+    whereClause.status = {
+      in: params.status
+        ? OVERDUE_STATUSES.filter((status) => status === params.status)
+        : [...OVERDUE_STATUSES],
+    };
+  } else if (params.status) {
+    whereClause.status = params.status;
   }
 
   const installments = await prisma.paymentInstallment.findMany({
@@ -420,11 +501,13 @@ export async function updateInstallment(
         return { ok: false as const, status: 404 as const, error: "Taksit bulunamadı." };
       }
 
-      const updated = await tx.paymentInstallment.findFirst({
+      // Aynı transaction, aynı gerekçe: `updateMany` satırı kilitledi, `OrThrow` non-null
+      // zorlamanın yerine geçiyor.
+      const updated = await tx.paymentInstallment.findFirstOrThrow({
         where: tenantScoped(tenantId, { id: installmentId }),
         select: PAYMENT_INSTALLMENT_SELECT,
       });
-      return { ok: true as const, data: updated! };
+      return { ok: true as const, data: updated };
     });
     return result;
   } catch (error) {

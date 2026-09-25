@@ -190,8 +190,8 @@ test.describe("Login audit (authenticateUser)", () => {
     if (!signup.ok) return;
 
     try {
-      const user = await authenticateUser({ email, password });
-      expect(user).not.toBeNull();
+      const result = await authenticateUser({ email, password });
+      expect(result.ok).toBe(true);
 
       const rows = await prisma.auditLog.findMany({
         where: { action: "AUTH_LOGIN_SUCCESS", actorUserId: signup.user.id },
@@ -213,8 +213,8 @@ test.describe("Login audit (authenticateUser)", () => {
     try {
       const before = await prisma.auditLog.count({ where: { action: "AUTH_LOGIN_FAILURE" } });
 
-      const user = await authenticateUser({ email, password: "WrongPassword!" });
-      expect(user).toBeNull();
+      const result = await authenticateUser({ email, password: "WrongPassword!" });
+      expect(result.ok).toBe(false);
 
       const after = await prisma.auditLog.count({ where: { action: "AUTH_LOGIN_FAILURE" } });
       expect(after).toBe(before + 1);
@@ -233,8 +233,8 @@ test.describe("Login audit (authenticateUser)", () => {
   test("başarısız login (bilinmeyen e-posta) → AUTH_LOGIN_FAILURE, actorUserId null, PII saklanmıyor", async () => {
     const unknownEmail = `audit-login-unknown-${randomUUID()}@example.com`;
 
-    const user = await authenticateUser({ email: unknownEmail, password: "WhateverPassword!" });
-    expect(user).toBeNull();
+    const result = await authenticateUser({ email: unknownEmail, password: "WhateverPassword!" });
+    expect(result.ok).toBe(false);
 
     const rows = await prisma.auditLog.findMany({
       where: { action: "AUTH_LOGIN_FAILURE" },

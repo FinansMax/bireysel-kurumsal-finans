@@ -28,6 +28,10 @@ export const AUDIT_ACTIONS = {
   AUTH_TOTP_DISABLED: "AUTH_TOTP_DISABLED",
   AUTH_TOTP_FAILURE: "AUTH_TOTP_FAILURE",
   TENANT_CREATED: "TENANT_CREATED",
+  // Tenant verisinin disa aktarilmasi (Issue #194). Guvenlik olay zaman cizelgesinin
+  // parcasidir: tek bir dosyada tenant'in TUM verisi disariya cikar. "Veri sizdi mi, ne
+  // zaman, kim tarafindan" sorusunun cevabi burasidir.
+  TENANT_DATA_EXPORTED: "TENANT_DATA_EXPORTED",
   MEMBERSHIP_ROLE_CHANGED: "MEMBERSHIP_ROLE_CHANGED",
   // Finansal hesap yaşam döngüsü (Issue #46). Bir hesabın oluşturulması/silinmesi ve
   // bakiyesinin elle değiştirilmesi, tenant içinde para akışını doğrudan etkileyen

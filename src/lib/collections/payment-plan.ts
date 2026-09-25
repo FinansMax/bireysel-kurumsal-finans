@@ -79,10 +79,25 @@ export type CreatePaymentPlanParams = {
 /**
  * Servis katmanı yanıt tipi.
  * Uygulama genelinde throw edilmez; discriminated union dönülür.
+ *
+ * `500` BU UNION'DA YOKTUR ve olmamalıdır (Issue #205). `docs/architecture.md` → "Servis
+ * katmanı sözleşmesi": *"Beklenmeyen hatalar (DB down gibi) yakalanmaz; Next.js 500'e çevirir.
+ * Bu bilinçlidir — beklenen hataları result union'ı, beklenmeyenleri framework taşır."*
+ *
+ * Union'a `500` koymak, beklenmeyen bir hatayı BEKLENEN bir sonuç gibi göstermeye kapı açar:
+ * bir `catch` bloğu onu `{ ok: false, status: 500 }`e çevirir, çağıran taraf başarısızlığı
+ * "olağan" sayar ve hata hiçbir yere yükselmeden — stack'i, Sentry kaydı ve nedeni olmadan —
+ * yutulur. Bugün hiçbir yerde `500` dönülmüyordu; tipin bunu MÜMKÜN göstermesi, ilk deneyeni
+ * derleyicinin durdurmaması demekti.
+ *
+ * `503` KALIR ve bu tutarsızlık değildir: retry'lar tükendiğinde dönülen `503`, tanımlı ve
+ * BEKLENEN bir sonuçtur (`runSerializable()` sözleşmesi) — çağıran taraf "tekrar dene" der.
+ * `403` de kalır: yetkisizlik beklenen bir sonuçtur, bugün route guard'ında karşılanıyor olması
+ * onu beklenmeyen yapmaz.
  */
 export type CollectionServiceResult<T> =
   | { ok: true; data: T }
-  | { ok: false; status: 400 | 403 | 404 | 409 | 500 | 503; error: string };
+  | { ok: false; status: 400 | 403 | 404 | 409 | 503; error: string };
 
 /**
  * Vade tarihine takvim ayı ekler.

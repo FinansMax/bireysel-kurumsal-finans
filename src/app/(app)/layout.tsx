@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/app-shell";
+import { isEmailVerified } from "@/lib/auth/email-verification";
 import { requirePageUser } from "@/lib/auth/page-guard";
 import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { buildModuleNavLinks } from "@/lib/modules/nav";
@@ -26,9 +27,17 @@ import { listTenantsForUser } from "@/lib/tenants/user-tenants";
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   const user = await requirePageUser();
 
-  const [tenants, activeTenant] = await Promise.all([
+  // DOĞRULAMA DURUMU HER İSTEKTE DB'DEN OKUNUR (#190), JWT'den değil: kullanıcı e-postasını
+  // başka bir sekmede doğruladığında şerit bir sonraki gezinmede kaybolmalı. Session claim'ine
+  // yazmak, token yenilenene kadar bayat bir uyarı gösterirdi — aktif tenant üyeliğinin her
+  // istekte doğrulanmasıyla aynı duruş.
+  //
+  // Mevcut iki sorgunun yanına ÜÇÜNCÜ olarak, aynı `Promise.all` içinde eklenir: ek bir
+  // round-trip turu değil, tek bir turda bir sorgu daha.
+  const [tenants, activeTenant, emailVerified] = await Promise.all([
     listTenantsForUser(user.id),
     resolveActiveTenantForUser(user.id),
+    isEmailVerified(user.id),
   ]);
 
   // MODÜL MENÜSÜ SUNUCUDA KURULUR (Issue #152): istemciye modül listesi ya da katalog
@@ -49,6 +58,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
   return (
     <AppShell
       userEmail={user.email}
+      emailVerified={emailVerified}
       tenants={tenants.map(({ id, name }) => ({ id, name }))}
       // Cookie geçerli olsa bile membership her istekte DB'den doğrulanır; üyelik silinmişse
       // `resolveActiveTenantForUser()` `null` döner ve seçici "seçim yok" durumuna düşer.

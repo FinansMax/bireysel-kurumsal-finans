@@ -72,6 +72,18 @@ function formAlert(page: Page) {
   return page.locator("form").getByRole("alert");
 }
 
+/**
+ * FORM İÇİNDEKİ yeniden gönderme düğmesi.
+ *
+ * KAPSAM ŞART (#190): doğrulanmamış bir kullanıcı artık kabukta da kalıcı bir uyarı şeridi
+ * görüyor ve o şeritte AYNI düğme var. Sayfa geneli bir locator ikisini birden bulur ve strict
+ * mode ihlali verir. İki düğmenin de bulunması DOĞRU davranıştır — şerit hesabın durumunu,
+ * form ise o denemenin neden başarısız olduğunu anlatır.
+ */
+function formResendButton(page: Page) {
+  return page.locator("form").getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" });
+}
+
 async function fillForm(page: Page, name: string, slug?: string) {
   await page.getByLabel("Çalışma alanı adı").fill(name);
   if (slug !== undefined) {
@@ -190,8 +202,11 @@ test.describe("/tenants/new — çalışma alanı oluşturma", () => {
 
     // Eyleme dönük kısım: kullanıcıya ne yapacağı SÖYLENMEKLE kalmaz, yapabileceği bir yol da
     // sunulur.
+    await expect(formResendButton(page)).toBeVisible();
+
+    // KABUKTAKİ ŞERİT DE VAR (#190): engel bir sayfaya değil HESABA aittir.
     await expect(
-      page.getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }),
+      page.getByRole("status").filter({ hasText: "E-posta adresiniz doğrulanmadı" }),
     ).toBeVisible();
 
     await expect(page).toHaveURL(/\/tenants\/new$/);
@@ -216,7 +231,7 @@ test.describe("/tenants/new — çalışma alanı oluşturma", () => {
         response.url().includes("/api/auth/resend-verification") &&
         response.request().method() === "POST",
     );
-    await page.getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }).click();
+    await formResendButton(page).click();
     expect((await resent).status()).toBe(200);
 
     // Onay `role="status"` taşır, `role="alert"` DEĞİL — başarı bildirimi ekran okuyucuda
@@ -228,13 +243,19 @@ test.describe("/tenants/new — çalışma alanı oluşturma", () => {
     // COOLDOWN: endpoint invariant #7 gereği hep aynı 200'ü döndüğü için ikinci tıklama görünür
     // hiçbir şey değiştirmez; düğmenin tükenmesi, yanıtı AYRIŞTIRMADAN verilen tek geri
     // bildirimdir.
-    await expect(page.getByRole("button", { name: "Gönderildi" })).toBeDisabled();
+    await expect(
+      page.locator("form").getByRole("button", { name: "Gönderildi" }),
+    ).toBeDisabled();
+
+    // COOLDOWN YALNIZCA TIKLANAN DÜĞMEYE AİT: kabuktaki şeridin düğmesi hâlâ açık olmalı.
+    // İki bileşen aynı state'i paylaşsaydı, formdaki tıklama şeridi de kilitlerdi.
+    await expect(
+      page.getByRole("status").getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }),
+    ).toBeEnabled();
 
     // Süre dolunca düğme GERİ AÇILIR. Bu beklenti olmadan, düğmeyi kalıcı olarak kilitleyen
     // bir regresyon (ör. `setCoolingDown(false)` hiç çalışmaması) testten geçerdi.
-    await expect(
-      page.getByRole("button", { name: "Doğrulama e-postasını tekrar gönder" }),
-    ).toBeEnabled({ timeout: 15_000 });
+    await expect(formResendButton(page)).toBeEnabled({ timeout: 15_000 });
   });
 
   /**

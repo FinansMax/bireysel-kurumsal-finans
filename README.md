@@ -2277,7 +2277,15 @@ kontrollerinin ikinci bir kopyasını doğururdu.
 - **Kısmi ödeme yok** (yukarıdaki `PARTIAL` gerekçesi).
 - **Karşı taraf serbest metindir**; kişi/kurum rehberi (`Contact`) ayrı bir kavram ve ayrı bir
   issue.
-- **Saat dilimi yok (#134)** — vade ve "bugün" karşılaştırması UTC.
+- **Vade karşılaştırması artık TENANT'IN saat dilimine göre** (#134). "Bugün",
+  `startOfTodayInTimeZone(tenant.timeZone)` ile hesaplanır. Önceki hâli UTC'nin gününü
+  kullanıyordu: UTC+3'te gece yarısını geçmiş bir tenant için o gün vadesi dolan kayıtlar
+  "henüz gecikmedi" görünüyordu — gecikme rozeti bir gün geç yanıyordu.
+
+  **`dueDate` bilerek saat dilimine ÇEVRİLMEZ.** O bir AN değil, TARİH-ONLY bir değerdir ve UTC
+  gece yarısı olarak saklanır; bir saat diliminde "yorumlamak" günü UTC'nin gerisindeki
+  dilimlerde bir gün geriye kaydırırdı. Yani `occurredAt` için doğru olan şey burada yanlış
+  olurdu. Karşılaştırmanın iki tarafı da tarih-only kalır.
 
 ## Modül sistemi — çekirdek (Issue #151)
 
@@ -3082,6 +3090,37 @@ Job `npm ci` **çalıştırmaz**: `npm audit` `package-lock.json`'dan çalışı
 kopyalanmış boş bir dizinde aynı raporu üretti). Kurulum eklemek işi dakikalarca uzatır,
 taramaya hiçbir şey katmaz.
 
+#### Üç advisory `overrides` ile kapatıldı (Issue #227)
+
+Yukarıdaki ölçüm, advisory'lerin **çalıştırılan koda ulaşmadığını** gösteriyordu; ama "ulaşmıyor"
+ile "yok" aynı şey değildir. Üçünün de tek bir kökü vardı — `deepmerge-ts@7.1.5` — ve o kök
+`package.json`'daki bir `overrides` girdisiyle kaldırıldı:
+
+```json
+"overrides": { "deepmerge-ts": "^8.0.2" }
+```
+
+`npm audit` artık **sıfır** bulgu raporluyor (`--omit=dev` ile de, onsuz da).
+
+**Neden `overrides`, neden diğerleri değil:**
+
+- **Prisma'yı düşürmek** (`npm audit fix --force` → `prisma@6.12.0`) reddedildi: 6.19.3'ten
+  kırıcı bir geri adım ve `@prisma/config` API'si bu sürümde değişti.
+- **Eşiği `high`'a çekmek** bu değişikliğin konusu DEĞİLDİR (aşağıya bakın).
+- **Beklemek** — Prisma'nın kendi bağımlılığını yükseltmesini beklemek — bugün elde edilebilir
+  bir sonucu belirsiz bir tarihe erteliyordu.
+
+**Kalan risk — `overrides` bir zorlamadır.** `@prisma/config` `deepmerge-ts@^7` ilan ediyor;
+npm'e 8'i vermesini biz söylüyoruz, yani upstream'in desteklemediği bir bileşim kuruyoruz.
+Bu yüzden zorlama **varsayılmadı, koşuldu**: `prisma validate`, `generate`, `migrate status`,
+`migrate deploy` ve `format` komutlarının hepsi çalıştırıldı, ardından altı doğrulamanın tamamı
+(lint, typecheck, build, integration, security, e2e) yeşil koştu. Prisma CLI'ın bir sonraki
+yükseltmesinde bu girdinin **hâlâ gerekli olup olmadığı** yeniden bakılmalıdır: gereksiz kalmış
+bir `overrides` girdisi, sessizce eski bir sürümü sabitleyen bir tuzağa dönüşebilir.
+
+`integration/dependency-audit.spec.ts` bu girdiyi ve lock dosyasındaki çözülmüş sürümü koruma
+altına alır — biri `overrides`'ı düşürürse test kırmızıya döner.
+
 #### KABUL EDİLEN KALAN RİSK
 
 Eşik `critical` olduğu için, ileride kod yolunda **gerçekten bulunan** yüksek seviyeli bir
@@ -3089,8 +3128,12 @@ açık da **CI'ı kırmayacaktır.** Bu, bu kararın bedelidir ve küçümsenmiy
 
 Karşı önlemler — üçü birlikte, biri eksikse risk kabul edilebilir değildir:
 
-1. **Takip issue'su zorunludur ve açık tutulur** — **#227**. Üç advisory'nin durumu orada izlenir; Prisma
-   `deepmerge-ts@^8`'e geçtiği anda eşik **`high`'a çekilir**.
+1. **Takip issue'su zorunludur ve açık tutulur** — **#227**. Üç advisory'nin kendisi artık
+   kapalıdır (yukarıdaki `overrides`), ama **eşik bilinçli olarak `critical` kalmaya devam
+   ediyor**: eşiği `high`'a çekmek AYRI bir karardır ve bu değişikliğin kapsamında değildir.
+   Zincirdeki advisory'yi kapatmak ile "hangi seviyede CI kırılsın" sorusunu yanıtlamak farklı
+   iki sorudur; ikincisi, ağaçtaki her yüksek seviyeli bulgunun kapıyı kapatmasını kabul etmek
+   demektir ve gürültü maliyeti ölçülmeden verilemez. #227 o karar verilene kadar açık kalır.
 2. **Audit çıktısı her sürümde okunur.** Job yeşil olsa da çıktısı bilgi taşır; "yeşil" onu
    okumamanın gerekçesi değildir.
 3. **Bağımlılık taraması tek başına yetmez** — bu, ayrı ve daha genel bir karar olarak zaten

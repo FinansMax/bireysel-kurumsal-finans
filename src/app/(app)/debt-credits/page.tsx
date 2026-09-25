@@ -12,6 +12,7 @@ import { requirePageUser } from "@/lib/auth/page-guard";
 import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { listDebtCredits, type DebtCreditView } from "@/lib/finance/debt-credit";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
+import { startOfTodayInTimeZone } from "@/lib/time/tenant-time";
 
 import { DebtCreditForm } from "./debt-credit-form";
 
@@ -79,15 +80,14 @@ export default async function DebtCreditsPage({
   const editingRecord =
     canManage && editId ? (records.find((record) => record.id === editId) ?? null) : null;
 
-  // "Bugün" SUNUCUDA ve UTC gün başlangıcı olarak hesaplanır — vade de UTC gece yarısı olarak
-  // saklanıyor (#134: saat dilimi yönetimi hâlâ yok). İstemcide hesaplamak, aynı kaydı iki
-  // kullanıcıya farklı gösterirdi.
-  const todayUtc = new Date();
-  const todayStart = Date.UTC(
-    todayUtc.getUTCFullYear(),
-    todayUtc.getUTCMonth(),
-    todayUtc.getUTCDate(),
-  );
+  // "Bugün" SUNUCUDA ve TENANT'IN saat diliminde hesaplanır (#134). İstemcide hesaplamak, aynı
+  // kaydı iki kullanıcıya farklı gösterirdi.
+  //
+  // Önceki hâli UTC'nin bugününü kullanıyordu: UTC+3'te gece yarısını geçmiş bir tenant için
+  // o gün vadesi dolan kayıtlar "henüz gecikmedi" görünürdü — gecikme rozetinin bir gün geç
+  // yanması. Vade TARİH-ONLY olduğu için karşılaştırma da tarih-only kalır; gerekçesi
+  // `startOfTodayInTimeZone()` üzerinde yazılı.
+  const todayStart = startOfTodayInTimeZone(tenant.timeZone);
 
   return (
     <section className="space-y-8">
@@ -230,9 +230,13 @@ export default async function DebtCreditsPage({
 /**
  * `Date` → `YYYY-MM-DD`.
  *
- * `toLocaleDateString()` KULLANILMAZ — yerelleştirme çıktıyı sunucunun saat dilimine bağlardı
- * (#54'ün kararı). Vade zaten UTC gece yarısı olarak saklanıyor, dolayısıyla ISO'nun ilk on
- * karakteri kaydedilen günün TA KENDİSİDİR.
+ * BURADA TENANT SAAT DİLİMİNE ÇEVİRİLMEZ ve bu bilinçlidir (#134): `dueDate` bir AN değil,
+ * TARİH-ONLY bir değerdir ve UTC gece yarısı olarak saklanır
+ * (`src/lib/finance/validation.ts`). Onu bir saat diliminde "yorumlamak" günü UTC'nin
+ * gerisindeki dilimlerde bir gün geriye kaydırırdı — yani `occurredAt` için doğru olan şey
+ * burada YANLIŞ olurdu. ISO'nun ilk on karakteri kaydedilen günün ta kendisidir.
+ *
+ * `toLocaleDateString()` de kullanılmaz: çıktıyı sunucunun locale'ine bağlardı (#54).
  */
 function toIsoDay(date: Date | null): string | null {
   return date ? date.toISOString().slice(0, 10) : null;

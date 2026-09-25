@@ -1,10 +1,11 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 import { API_ERROR_CODES, toApiErrorCode, type ApiErrorCode } from "@/lib/api/error-codes";
 import { FormError, SubmitButton, TextField } from "@/components/auth-form";
+import { ResendVerificationButton } from "@/components/resend-verification-button";
 
 /**
  * Yeni çalışma alanı (tenant) oluşturma formu (Issue #42).
@@ -126,63 +127,15 @@ function failureFor(status: number, code: ApiErrorCode | null): SubmitFailure {
   }
 }
 
-/**
- * Doğrulama e-postasını yeniden gönderme durumu.
- *
- * "sent" NÖTR BİR ONAYDIR: `POST /api/auth/resend-verification` bilerek DAİMA aynı yanıtı
- * döner (invariant #7 — "kayıtlı ve doğrulanmamışsa gönderildi"). Arayüz o yanıtı ayrıştırıp
- * "gönderildi" / "zaten doğrulanmış" ayrımı yapmaya ÇALIŞMAZ; yapsaydı endpoint'in bilinçli
- * olarak kapattığı oracle'ı arayüz tarafında yeniden açardı.
- */
-type ResendState = "idle" | "pending" | "sent" | "rateLimited" | "failed";
-
-const RESEND_MESSAGES: Record<Exclude<ResendState, "idle" | "pending">, string> = {
-  sent: "Doğrulama e-postası gönderildi. Gelen kutunuzu ve spam klasörünü kontrol edin.",
-  rateLimited: "Çok fazla istek gönderildi. Lütfen biraz sonra tekrar deneyin.",
-  failed: "Doğrulama e-postası gönderilemedi. Lütfen daha sonra tekrar deneyin.",
-};
-
-/**
- * Başarılı gönderimden sonra düğmenin kapalı kaldığı süre.
- *
- * NEDEN GEREKLİ: endpoint invariant #7 gereği HER ZAMAN aynı 200'ü döner — "gönderildi" ile
- * "zaten doğrulanmış" arasında görünür bir fark yoktur. Onay satırı zaten ekrandayken ikinci
- * tıklama hiçbir şeyi değiştirmez, kullanıcı ekranın bozuk olduğunu düşünür ve tıklamaya devam
- * ederek 3/15dk limitine kendini kilitler. Düğmenin görünür şekilde tükenmesi, yanıtı
- * AYRIŞTIRMADAN verilen tek dürüst geri bildirimdir.
- *
- * Bu bir rate limit DEĞİLDİR ve öyleymiş gibi davranılmaz: gerçek sınır sunucuda
- * (`RESEND_VERIFICATION`, 3/15dk). Buradaki süre yalnızca bir arayüz jestidir, bu yüzden kısa
- * tutulur — kullanıcıyı gerçekten gerektiğinde tekrar denemekten alıkoymamalı.
- */
-const RESEND_COOLDOWN_MS = 10_000;
-
 export function CreateTenantForm({ userEmail }: { userEmail: string }) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [failure, setFailure] = useState<SubmitFailure | null>(null);
   const [pending, setPending] = useState(false);
-  const [resend, setResend] = useState<ResendState>("idle");
-  const [coolingDown, setCoolingDown] = useState(false);
-
-  useEffect(() => {
-    if (!coolingDown) {
-      return;
-    }
-
-    const timer = setTimeout(() => setCoolingDown(false), RESEND_COOLDOWN_MS);
-    // Temizlik ZORUNLU: kullanıcı bu süre içinde başka bir ekrana geçerse sökülmüş bir
-    // bileşenin state'i güncellenmeye çalışılırdı.
-    return () => clearTimeout(timer);
-  }, [coolingDown]);
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFailure(null);
-    // Yeni bir deneme, önceki gönderim bildirimini geçersiz kılar: kullanıcı e-postasını
-    // doğrulayıp tekrar denediyse eski "gönderildi" satırı ekranda kalmamalı.
-    setResend("idle");
     setPending(true);
 
     try {
@@ -214,38 +167,6 @@ export function CreateTenantForm({ userEmail }: { userEmail: string }) {
     }
   }
 
-  /**
-   * MEVCUT endpoint'e gerçek istek atar; yeni bir "oturumdaki kullanıcıya tekrar gönder"
-   * endpoint'i AÇILMADI. Yeniden gönderme rate limiti (`RESEND_VERIFICATION`, 3/15dk) o
-   * route'ta yaşıyor; ikinci bir kapı açmak, her çağrısı bir e-posta üreten bu işlemi
-   * limitsiz hâle getirirdi.
-   */
-  async function resendVerification() {
-    setResend("pending");
-
-    try {
-      const response = await fetch("/api/auth/resend-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: userEmail }),
-      });
-
-      if (response.ok) {
-        setResend("sent");
-        // Cooldown YALNIZCA başarıda başlar: istek başarısız olduysa kullanıcının hemen tekrar
-        // denemesini engellemek, çözebileceği bir sorunda onu bekletmek olurdu.
-        setCoolingDown(true);
-        return;
-      }
-
-      setResend(response.status === 429 ? "rateLimited" : "failed");
-    } catch {
-      setResend("failed");
-    }
-  }
-
-  const resendDisabled = resend === "pending" || coolingDown;
-
   return (
     <form onSubmit={handleSubmit} className="max-w-sm space-y-4" noValidate>
       <TextField
@@ -271,43 +192,12 @@ export function CreateTenantForm({ userEmail }: { userEmail: string }) {
 
       <FormError message={failure?.message ?? null} />
 
-      {failure?.emailNotVerified ? (
-        <div className="space-y-2">
-          {/*
-            Düğme `type="button"`: form içinde kalır (hata kutusunun hemen yanında olması,
-            ekran okuyucuda da bağlamı korur) ama formu GÖNDERMEZ — aksi halde doğrulama hâlâ
-            eksikken ikinci bir 403 üretirdi.
-          */}
-          <button
-            type="button"
-            onClick={resendVerification}
-            disabled={resendDisabled}
-            className="rounded-control border border-line px-3 py-1.5 text-sm font-medium text-body transition-colors duration-150 ease-out-soft hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {resend === "pending"
-              ? "Gönderiliyor…"
-              : coolingDown
-                ? "Gönderildi"
-                : "Doğrulama e-postasını tekrar gönder"}
-          </button>
-
-          {resend === "sent" ? (
-            <p role="status" className="text-sm text-pretty text-muted">
-              {RESEND_MESSAGES.sent}
-            </p>
-          ) : null}
-
-          {/*
-            `role="alert"` YALNIZCA gerçek hatalarda: başarı satırı `role="status"` kullanır,
-            aksi halde ekran okuyucu "gönderildi" bildirimini de bir hata gibi kesip okurdu.
-          */}
-          {resend === "rateLimited" || resend === "failed" ? (
-            <p role="alert" className="text-sm text-pretty text-danger-600 dark:text-danger-300">
-              {RESEND_MESSAGES[resend]}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
+      {/*
+        Aksiyon PAYLAŞILAN bileşendedir (`components/resend-verification-button.tsx`): aynı
+        düğme kabuktaki kalıcı uyarı şeridinde de kullanılıyor (#190) ve iki kopya, birinde
+        düzeltilen bir davranışın diğerinde eski kalması demekti.
+      */}
+      {failure?.emailNotVerified ? <ResendVerificationButton email={userEmail} /> : null}
 
       <SubmitButton pending={pending}>{pending ? "Oluşturuluyor…" : "Oluştur"}</SubmitButton>
     </form>

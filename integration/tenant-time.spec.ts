@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
 
 import { expect, test } from "@playwright/test";
 
@@ -8,6 +10,7 @@ import {
   formatDateInTimeZone,
   isValidTimeZone,
   resolveTenantTimeZone,
+  startOfTodayInTimeZone,
   todayInTimeZone,
 } from "../src/lib/time/tenant-time";
 
@@ -129,5 +132,128 @@ test.describe("Tenant.timeZone şeması", () => {
 
     expect(tenant.timeZone).toBe("America/New_York");
     expect(isValidTimeZone(tenant.timeZone)).toBe(true);
+  });
+});
+
+/**
+ * `startOfTodayInTimeZone()` — TARİH-ONLY karşılaştırmalarının referansı (Issue #134).
+ *
+ * NEDEN AYRI: bu kod tabanında iki zaman türü var ve karıştırılmaları sessiz hata üretiyor.
+ * `occurredAt` bir ANDIR (saat dilimine göre YORUMLANIR); `DebtCredit.dueDate` TARİH-ONLY'dir
+ * ve UTC gece yarısı olarak saklanır (yorumlanMAZ). "Vadesi geçti mi" sorusu ikisini
+ * karşılaştırır, dolayısıyla tenant'ın bugünü de tarih-only gösterime çevrilmelidir.
+ *
+ * `now` enjekte ediliyor: gün sınırı davranışı gerçek zamanı beklemeden kanıtlanabilsin.
+ */
+test.describe("startOfTodayInTimeZone() — vade karşılaştırmasının referansı", () => {
+  /** Bir `YYYY-MM-DD` gününün, veritabanındaki tarih-only gösterimi (UTC gece yarısı). */
+  function dateOnly(iso: string): number {
+    return Date.parse(`${iso}T00:00:00.000Z`);
+  }
+
+  test("KRİTİK REGRESYON: UTC+3'te gece yarısı geçmişse gün İLERLEMİŞ sayılır", () => {
+    // 4 Eylül 22:00 UTC = 5 Eylül 01:00 Istanbul.
+    const now = new Date("2026-09-04T22:00:00.000Z");
+
+    // Eski davranış UTC'nin gününü (4 Eylül) alıyordu; doğrusu tenant'ın günü (5 Eylül).
+    expect(startOfTodayInTimeZone("Europe/Istanbul", now)).toBe(dateOnly("2026-09-05"));
+
+    // DUYARLILIK: aynı an, UTC'de hâlâ 4 Eylül. İki beklentinin FARKLI çıkması, testin
+    // gerçekten saat dilimini ölçtüğünü gösterir.
+    expect(startOfTodayInTimeZone("UTC", now)).toBe(dateOnly("2026-09-04"));
+  });
+
+  test("UTC'nin GERİSİNDEKİ dilimde gün henüz ilerlememiş sayılır", () => {
+    // 5 Eylül 02:00 UTC = 4 Eylül 22:00 New York (UTC-4).
+    const now = new Date("2026-09-05T02:00:00.000Z");
+
+    expect(startOfTodayInTimeZone("America/New_York", now)).toBe(dateOnly("2026-09-04"));
+    expect(startOfTodayInTimeZone("UTC", now)).toBe(dateOnly("2026-09-05"));
+  });
+
+  test("vade karşılaştırması: aynı an, iki tenant, iki farklı gecikme kararı", () => {
+    // 4 Eylül vadeli AÇIK bir kayıt. An: 4 Eylül 22:00 UTC.
+    const dueDate = dateOnly("2026-09-04");
+    const now = new Date("2026-09-04T22:00:00.000Z");
+
+    // Istanbul'da gün 5 Eylül'e geçti → vade GEÇMİŞ.
+    expect(dueDate < startOfTodayInTimeZone("Europe/Istanbul", now)).toBe(true);
+    // New York'ta hâlâ 4 Eylül → vade BUGÜN, gecikmiş değil.
+    expect(dueDate < startOfTodayInTimeZone("America/New_York", now)).toBe(false);
+  });
+
+  test("dönen değer daima UTC gece yarısıdır (tarih-only ile birebir karşılaştırılabilir)", () => {
+    const value = startOfTodayInTimeZone("Europe/Istanbul", new Date("2026-03-15T09:30:00.000Z"));
+    const asDate = new Date(value);
+
+    expect(asDate.getUTCHours()).toBe(0);
+    expect(asDate.getUTCMinutes()).toBe(0);
+    expect(asDate.getUTCSeconds()).toBe(0);
+    expect(asDate.getUTCMilliseconds()).toBe(0);
+  });
+
+  test("geçersiz saat dilimi ÇÖKERTMEZ (resolveTenantTimeZone ile birlikte)", () => {
+    // Okuma tarafında sessiz düzeltme kararı (bkz. resolveTenantTimeZone gerekçesi): bir ayar
+    // hatası yüzünden borç/alacak listesinin tamamen kaybolması kabul edilemez.
+    const timeZone = resolveTenantTimeZone("Mars/Olympus_Mons");
+    expect(() => startOfTodayInTimeZone(timeZone)).not.toThrow();
+  });
+});
+
+/**
+ * Gösterim deseni koruması (Issue #134).
+ *
+ * `tenant-scope-pattern.spec.ts` ile aynı yaklaşım: bir lint/AST aracı DEĞİL, sessiz bir
+ * regresyonu yakalayan kaynak-metni testi.
+ *
+ * YAKALADIĞI ŞEY: `occurredAt` bir ANDIR ve `toISOString().slice(0, 10)` daima UTC gününü
+ * verir. Sunucu UTC iken fark GÖRÜNMEZ — CI'da da geliştirme makinesinde de. Yani biri bu
+ * satırı geri yazsa, üründe gün kayması olur ve hiçbir test kırılmaz.
+ *
+ * `dueDate` bilinçli olarak KAPSAM DIŞIDIR: o TARİH-ONLY bir değerdir, UTC gece yarısı olarak
+ * saklanır ve saat dilimine çevrilmesi YANLIŞ olurdu. Bu yüzden kontrol "hiç
+ * `toISOString()` kullanılmasın" değil, "`occurredAt` üzerinde kullanılmasın" biçimindedir.
+ */
+test.describe("Gösterim deseni — occurredAt saat dilimine göre yazılır", () => {
+  const APP_ROOT = path.join(__dirname, "..", "src", "app");
+
+  function collectSourceFiles(dir: string): string[] {
+    const files: string[] = [];
+    for (const entry of readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        files.push(...collectSourceFiles(full));
+      } else if (entry.endsWith(".tsx") || entry.endsWith(".ts")) {
+        files.push(full);
+      }
+    }
+    return files;
+  }
+
+  const SOURCES = collectSourceFiles(APP_ROOT).map((file) => ({
+    file,
+    code: readFileSync(file, "utf-8"),
+  }));
+
+  test("tarama gerçekten dosya buluyor (test kendi kendini doğruluyor)", () => {
+    // Bu kontrol olmadan, dizin taşınsa aşağıdaki test SIFIR dosya tarayıp sessizce geçerdi.
+    expect(SOURCES.length).toBeGreaterThan(10);
+  });
+
+  test("hiçbir ekran occurredAt'i toISOString() ile GÜNE çevirmiyor", () => {
+    const offenders = SOURCES.filter((entry) => /occurredAt\s*\.\s*toISOString\s*\(/.test(entry.code))
+      .map(({ file }) => path.relative(APP_ROOT, file));
+
+    expect(offenders, `UTC gününe düşen ekran(lar): ${offenders.join(", ")}`).toEqual([]);
+  });
+
+  test("KONTROL GRUBU: iki ekran gerçekten formatDateInTimeZone kullanıyor", () => {
+    // "Yasak desen yok" tek başına yetmez: ekranlar tarihi hiç göstermiyor olsaydı da geçerdi.
+    const users = SOURCES.filter(({ code }) => code.includes("formatDateInTimeZone(")).map(
+      ({ file }) => path.relative(APP_ROOT, file).split(path.sep).join("/"),
+    );
+
+    expect(users).toContain("(app)/transactions/page.tsx");
+    expect(users).toContain("(app)/dashboard/page.tsx");
   });
 });

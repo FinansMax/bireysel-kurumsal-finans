@@ -132,10 +132,25 @@
   --border-subtle: #e4e8f0;
   --border-strong: #d2d8e6;
 
+  /*
+   * METİN RAMPASI — dört kademe, hepsi WCAG AA (>= 4.5:1) — Issue #198.
+   *
+   * ÖLÇÜLDÜ, VARSAYILMADI: `integration/contrast.spec.ts` bu dosyayı okuyup her metin/yüzey
+   * çiftinin oranını hesaplar. Önceki değerler açık temada kalıyordu — `--text-faint` en koyu
+   * yüzeyde (`surface-inset`) yalnızca **2.62:1** veriyordu ve o token `text-xs` boyutunda
+   * tarih/meta bilgisi için kullanılıyor; `--text-muted` de 4.15:1 ile eşiğin altındaydı.
+   *
+   * TON KORUNDU, YALNIZCA KOYULAŞTIRILDI: ikisi de aynı ink rampasında kaldı, hiyerarşi aynı
+   * (strong > default > muted > faint). "Daha koyu gri" yerine nötr griye kaçmak, paletin
+   * bilinçli soğuk-mavi karakterini bozardı (bkz. ink rampasının gerekçesi).
+   *
+   * EN KÖTÜ DURUMA GÖRE seçildi — `surface-inset` (#eef1f7) üzerinde: muted 5.94, faint 4.52.
+   * Koyu tema zaten geçiyordu ve DEĞİŞMEDİ.
+   */
   --text-strong: #0e1226;
   --text-default: #2c3350;
-  --text-muted: #68729b;
-  --text-faint: #8b95b8;
+  --text-muted: #515a80;
+  --text-faint: #666d87;
 
   /* Koyu yüzey (sidebar, hero) — açık temada da KOYUDUR; marka karakterinin taşıyıcısı. */
   --shell: #10142c;
@@ -158,7 +173,12 @@
     --text-strong: #f2f4fb;
     --text-default: #d5daee;
     --text-muted: #99a2c6;
-    --text-faint: #7b85ac;
+    /*
+     * Koyu temada YALNIZCA `--text-faint` değişti (Issue #198): #7b85ac, en koyu yüzeyde
+     * (`surface-inset`) 4.16:1 veriyordu — açık temadakiyle aynı hata, ters yönde. Ton korunup
+     * bir kademe AÇILDI; diğer üç kademe zaten AA'yı geçiyordu ve değişmedi.
+     */
+    --text-faint: #818bb4;
 
     --shell: #0d1128;
     --shell-raised: #171c3c;

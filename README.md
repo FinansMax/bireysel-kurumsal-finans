@@ -3056,10 +3056,12 @@ edilemeyecek katmanlar (auth davranışı, şema/migration uyumu).
 Açık PR sayısı 5 ile sınırlı — sınırsız bırakmak, incelenmeyen PR'ların birikip hepsinin
 görmezden gelinmesiyle sonuçlanır.
 
-### `npm audit` CI job'ı — eşik `critical`
+### `npm audit` CI job'ı — eşik `high` (Issue #227)
 
-CI'da yedinci bir job var: `npm audit --omit=dev --audit-level=critical`. Eşiğin `high`
-değil `critical` olması bilinçli bir karardır ve gerekçesi şudur.
+CI'da yedinci bir job var: `npm audit --omit=dev --audit-level=high`. Eşik önce `critical`
+tutulmuştu, üç yüksek seviye advisory çözülüp eşiği yükseltmenin gürültü maliyeti ölçülünce
+`high`'a çekildi (Issue #227). Aşağıda önce eşiğin neden geçici olarak `critical` tutulduğu,
+sonra neyin değişip `high`'a çekilmesini sağladığı sırayla anlatılıyor.
 
 #### Önce yanlış çıkan varsayım
 
@@ -3107,16 +3109,18 @@ dizesidir: `dependencies:{"@prisma/config":"workspace:*",...}`. Yani `deepmerge-
 `@prisma/config` **çalışma zamanında hiç çağrılmıyor**; `prisma` zinciri yalnızca CLI
 (migration/generate) yolunda kullanılıyor ve o yol deploy edilen sunucu paketine girmiyor.
 
-#### Bu yüzden eşik `critical`
+#### Bu yüzden eşik önce `critical` tutuldu
 
 Yakalanması gereken şey **deploy edilen koda ULAŞAN** açıktır. Ağaçta duran ama çağrılmayan bir
 paket için CI'ı kalıcı kırmızı tutmanın sonu bellidir: bir süre sonra herkes audit çıktısını
 görmezden gelir ve araç, gerçek bir bulguyu bildirdiği gün de susmuş sayılır. Kalıcı kırmızı bir
-kapı, kapı değildir.
+kapı, kapı değildir. Ama eşiği `high`'a çekmenin **gürültü maliyeti** o an ölçülmemişti — bu
+yüzden eşik geçici olarak `critical`'da bırakıldı (aşağıdaki "eşik `high`'a çekildi" bölümüne
+bakın; sonradan ölçüldü).
 
 **Görünürlük kaybedilmiyor.** Ölçüldü: `--audit-level` **yalnızca çıkış kodunu** değiştirir,
-çıktıyı değil. Job her koşuda üç `high` bulgunun tamamını basar ve yine de yeşil kalır — bu
-yüzden ayrı bir "raporlama" adımına gerek duyulmadı.
+çıktıyı değil. Job her koşuda o an var olan tüm bulguları basar ve eşik altındaysa yine de
+yeşil kalır — bu yüzden ayrı bir "raporlama" adımına gerek duyulmadı.
 
 `--omit=dev` korunuyor: geliştirme araçlarındaki bir açık deploy edilen koda ulaşmaz.
 
@@ -3156,19 +3160,38 @@ bir `overrides` girdisi, sessizce eski bir sürümü sabitleyen bir tuzağa dön
 `integration/dependency-audit.spec.ts` bu girdiyi ve lock dosyasındaki çözülmüş sürümü koruma
 altına alır — biri `overrides`'ı düşürürse test kırmızıya döner.
 
-#### KABUL EDİLEN KALAN RİSK
+#### Eşik `high`'a çekildi (Issue #227 kapanışı)
 
-Eşik `critical` olduğu için, ileride kod yolunda **gerçekten bulunan** yüksek seviyeli bir
-açık da **CI'ı kırmayacaktır.** Bu, bu kararın bedelidir ve küçümsenmiyor.
+Üç advisory yukarıdaki `overrides` ile kapandıktan sonra asıl soru cevapsız kalmıştı: eşiği
+`high`'a çekmenin gürültü maliyeti ne olurdu? Bu, ölçülmeden verilemeyecek bir karardı — ağaçtaki
+her yüksek seviyeli bulgunun CI'ı kırmasını kabul etmek demekti ve o an kaç tane olduğu
+bilinmiyordu. Şimdi ölçüldü:
 
-Karşı önlemler — üçü birlikte, biri eksikse risk kabul edilebilir değildir:
+```bash
+npm audit --omit=dev --audit-level=high
+# found 0 vulnerabilities
+```
 
-1. **Takip issue'su zorunludur ve açık tutulur** — **#227**. Üç advisory'nin kendisi artık
-   kapalıdır (yukarıdaki `overrides`), ama **eşik bilinçli olarak `critical` kalmaya devam
-   ediyor**: eşiği `high`'a çekmek AYRI bir karardır ve bu değişikliğin kapsamında değildir.
-   Zincirdeki advisory'yi kapatmak ile "hangi seviyede CI kırılsın" sorusunu yanıtlamak farklı
-   iki sorudur; ikincisi, ağaçtaki her yüksek seviyeli bulgunun kapıyı kapatmasını kabul etmek
-   demektir ve gürültü maliyeti ölçülmeden verilemez. #227 o karar verilene kadar açık kalır.
+Sıfır bulgu — eşiği yükseltmenin **hiçbir mevcut CI'ı kırma riski yoktu**. Bu ölçümle birlikte
+#227'nin kendi kapanış şartlarının üçü de tamamlandı:
+
+1. ✅ `npm audit --omit=dev --audit-level=high` exit 0.
+2. ✅ `.github/workflows/ci.yml`'deki eşik `critical` → `high` çekildi.
+3. ✅ Bu README bölümü güncellendi.
+
+Bu yüzden #227 artık **gerçekten çözülerek** kapatıldı — önceki kapatma (8 Eylül) sadece
+advisory'lerin kapandığını yansıtıyordu, eşik ve README kararı o zaman işlenmemişti.
+
+#### KABUL EDİLEN KALAN RİSK (güncel)
+
+Eşik artık `high` olduğu için önceki riskin büyük kısmı kapandı: kod yoluna **gerçekten ulaşan**
+bir `high` veya `critical` seviye açık artık CI'ı kırar. Kalan risk daha dardır:
+
+1. **`moderate`/`low` seviye açıklar hâlâ CI'ı kırmaz.** Bu bilinçli bir sınırdır — bu
+   seviyelerin çoğu üretim etkisi taşımaz ve eşiği daha da aşağı çekmek, önceki `critical`
+   döneminde yaşanan "kimse çıktıyı okumuyor" riskini bu kez `moderate` gürültüsüyle geri
+   getirebilir. Eşik daha da düşürülmek istenirse aynı ölçüm disiplini (gürültü maliyeti
+   önce ölçülür) tekrarlanmalı.
 2. **Audit çıktısı her sürümde okunur.** Job yeşil olsa da çıktısı bilgi taşır; "yeşil" onu
    okumamanın gerekçesi değildir.
 3. **Bağımlılık taraması tek başına yetmez** — bu, ayrı ve daha genel bir karar olarak zaten

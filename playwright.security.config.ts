@@ -11,6 +11,7 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter: "list",
+  globalSetup: "./scripts/clear-test-outbox.ts",
   use: {
     baseURL: "http://127.0.0.1:3000",
     // `Connection: close` — gerekçesi `playwright.config.ts`'te (Issue #129, keep-alive

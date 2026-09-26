@@ -9,4 +9,5 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter: "list",
+  globalSetup: "./scripts/clear-test-outbox.ts",
 });

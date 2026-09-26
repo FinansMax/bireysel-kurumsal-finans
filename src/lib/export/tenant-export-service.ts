@@ -140,8 +140,11 @@ export async function processPendingExports(
       const { zip, rowCounts } = await buildTenantExport(candidate.tenantId);
       const filePath = writeExportFile(exportDir, candidate.id, zip);
 
-      await prisma.tenantDataExport.update({
-        where: { id: candidate.id },
+      // Yalnız-ID `update()` değil `updateMany` + `status: PROCESSING` şartı (invariant #1):
+      // bu satırı yukarıdaki claim zaten münhasır sahiplendi, ama yazım deseni tüm
+      // mutasyonlarda tek tip kalsın diye burada da koşullu tutuluyor.
+      await prisma.tenantDataExport.updateMany({
+        where: { id: candidate.id, status: TenantDataExportStatus.PROCESSING },
         data: {
           status: TenantDataExportStatus.READY,
           filePath,
@@ -157,8 +160,8 @@ export async function processPendingExports(
 
       // HATA MESAJI DB'YE YAZILIR AMA KULLANICIYA DÖNMEZ (invariant #7): operatör neyin
       // bozulduğunu görebilmeli, çağıran yalnızca "başarısız" bilgisini almalıdır.
-      await prisma.tenantDataExport.update({
-        where: { id: candidate.id },
+      await prisma.tenantDataExport.updateMany({
+        where: { id: candidate.id, status: TenantDataExportStatus.PROCESSING },
         data: {
           status: TenantDataExportStatus.FAILED,
           failureReason: error instanceof Error ? error.message : "Unknown error",
@@ -307,11 +310,18 @@ export async function pruneExpiredExportFiles(options: { now?: Date } = {}): Pro
 
     // `force: true` — dosya zaten yoksa bu bir hata değildir; hedef durum "dosya yok".
     rmSync(record.filePath, { force: true });
-    await prisma.tenantDataExport.update({
-      where: { id: record.id },
+
+    // Yalnız-ID `update()` değil `updateMany` + `filePath: { not: null }` şartı (invariant
+    // #1): eşzamanlı iki prune çağrısı aynı kaydı okumuşsa, dosyayı ikinci kez "temizleyen"
+    // çağrı burada `count === 0` görüp `removed`'ı şişirmez.
+    const cleared = await prisma.tenantDataExport.updateMany({
+      where: { id: record.id, filePath: { not: null } },
       data: { filePath: null, byteSize: null },
     });
-    removed += 1;
+
+    if (cleared.count === 1) {
+      removed += 1;
+    }
   }
 
   return removed;

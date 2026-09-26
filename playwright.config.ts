@@ -3,6 +3,23 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
+  // YEREL'DE WORKER SAYISI SINIRLI: bu, `Connection: close` (altta, ECONNRESET için) ile
+  // KARIŞTIRILMAMALI — farklı bir hata sınıfının çaresi.
+  //
+  // SEMPTOM: tam suite koşusunda (varsayılan worker sayısı = CPU/2) rastgele testler
+  // `Error: worker process exited unexpectedly (code=3221225794, ...)` ile düşüyordu —
+  // 3221225794 = 0xC0000005 (Windows STATUS_ACCESS_VIOLATION): Chromium'un kendisi çöküyor,
+  // bir assertion değil. Tek başına ve tek worker'da izole koşulduğunda da düşüyordu; yani
+  // Playwright'ın kendi request-context'i değil, işletim sistemi seviyesinde bir kaynak sorunu.
+  //
+  // ÖLÇÜM (yerel, aynı makine, tam suite): varsayılan (bu makinede 10) worker'da 40 hata (bir
+  // kısmı yukarıdaki çökme, kalanı 30s test timeout'u); `--workers=4`'te 2 hata (ikisi de
+  // dokümante edilmiş "sunucu round-trip'i" yavaşlığı, çökme yok), süre 29.9dk'dan 3.0dk'ya
+  // düştü. Sebep bellek baskısı: bu makinede 16GB RAM'in ~11GB'ı zaten Docker/VS Code/tarayıcı
+  // tarafından kullanılıyorken 10 eşzamanlı Chromium örneği (her biri ayrı bir process ağacı)
+  // kalan alanı aşıyor. CI etkilenmiyor (`process.env.CI` guard'lı): CI runner'ları zaten daha
+  // az çekirdekli olduğu için Playwright'ın kendi varsayılanı orada da düşük çıkıyor.
+  workers: process.env.CI ? undefined : 4,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   reporter: "html",

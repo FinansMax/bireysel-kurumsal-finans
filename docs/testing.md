@@ -228,6 +228,42 @@ davranıyor (ör. `NODE_ENV=production` ile `secure` cookie'ler) ve suite prod s
 koşu başına ~30 testle toplu düştü. Bu, kararsızlık düzeltmesinin yanına sığmayacak ayrı bir
 araştırma; e2e'yi prod build'e taşımak istenirse önce bu farkların tek tek çözülmesi gerekir.
 
+### Yerel Windows'ta Chromium çöküyor: `STATUS_ACCESS_VIOLATION`
+
+Yukarıdaki ECONNRESET ile **karıştırılmamalı** — farklı bir hata sınıfı ve farklı bir çare.
+
+Semptom:
+
+```
+Error: worker process exited unexpectedly (code=3221225794, signal=null)
+```
+
+`3221225794 = 0xC0000005` (Windows `STATUS_ACCESS_VIOLATION`): Chromium'un kendisi çöküyor, bir
+assertion/timeout değil. Tek başına, tek worker'da izole koşulduğunda da düşer — yani Playwright'ın
+`request` context'inin keep-alive yarışıyla (yukarıdaki #129) ilgisi yok.
+
+**Sebep — bellek baskısı.** Varsayılan worker sayısı (`CPU çekirdeği / 2`) her worker için ayrı bir
+Chromium process ağacı açar. Günlük kullanımda olan bir geliştirme makinesinde (Docker Desktop,
+birden fazla VS Code penceresi, tarayıcı sekmeleri) kullanılabilir RAM zaten dar olabilir; 10+
+eşzamanlı Chromium örneği bu payı aşınca işletim sistemi bir renderer/browser process'ini
+öldürüyor ve Playwright bunu `ACCESS_VIOLATION` olarak görüyor.
+
+**Ölçüm** (aynı makine, tam suite, `Docker + Postgres` çalışırken):
+
+| Worker sayısı | Sonuç | Süre |
+| --- | --- | --- |
+| 10 (varsayılan, bu makinede CPU/2) | 40 hata (bir kısmı `ACCESS_VIOLATION` çökmesi, kalanı 30s test timeout'u) | 29.9dk |
+| 4 | 2 hata (ikisi de bilinen "sunucu round-trip'i" yavaşlığı — bkz. yukarısı, çökme YOK) | 3.0dk |
+
+`playwright.config.ts`'te `workers: process.env.CI ? undefined : 4` — yalnızca yerel koşuları
+sınırlar. CI'yı ETKİLEMEZ: CI runner'ları zaten daha az çekirdekli olduğu için Playwright'ın
+kendi varsayılanı orada da düşüktür ve bu makineye özgü bellek baskısını yaşamaz.
+
+**Bu bir "flaky testi susturma" değildir** (docs'un yukarıdaki yasağı): hiçbir assertion
+gevşetilmedi, hiçbir test atlandı. Çözülen şey test mantığı değil, yerel çalıştırma ortamının
+kaynak bütçesidir — tıpkı `webServer` bölümündeki "bozuk dev sunucusu" notu gibi bu da bir
+altyapı notudur.
+
 ### Yerelde bozuk bir dev sunucusu tüm suite'i zehirler
 
 `webServer.reuseExistingServer` lokalde açıktır. Önceki bir koşu yarıda kesildiyse (ör. terminal

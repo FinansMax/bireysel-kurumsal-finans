@@ -32,21 +32,22 @@ jobs:
 
   # Bagimlilik taramasi (Issue #189).
   #
-  # ESIK NEDEN "critical", "high" DEGIL: bugun uc yuksek advisory (deepmerge-ts ve onu
-  # cekan @prisma/config + prisma) production agacinda GORUNUYOR, cunku @prisma/client
-  # 'prisma'yi peerDependency olarak ilan eder ve --omit=dev zinciri kesmez. Ama olculdu:
-  # bu paketler DEPLOY EDILEN KODA ULASMIYOR. Agacta duran, cagrilmayan bir paket icin
-  # CI'i kalici kirmizi tutmak, bir sure sonra herkesin audit ciktisini gormezden
-  # gelmesiyle biter. Tam gerekce ve olcumun tekrarlanabilir komutlari:
+  # ESIK ONCE "critical" IDI: uc yuksek advisory (deepmerge-ts ve onu ceken @prisma/config +
+  # prisma) production agacinda GORUNUYORDU, cunku @prisma/client 'prisma'yi peerDependency
+  # olarak ilan eder ve --omit=dev zinciri kesmez. Olculmustu: bu paketler DEPLOY EDILEN KODA
+  # ULASMIYORDU (prisma sadece CLI/migration yolunda), ama esigi 'high'a cekmenin gurultu
+  # maliyeti henuz olculmemisti — bu yuzden esik gecici olarak 'critical'da tutulmustu.
+  #
+  # ESIK ARTIK "high" (Issue #227 kapanis karari): tek kok deepmerge-ts@7.1.5 icin
+  # package.json'a 'overrides: {"deepmerge-ts": "^8.0.2"}' eklenince (Issue #227) 'npm audit'
+  # sifir bulguya dustu. Gurultu maliyeti bu kez OLCULDU: 'npm audit --omit=dev
+  # --audit-level=high' 0 bulgu veriyor. Yani esigi yukseltmenin CI'i kirma riski yoktu ve
+  # esik 'high'a cekildi — artik kod yoluna GERCEKTEN ulasan bir high seviye acik da CI'i
+  # kirar. Tam gerekce ve olcumun tekrarlanabilir komutlari:
   # README "Bagimlilik guvenligi (Issue #189)".
   #
-  # KABUL EDILEN KALAN RISK: bu esik yuzunden, ileride kod yolunda GERCEKTEN bulunan
-  # yuksek seviyeli bir acik da CI'i kirmayacak. Karsi onlem: cikti her kosuda basilir (#227)
-  # (asagiya bakin) ve takip issue'su acik tutulur.
-  #
   # TEK ADIM YETER, OLCULDU: --audit-level YALNIZCA CIKIS KODUNU degistirir, ciktiyi
-  # degil. Bu adim uc 'high' bulguyu her kosuda tam olarak basar ve yine de yesil kalir;
-  # yani gorunurluk icin ayri bir '|| true' adimina gerek yoktur.
+  # degil.
   #
   # 'npm ci' BILEREK YOK: 'npm audit' package-lock.json'dan calisir, node_modules'a
   # ihtiyac duymaz (dogrulandi). Kurulum eklemek isi dakikalarca uzatir, taramaya hicbir
@@ -63,8 +64,8 @@ jobs:
           node-version: "20"
 
       # --omit=dev: gelistirme araclarindaki bir acik deploy edilen koda ulasmaz.
-      - name: Bagimlilik taramasi (critical CI'i kirar, high raporlanir)
-        run: npm audit --omit=dev --audit-level=critical
+      - name: Bagimlilik taramasi (high ve uzeri CI'i kirar, Issue #227)
+        run: npm audit --omit=dev --audit-level=high
 
   typecheck:
     runs-on: ubuntu-latest

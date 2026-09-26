@@ -50,7 +50,23 @@ export const RATE_LIMIT_POLICIES = {
   // sürekli dışarı atılmasına (kendine DoS) yol açar. 5, gerçek "her yerden çıkış" ihtiyacını
   // fazlasıyla karşılar; kimse 15 dakikada beşten fazla kez tüm cihazlarından çıkmaz.
   REVOKE_SESSIONS: { limit: 5, windowMs: 15 * MINUTES },
+  // TOTP 5/5dk (Issue #193): ikinci faktor kodu YALNIZCA 6 HANEDIR - 10^6 olasilik, ve ±1
+  // pencere toleransi yuzunden her an UC kod gecerlidir. Bu, brute-force'un gercekten
+  // uygulanabilir oldugu nadir yerlerden biridir; limit burada sifre kadar kritiktir.
+  // 5, gercek bir kullanicinin yanlis yazma payini karsilar, saldirgana ise dakikada bir
+  // avuc deneme birakir.
+  TOTP: { limit: 5, windowMs: 5 * MINUTES },
   TENANT_CREATE: { limit: 10, windowMs: 10 * MINUTES },
+  // COLLECTIONS_MANAGE 60/dk (Issue #165): buradaki işlemler AUTHENTICATED ve YETKİLİDİR
+  // (OWNER/ADMIN), yani tehdit anonim spam değil; limit bir kötüye kullanım kapısından çok bir
+  // EMNİYET SUBABIDIR — hatalı bir istemci döngüsünün ya da çift tıklamanın veritabanını
+  // dövmesini engeller. Plan kurma `runSerializable()` içinde çalıştığı için pahalıdır ve
+  // eşzamanlı tekrarlar serialization çakışması üretir.
+  //
+  // 60 SEÇİLDİ çünkü tahsilat ekranı TOPLU kullanım içindir: bir kullanıcı vadesi geçen
+  // taksitleri sırayla işaretlerken dakikada onlarca PATCH atabilir. `TENANT_CREATE` (10/10dk)
+  // gibi dar bir limit burada meşru işi keserdi — o endpoint kaynak YARATIYOR, bu ise var olan
+  // kayıtları düzenliyor. Daha yükseği (ör. 600) ise emniyet subabı olmaktan çıkardı.
   COLLECTIONS_MANAGE: { limit: 60, windowMs: 1 * MINUTES },
   // VERIFY_EMAIL 10/15dk (Issue #190): token 256 bit olduğu için brute-force birincil tehdit
   // DEĞİLDİR; amaç, kimlik istemeyen ve her çağrıda DB'ye yazan bu endpoint'in sınırsız
@@ -67,6 +83,11 @@ export const RATE_LIMIT_POLICIES = {
   // `hasMore` nedeniyle birkaç kez arka arkaya çağrılmasına yer bırakır; insan eliyle
   // tetiklenen bir denemeyi de engellemez.
   MAINTENANCE: { limit: 10, windowMs: 15 * MINUTES },
+  // DATA_EXPORT 2/saat (Issue #194): uretim PAHALIDIR (tenant'in tum tablolarini okur, ZIP
+  // uretir, diske yazar) ve her calisma kalici bir dosya birakir. Sinirsiz birakmak, calinmis
+  // bir OWNER oturumuyla diski doldurmanin ve ayni veriyi tekrar tekrar disariya tasimanin
+  // yolu olurdu. 2, gercek bir tasima ihtiyacini fazlasiyla karsilar.
+  DATA_EXPORT: { limit: 2, windowMs: 60 * MINUTES },
 } as const satisfies Record<string, RateLimitPolicy>;
 
 /**
@@ -81,9 +102,11 @@ export const RATE_LIMIT_BUCKETS = {
   RESET_PASSWORD: "auth:reset-password",
   CHANGE_PASSWORD: "auth:change-password",
   REVOKE_SESSIONS: "auth:revoke-sessions",
+  TOTP: "auth:totp",
   TENANT_CREATE: "tenant:create",
   COLLECTIONS_MANAGE: "collections:manage",
   VERIFY_EMAIL: "auth:verify-email",
   RESEND_VERIFICATION: "auth:resend-verification",
   MAINTENANCE: "maintenance",
+  DATA_EXPORT: "tenant:data-export",
 } as const;

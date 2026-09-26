@@ -22,20 +22,23 @@
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
-    "@sentry/nextjs": "^10.73.0",
-    "next": "16.3.3",
+    "@sentry/nextjs": "^10.75.2",
+    "next": "16.3.6",
     "next-auth": "5.0.0-beta.32",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "overrides": {
+    "deepmerge-ts": "^8.0.2"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^25",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.3.3",
+    "eslint-config-next": "16.3.6",
     "prisma": "^6.19.3",
     "tailwindcss": "^4",
     "typescript": "^6"

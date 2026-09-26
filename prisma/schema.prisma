@@ -66,9 +66,9 @@ model User {
 }
 
 model Tenant {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
+  id   String @id @default(cuid())
+  name String
+  slug String @unique
 
   // Tenant'ın saat dilimi (IANA, Issue #134). TÜM gün/dönem hesaplarının referansı budur:
   // "bugün", "bu ay", "vadesi geçti". Kullanıcının tarayıcısı referans ALINMAZ — aynı
@@ -77,9 +77,21 @@ model Tenant {
   //
   // VARSAYILAN GEÇMİŞİ DE DOĞRU YORUMLAR: bugüne kadarki tüm kayıtlar tek saat diliminde
   // girildi, bu yüzden migration mevcut satırlara dokunmaz ve veri dönüşümü gerekmez.
-  timeZone  String   @default("Europe/Istanbul")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  timeZone String @default("Europe/Istanbul")
+
+  // Tenant'ın varsayılan para birimi (Issue #86). Hesap oluşturma formu bunu başlangıç
+  // değeri olarak önerir; hesabın KENDİ `currency` alanını override ETMEZ, yalnızca bir
+  // öneridir — çok para birimli bir tenant'ta her hesap farklı bir kod taşıyabilir.
+  //
+  // BİÇİMSEL DOĞRULAMA (ISO 4217, 3 büyük harf), `Account.currency` ile AYNI katılıkta
+  // (bkz. `src/lib/finance/validation.ts`); ICU listesine hizalama kararı #241'in
+  // kapsamındadır, burada tekrarlanmaz.
+  //
+  // VARSAYILAN "TRY": bugüne kadarki tüm tenant'lar TRY ile çalıştı, bu yüzden migration
+  // mevcut satırlara dokunmaz ve veri dönüşümü gerekmez (`timeZone` ile aynı gerekçe).
+  defaultCurrency String   @default("TRY")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   memberships         Membership[]
   invitations         TenantInvitation[]
@@ -381,6 +393,7 @@ model EmailVerificationToken {
 
   @@index([userId])
 }
+
 model PasswordResetToken {
   id        String    @id @default(cuid())
   // Raw token asla saklanmaz; sadece SHA-256 hash'i saklanır (bkz. src/lib/auth/password-reset.ts).

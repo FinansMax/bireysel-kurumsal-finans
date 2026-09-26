@@ -53,8 +53,15 @@ model User {
   // "şifre değişti mi" sorusunun cevabını bozardı (audit ve ileride e-posta bildirimi bu ayrımı
   // ister). Karşılaştırma ikisinin EN BÜYÜĞÜ ile yapılır.
   sessionsRevokedAt    DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+
+  // Bildirim tercihi (Issue #88). Bugün TEK bir anahtardır — hangi bildirim TÜRLERİNİN
+  // (e-posta/uygulama içi, hangi olaylar) var olacağı henüz tanımlı değil (#76); bu alan
+  // yalnızca "genel olarak bildirim istiyor muyum" sorusunu yanıtlar. Kapsam büyüdüğünde
+  // (ör. tür başına açma/kapama) ayrı bir tabloya taşınması beklenir — burada erken bir
+  // JSON/ilişki soyutlaması KURULMADI çünkü bugün karşılığı olan tek bir tercih var.
+  notificationsEnabled Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   memberships             Membership[]
   passwordResetTokens     PasswordResetToken[]
@@ -66,9 +73,9 @@ model User {
 }
 
 model Tenant {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
+  id   String @id @default(cuid())
+  name String
+  slug String @unique
 
   // Tenant'ın saat dilimi (IANA, Issue #134). TÜM gün/dönem hesaplarının referansı budur:
   // "bugün", "bu ay", "vadesi geçti". Kullanıcının tarayıcısı referans ALINMAZ — aynı
@@ -381,6 +388,7 @@ model EmailVerificationToken {
 
   @@index([userId])
 }
+
 model PasswordResetToken {
   id        String    @id @default(cuid())
   // Raw token asla saklanmaz; sadece SHA-256 hash'i saklanır (bkz. src/lib/auth/password-reset.ts).

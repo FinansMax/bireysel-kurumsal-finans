@@ -71,6 +71,9 @@ const NAV_GROUPS: ReadonlyArray<{ title: string; items: readonly NavItem[] }> = 
       // kullanıcının KENDİ hesabına aittir, çalışma alanına değil. "Modüller"den farklı olarak
       // gizlenecek bir yetki yoktur — MEMBER dahil herkes kendi oturumlarını kapatabilir.
       { label: "Güvenlik", href: "/settings/security", icon: <IconSettings className="size-4.5" /> }, // #186
+      // "Bildirimler" de "Güvenlik" ile AYNI SINIF: kullanıcının KENDİ tercihidir, çalışma
+      // alanına ait değildir — izin kontrolü yok, MEMBER dahil herkese açık (Issue #88).
+      { label: "Bildirimler", href: "/settings/notifications", icon: <IconSettings className="size-4.5" /> }, // #88
       { label: "Ayarlar", href: null, icon: <IconSettings className="size-4.5" /> }, // #86
     ],
   },

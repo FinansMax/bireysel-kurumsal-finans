@@ -29,22 +29,6 @@ export async function GET(request: Request, { params }: RouteParams) {
     return NextResponse.json({ error: "Invalid tenant id" }, { status: 400 });
   }
 
-  // Ucuz şekil kontrolü authz'den ÖNCE (route sırası, CLAUDE.md §5). `getAll()` kullanılır,
-  // `get()` DEĞİL: `get()` tekrarlanan parametrede sessizce ilk değeri döndürür ve
-  // ayrıştırıcının "tekrar hatadır" kontrolü hiç tetiklenmezdi.
-  //
-  // Aralık çözümü ORTAKTIR (`resolveDateRange`): kısmi aralığın varsayılanla tamamlanması ve
-  // birleştirmeden SONRAKİ ters aralık kontrolü dahil (bkz. `aggregation.ts`).
-  const search = new URL(request.url).searchParams;
-  const parsed = resolveDateRange((key) => {
-    const all = search.getAll(key);
-    if (all.length === 0) return null;
-    return all.length === 1 ? all[0] : all;
-  }, defaultSpendingRange());
-  if (!parsed.ok) {
-    return NextResponse.json({ error: parsed.error }, { status: 400 });
-  }
-
   const { context, response } = await requirePermission(PERMISSIONS.VIEW_TRANSACTIONS, tenantId);
   if (!context) {
     return response;
@@ -58,6 +42,25 @@ export async function GET(request: Request, { params }: RouteParams) {
     ])
   ) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // Aralık çözümü authz'DEN SONRA (Issue #134): varsayılan dönem tenant'ın saat dilimine göre
+  // hesaplanır (`defaultSpendingRange`) ve bu, doğrulanmış `context.tenant`'tan gelir —
+  // `requirePermission()` çözülmeden önce güvenilir bir saat dilimi bilgisi YOKTUR.
+  //
+  // `getAll()` kullanılır, `get()` DEĞİL: `get()` tekrarlanan parametrede sessizce ilk değeri
+  // döndürür ve ayrıştırıcının "tekrar hatadır" kontrolü hiç tetiklenmezdi.
+  //
+  // Aralık çözümü ORTAKTIR (`resolveDateRange`): kısmi aralığın varsayılanla tamamlanması ve
+  // birleştirmeden SONRAKİ ters aralık kontrolü dahil (bkz. `aggregation.ts`).
+  const search = new URL(request.url).searchParams;
+  const parsed = resolveDateRange((key) => {
+    const all = search.getAll(key);
+    if (all.length === 0) return null;
+    return all.length === 1 ? all[0] : all;
+  }, defaultSpendingRange(context.tenant.timeZone));
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
   // Scope'un kaynağı `context.tenant.id` — URL parametresi DEĞİL (Issue #13).

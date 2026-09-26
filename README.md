@@ -2957,12 +2957,23 @@ yüzünden veriye erişimin tamamen kaybolması kabul edilemez.
 
 - **Ayar ekranı yok.** `Tenant.timeZone` şemada ve okuma yolunda var, ama **değiştirilebilir bir
   arayüzü yok** — tenant ayarları ekranı #86'nın konusudur. Bugün değer yalnızca varsayılandır.
-- **Rapor dönem sınırları hâlâ UTC.** `src/lib/finance/aggregation.ts` ay başı/sonu sınırlarını
-  `Date.UTC` ile kuruyor. Bu PR işlem listesi ve form varsayılanını hizaladı; raporlama
-  tarafının aynı referansa taşınması ayrı bir adımdır ve Epic 7 ekranlarıyla birlikte ele
-  alınmalıdır.
 - **Dashboard ve borç/alacak listelerindeki tarih gösterimi** hâlâ `toISOString().slice(0,10)`
-  kullanıyor; aynı sebeple ayrı adıma bırakıldı.
+  kullanıyor; ayrı bir adıma bırakıldı.
+- **Panelin altı aylık trend penceresi** (`src/lib/finance/dashboard.ts`) hâlâ UTC ay
+  sınırlarıyla kurulur — aşağıdaki "Dönem: UTC ay sınırları" notu güncel. Bu, panel/rapor
+  **varsayılan dönemiyle** (bir sonraki madde) KARIŞTIRILMAMALI; trend widget'ının kendi, ayrı
+  bir hesabıdır ve kapsam dışı bırakıldı.
+
+**Güncelleme (rapor/harcama dağılımı varsayılan dönemi, Issue #81'in yanında ele alındı):**
+`src/lib/finance/aggregation.ts`'teki `currentMonthRange()` (UTC "şimdi") panel/rapor
+**varsayılan dönemi** için `currentMonthRangeInTimeZone()` ile DEĞİŞTİRİLDİ —
+`getSpendingByCategory`/`getIncomeExpenseReport`'un `?from=&to=` verilmediğinde kullandığı "bu
+ay" artık tenant'ın yerel takvimine göre hesaplanıyor. `currentMonthRange()` başka hiçbir yerde
+kullanılmadığı için kaldırıldı. **Sıralama değişikliği:** iki API route'unda (`income-expense`,
+`spending-by-category`) aralık çözümü artık `requirePermission()`'dan SONRA yapılıyor —
+varsayılanın `context.tenant.timeZone`'a ihtiyacı var ve bu, doğrulanmış context'ten önce
+mevcut değil. Sayfa bileşenlerinde (`reports/page.tsx`, `dashboard/page.tsx`) sıralama
+değişmedi: `tenant` zaten aralık çözümünden önce elde ediliyordu.
 
 ## E-posta doğrulama (Issue #190)
 

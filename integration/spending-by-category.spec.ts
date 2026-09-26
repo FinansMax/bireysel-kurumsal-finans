@@ -383,28 +383,49 @@ test.describe("getSpendingByCategory() — tarih aralığı", () => {
 });
 
 test.describe("defaultSpendingRange()", () => {
-  test("içinde bulunulan ayın TAMAMINI verir (UTC)", async () => {
+  test("içinde bulunulan ayın TAMAMINI verir (UTC saat diliminde)", async () => {
     // Panelin hemen üstündeki özet "bu ay" diyor; iki bölümün farklı dönem göstermesi aynı
     // ekranda birbirini yalanlayan iki sayı üretirdi.
-    expect(defaultSpendingRange(new Date("2026-06-15T12:00:00.000Z"))).toEqual({
+    expect(defaultSpendingRange("UTC", new Date("2026-06-15T12:00:00.000Z"))).toEqual({
       from: new Date("2026-06-01T00:00:00.000Z"),
       to: new Date("2026-06-30T00:00:00.000Z"),
     });
   });
 
   test("ay uzunluğu ve artık yıl elle yazılmaz", async () => {
-    expect(defaultSpendingRange(new Date("2026-02-10T00:00:00.000Z")).to).toEqual(
+    expect(defaultSpendingRange("UTC", new Date("2026-02-10T00:00:00.000Z")).to).toEqual(
       new Date("2026-02-28T00:00:00.000Z"),
     );
     // 2028 artık yıl.
-    expect(defaultSpendingRange(new Date("2028-02-10T00:00:00.000Z")).to).toEqual(
+    expect(defaultSpendingRange("UTC", new Date("2028-02-10T00:00:00.000Z")).to).toEqual(
       new Date("2028-02-29T00:00:00.000Z"),
     );
     // Aralık: yıl sınırı doğru devretmeli.
-    expect(defaultSpendingRange(new Date("2026-12-05T00:00:00.000Z"))).toEqual({
+    expect(defaultSpendingRange("UTC", new Date("2026-12-05T00:00:00.000Z"))).toEqual({
       from: new Date("2026-12-01T00:00:00.000Z"),
       to: new Date("2026-12-31T00:00:00.000Z"),
     });
+  });
+
+  /**
+   * Issue #134'ün kabul kriteri: sunucu/varsayılan referans UTC iken bile tenant'ın saat
+   * diliminde farklı bir güne (ve burada farklı bir AYA) düşen bir an, doğru dönemi vermeli.
+   *
+   * SEÇİLEN AN: `2026-01-01T00:30:00.000Z` — UTC'de zaten Ocak'ın ilk yarım saati. Ama
+   * Europe/Istanbul'da (+03:00) bu an `2026-01-01T03:30:00+03:00`dir — HÂLÂ Ocak. Tersini
+   * kanıtlayan an ise gece yarısından hemen ÖNCESİDİR: `2025-12-31T22:00:00.000Z` UTC'de Aralık
+   * 31'dir ama Europe/Istanbul'da `2026-01-01T01:00:00+03:00` — yani ORADA çoktan Ocak'tır.
+   * `currentMonthRange()` (eski, UTC "şimdi") bu anı YANLIŞ AYA (Aralık) koyardı.
+   */
+  test("tenant saat diliminde farklı bir aydaysa (Issue #134), UTC'nin AYINI DEĞİL tenant'ınkini kullanır", async () => {
+    const utcLateDecember = new Date("2025-12-31T22:00:00.000Z");
+
+    const inUtc = defaultSpendingRange("UTC", utcLateDecember);
+    expect(inUtc.from).toEqual(new Date("2025-12-01T00:00:00.000Z"));
+
+    const inIstanbul = defaultSpendingRange("Europe/Istanbul", utcLateDecember);
+    expect(inIstanbul.from).toEqual(new Date("2026-01-01T00:00:00.000Z"));
+    expect(inIstanbul.to).toEqual(new Date("2026-01-31T00:00:00.000Z"));
   });
 });
 

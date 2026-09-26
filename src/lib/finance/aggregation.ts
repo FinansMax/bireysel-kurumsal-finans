@@ -1,5 +1,7 @@
 import { Prisma } from "@prisma/client";
 
+import { todayInTimeZone } from "@/lib/time/tenant-time";
+
 import { FILTER_ERRORS, parseTransactionFilters } from "./transaction-filters";
 
 /**
@@ -22,22 +24,28 @@ export type DateRange = {
 };
 
 /**
- * İçinde bulunulan ayın TAMAMI (UTC).
+ * İçinde bulunulan ayın TAMAMI — TENANT'IN saat diliminde (Issue #134).
  *
- * Panelin varsayılan dönemi budur ve rapor ekranı da aynısını kullanır: iki ekranın farklı
- * varsayılanları olsaydı, aynı veriden iki farklı "bu ay" doğardı.
+ * Panelin ve rapor ekranının varsayılan dönemi budur: iki ekranın farklı varsayılanları olsaydı,
+ * aynı veriden iki farklı "bu ay" doğardı.
  *
- * UTC — `dashboard.ts` ve `parseFilterDate()` ile aynı tercih; saat dilimi yönetimi hâlâ yok
- * (Issue #134). `Date.UTC` ay taşmasını kendisi devreder, artık yıl kuralı elle yazılmaz
- * (ayın 0. günü = bir önceki ayın son günü).
+ * NEDEN TENANT'IN SAAT DİLİMİ, SUNUCUNUN `now()`'I DEĞİL: sunucu UTC değilken, ya da tenant
+ * UTC'den farklı bir dilimdeyken, "hangi ay içindeyiz" sorusunun cevabı tenant'ın yerel
+ * takvimine göre verilmelidir. Örnek: UTC 23:30, Europe/Istanbul'da (+03:00) zaten ertesi
+ * günün 02:30'udur — ayın son gecesiyse tenant için yeni ay çoktan başlamıştır. Önceki sürüm
+ * (`currentMonthRange()`, UTC "şimdi") bu yüzden kaldırıldı.
+ *
+ * SINIR DEĞERLER YİNE UTC GECE YARISI TEMSİLLİDİR (`Date.UTC(year, month, 1)` vb.) — bu bir
+ * ANI değil, bir TAKVİM GÜNÜNÜ etiketler (aynen `parseFilterDate()`'in ürettiği gibi).
+ * `todayInTimeZone()` zaten hangi YIL/AY'da olduğumuzu tenant diliminde çözer; bulunduktan
+ * sonra ay sınırları saf takvim aritmetiğidir, ikinci bir saat dilimi dönüşümüne gerek yoktur.
  */
-export function currentMonthRange(now: Date = new Date()): DateRange {
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth();
+export function currentMonthRangeInTimeZone(timeZone: string, now: Date = new Date()): DateRange {
+  const [year, month] = todayInTimeZone(timeZone, now).split("-").map(Number);
 
   return {
-    from: new Date(Date.UTC(year, month, 1)),
-    to: new Date(Date.UTC(year, month + 1, 0)),
+    from: new Date(Date.UTC(year, month - 1, 1)),
+    to: new Date(Date.UTC(year, month, 0)),
   };
 }
 

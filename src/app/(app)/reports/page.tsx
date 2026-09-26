@@ -9,7 +9,7 @@ import { PageHeader, Panel, PanelHeader } from "@/components/ui/surfaces";
 import { Table, TableScroll, Tbody, Td, Th, Thead, Tr } from "@/components/ui/table";
 import { requirePageUser } from "@/lib/auth/page-guard";
 import { hasAllPermissions, PERMISSIONS } from "@/lib/authz/permissions";
-import { currentMonthRange, resolveDateRange } from "@/lib/finance/aggregation";
+import { currentMonthRangeInTimeZone, resolveDateRange } from "@/lib/finance/aggregation";
 import {
   getIncomeExpenseReport,
   type CurrencyReport,
@@ -89,7 +89,9 @@ export default async function ReportsPage({
   const isDefaultRange = params.from === undefined && params.to === undefined;
 
   // Ayrıştırma DB'ye gitmeden önce: aralık geçersizse hiçbir sorgu çalıştırmaya gerek yok.
-  const parsed = resolveDateRange((key) => params[key], currentMonthRange());
+  // Varsayılan dönem TENANT'IN saat dilimine göre (Issue #134) — `tenant` yukarıda zaten
+  // çözülmüş durumda.
+  const parsed = resolveDateRange((key) => params[key], currentMonthRangeInTimeZone(tenant.timeZone));
   const report = parsed.ok ? await getIncomeExpenseReport(tenant.id, parsed.range) : null;
 
   // Aralık geçerliyken form değerleri SERVİSTEN gelir (kısmi aralık varsayılanla tamamlandığında

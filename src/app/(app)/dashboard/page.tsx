@@ -111,7 +111,7 @@ export default async function DashboardPage({
   // çalıştırmaya gerek yok (route'taki "ucuz şekil kontrolü en üstte" sırasının sayfa
   // karşılığı).
   const params = await searchParams;
-  const spendingRange = resolveSpendingRange(params);
+  const spendingRange = resolveSpendingRange(params, tenant.timeZone);
 
   // Yetkisi olmayan role o veriyi HİÇ çekmeyiz: gizlemek değil, sormamak doğru olan.
   const [summary, spending, accounts, transactionPage, categories] = await Promise.all([
@@ -482,14 +482,16 @@ function singleParam(value: string | string[] | undefined): string {
  * Buradaki ek iş yalnızca SUNUMA aittir: forma geri yazılacak ham değerler ve "varsayılan
  * dönemde miyiz" bilgisi.
  */
-function resolveSpendingRange(params: {
-  [key: string]: string | string[] | undefined;
-}): ResolvedSpendingRange {
+function resolveSpendingRange(
+  params: { [key: string]: string | string[] | undefined },
+  timeZone: string,
+): ResolvedSpendingRange {
   const rawFrom = singleParam(params.from);
   const rawTo = singleParam(params.to);
   const isDefault = params.from === undefined && params.to === undefined;
 
-  const parsed = resolveDateRange((key) => params[key], defaultSpendingRange());
+  // Varsayılan dönem TENANT'IN saat dilimine göre (Issue #134).
+  const parsed = resolveDateRange((key) => params[key], defaultSpendingRange(timeZone));
   if (!parsed.ok) {
     return { ok: false, from: rawFrom, to: rawTo, isDefault };
   }

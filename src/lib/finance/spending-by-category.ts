@@ -6,7 +6,7 @@ import { tenantScoped } from "@/lib/tenancy/scope";
 import {
   compareByAmountThenName,
   compareCurrencyCode,
-  currentMonthRange,
+  currentMonthRangeInTimeZone,
   percentOf,
   toIsoDate,
   type DateRange,
@@ -99,9 +99,12 @@ const ZERO = new Prisma.Decimal(0);
  *
  * Hesabın kendisi `aggregation.ts`'tedir — rapor ekranı (#67) da aynı varsayılanı kullanır ve
  * iki ayrı "bu ay" tanımı doğmamalıdır. Buradaki ad, çağıranlar için ANLAMI söyler.
+ *
+ * `timeZone` TENANT'INDIR, sunucununki DEĞİL (Issue #134): "bu ay" sorusunun cevabı tenant'ın
+ * yerel takvimine göre verilir.
  */
-export function defaultSpendingRange(now: Date = new Date()): SpendingRange {
-  return currentMonthRange(now);
+export function defaultSpendingRange(timeZone: string, now: Date = new Date()): SpendingRange {
+  return currentMonthRangeInTimeZone(timeZone, now);
 }
 
 export async function getSpendingByCategory(

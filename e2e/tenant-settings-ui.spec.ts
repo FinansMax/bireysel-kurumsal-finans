@@ -102,7 +102,9 @@ test.describe("/settings/tenant — ad ve para birimi güncelleme", () => {
     expect(tenant.defaultCurrency).toBe("USD");
 
     // Sidebar'daki tenant seçici de yeni adı gösterir (`router.refresh()` kabuğu tazeler).
-    await expect(page.getByText("Güncellenmiş Ad").first()).toBeVisible();
+    // Seçici bir native `<select>`tir; kapalıyken `<option>` görünür SAYILMAZ (Playwright
+    // bunu doğru şekilde "hidden" bildirir), bu yüzden seçili seçeneğin METNİ karşılaştırılır.
+    await expect(page.locator("option:checked")).toHaveText("Güncellenmiş Ad");
   });
 
   test("geçersiz para birimi kodu hata gösterir ve satır DEĞİŞMEZ", async ({ page }) => {

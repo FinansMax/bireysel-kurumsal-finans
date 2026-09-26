@@ -96,19 +96,19 @@ test.describe("Korumalı kabuk — oturumlu erişim", () => {
     await expect(nav).toBeVisible();
     await expect(nav.getByRole("link", { name: "Genel Bakış" })).toBeVisible();
 
-    // Henüz var olmayan ekranlar LİNK DEĞİLDİR: link olsalardı kullanıcıyı 404'e
-    // götürürlerdi (bkz. `NAV_ITEMS`).
-    //
-    // Örnek olarak "Ayarlar" (#86) seçildi — bu kontrol, ekranı yazılan bir menü öğesine
-    // bağlanırsa o issue geldiğinde kırılır. Nitekim "Hesaplar" #47 ile, "Raporlar" da #67 ile
-    // gerçek bir bağlantıya dönüştü; buradaki öğe de #86 geldiğinde hâlâ placeholder olan bir
-    // başkasıyla değiştirilmeli (kontrolün amacı "şu öğe link olmasın" değil,
-    // "placeholder'lar link olmasın"dır).
-    await expect(nav.getByText("Ayarlar")).toBeVisible();
+    // AKTİF TENANT YOK (bu kullanıcı hiç çalışma alanı kurmadı): OWNER-only, tenant'a bağlı
+    // öğeler ("Modüller" #153, "Ayarlar" #86) hiç render EDİLMEZ — `canManageModules`/
+    // `canManageTenantSettings` `activeTenant` `null` olduğunda daima `false`dur
+    // (bkz. `layout.tsx`). Bu, "henüz yazılmamış ekran" placeholder'ından FARKLI bir durumdur:
+    // ikisi de aynı SONUCU (link yok) üretir ama nedeni izin/tenant durumudur, eksik bir
+    // ekran değil. "Ayarlar" #86'dan ÖNCE tam da bu placeholder deseninin örneğiydi; ekran
+    // yazıldığı için artık örnek DEĞİL — placeholder deseni bugün NAV_GROUPS'ta canlı bir
+    // örneğe sahip değil (yeni bir "yakında" öğesi eklendiğinde buraya geri döner).
+    await expect(nav.getByRole("link", { name: "Modüller" })).toHaveCount(0);
     await expect(nav.getByRole("link", { name: "Ayarlar" })).toHaveCount(0);
 
-    // KONTROL GRUBU: gerçekten var olan bir ekran LİNKTİR. Bu olmadan yukarıdaki iddia, menü
-    // hiç link üretmese de geçerdi.
+    // KONTROL GRUBU: gerçekten var olan, izin gerektirmeyen bir ekran LİNKTİR. Bu olmadan
+    // yukarıdaki iddia, menü hiç link üretmese de geçerdi.
     await expect(nav.getByRole("link", { name: "Raporlar" })).toBeVisible();
   });
 

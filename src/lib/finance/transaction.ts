@@ -282,6 +282,89 @@ export async function listTransactions(
   };
 }
 
+/** Dışa aktarılan tek bir satır — insan-okunur ad taşır, ham `accountId`/`categoryId` değil. */
+export type TransactionExportRow = {
+  occurredAt: Date;
+  type: CategoryType;
+  amount: string;
+  description: string | null;
+  accountName: string;
+  categoryName: string | null;
+};
+
+/**
+ * Tek seferde çekilecek en fazla satır sayısı (Issue #81).
+ *
+ * Sayfalı listelemeden (`TRANSACTIONS_PAGE_SIZE`) FARKLI bir sınır: dışa aktarma tüm filtreye
+ * uyan veriyi tek dosyada ister, bu yüzden sayfalama YOKTUR. Ama sınırsız bırakmak, büyük bir
+ * tenant'ta tek bir isteğin belleği ve yanıt süresini kontrolsüz büyütmesi demektir. 50.000,
+ * bugünün en büyük gerçek tenant'ının aylık işlem hacminin çok üzerinde bir tavandır ve aşılırsa
+ * kullanıcı filtre daraltmaya (`from`/`to`) yönlendirilir — sessizce KIRPILMAZ (bkz. `route.ts`).
+ */
+export const TRANSACTION_EXPORT_ROW_LIMIT = 50_000;
+
+/**
+ * Filtreye uyan TÜM işlemleri dışa aktarım için okur (Issue #81).
+ *
+ * `listTransactions()` İLE AYNI FİLTRE MANTIĞI (`nextDay()` paylaşılır — bkz. o fonksiyonun
+ * NEDEN'i): aynı `?from=&to=&accountId=&categoryId=&q=` iki farklı sonuç vermemeli. Sayfalama/
+ * imleç YOKTUR: dışa aktarma "sonraki sayfa" kavramını bilmez, filtreye uyan her şeyi ister.
+ *
+ * `TRANSACTION_EXPORT_ROW_LIMIT`'İ AŞAN sonuç SESSİZCE KIRPILMAZ: `count` bilgisi ile
+ * `truncated: true` döner, çağıran (route) bunu 413 ile kullanıcıya bildirir — kısmi bir
+ * dosyayı "tam" gibi indirmek, bir muhasebe raporunda en tehlikeli sessiz hatadır.
+ */
+export async function listTransactionsForExport(
+  tenantId: string,
+  filters: TransactionFilters = {},
+): Promise<{ rows: TransactionExportRow[]; truncated: boolean }> {
+  const occurredAt: Prisma.DateTimeFilter = {};
+  if (filters.from) {
+    occurredAt.gte = filters.from;
+  }
+  if (filters.to) {
+    occurredAt.lt = nextDay(filters.to);
+  }
+
+  const rows = await prisma.transaction.findMany({
+    where: tenantScoped(tenantId, {
+      ...(filters.from || filters.to ? { occurredAt } : {}),
+      ...(filters.accountId ? { accountId: filters.accountId } : {}),
+      ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
+      ...(filters.q
+        ? { description: { contains: filters.q, mode: Prisma.QueryMode.insensitive } }
+        : {}),
+    }),
+    select: {
+      occurredAt: true,
+      type: true,
+      amount: true,
+      description: true,
+      account: { select: { name: true } },
+      category: { select: { name: true } },
+    },
+    orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    // Sınırdan BİR FAZLA çekilir: fazlanın gelmesi "kırpıldı" bilgisinin ta kendisidir — ayrı
+    // bir `count` sorgusuna (ikinci bir tarama) gerek kalmaz.
+    take: TRANSACTION_EXPORT_ROW_LIMIT + 1,
+  });
+
+  const truncated = rows.length > TRANSACTION_EXPORT_ROW_LIMIT;
+  const page = truncated ? rows.slice(0, TRANSACTION_EXPORT_ROW_LIMIT) : rows;
+
+  return {
+    rows: page.map((row) => ({
+      occurredAt: row.occurredAt,
+      type: row.type,
+      amount: row.amount.toString(),
+      description: row.description,
+      accountName: row.account.name,
+      categoryName: row.category?.name ?? null,
+    })),
+    truncated,
+  };
+}
+
 export type CreateTransactionInput = {
   accountId: unknown;
   type: unknown;

@@ -188,6 +188,21 @@ export default async function TransactionsPage({
     return query === "" ? "/transactions" : `/transactions?${query}`;
   }
 
+  /**
+   * Dışa aktarma linki (Issue #81). AKTİF FİLTRELER TAŞINIR (`after`/`edit` HARİÇ — bunlar
+   * sayfalama/düzenleme durumudur, dışa aktarmanın konusu değildir): kullanıcı ekranda ne
+   * görüyorsa dosyada da onu bulmalı. Düz bir `<a>` linkidir, `fetch` DEĞİL — `GET` yan
+   * etkisizdir (invariant #4) ve tarayıcının kendi indirme mekanizması (`Content-Disposition`)
+   * JS olmadan çalışır.
+   */
+  function transactionsExportHref(): string {
+    const next = new URLSearchParams({ format: "csv" });
+    for (const [key, value] of Object.entries(filterValues)) {
+      if (value !== "") next.set(key, value);
+    }
+    return `/api/tenants/${tenant.id}/transactions/export?${next.toString()}`;
+  }
+
   return (
     <section className="space-y-8">
       <PageHeader
@@ -197,6 +212,14 @@ export default async function TransactionsPage({
             <span className="font-medium text-strong">{tenant.name}</span> çalışma alanının gelir
             ve gider kayıtları.
           </>
+        }
+        actions={
+          <a
+            href={transactionsExportHref()}
+            className="rounded-control border border-line-strong px-3 py-2 text-sm font-medium text-strong transition-colors duration-150 ease-out-soft hover:bg-surface-muted"
+          >
+            Dışa Aktar (CSV)
+          </a>
         }
       />
 

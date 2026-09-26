@@ -1070,3 +1070,92 @@ test.describe("/transactions — sayfalama (Issue #135)", () => {
     await expectRow(page, "bozuk-000");
   });
 });
+
+test.describe("/transactions — CSV dışa aktarma (Issue #81)", () => {
+  test("indirme bağlantısı MEVCUT FİLTREYİ taşıyor ve indirilen dosya doğru veriyi içeriyor", async ({
+    page,
+  }) => {
+    await signUpAndSignIn(page, "tx-export");
+    const tenantId = await createAndActivateTenant(page);
+    const accountA = await createAccount(page, tenantId, "Hesap A", "0");
+    const accountB = await createAccount(page, tenantId, "Hesap B", "0");
+
+    await page.request.post(`/api/tenants/${tenantId}/transactions`, {
+      data: { accountId: accountA, type: "EXPENSE", amount: "111", description: "export-a" },
+    });
+    await page.request.post(`/api/tenants/${tenantId}/transactions`, {
+      data: { accountId: accountB, type: "EXPENSE", amount: "222", description: "export-b" },
+    });
+
+    // Filtresiz: bağlantı `accountId` TAŞIMAZ, dosyada İKİ kayıt da olmalı.
+    await page.goto("/transactions");
+    const exportLink = page.getByRole("link", { name: "İşlemleri CSV olarak indir" });
+    await expect(exportLink).toBeVisible();
+
+    const unfilteredHref = await exportLink.getAttribute("href");
+    const unfiltered = await page.request.get(unfilteredHref!);
+    expect(unfiltered.status()).toBe(200);
+    expect(unfiltered.headers()["content-type"]).toContain("text/csv");
+    const unfilteredCsv = await unfiltered.text();
+    expect(unfilteredCsv).toContain("export-a");
+    expect(unfilteredCsv).toContain("export-b");
+
+    // Hesap filtresi uygulanınca bağlantı `accountId`Yİ TAŞIR ve dosya DARALIR — ekranda
+    // görülen kayıtla indirilen dosya sessizce ayrışmamalı (#56 ile aynı gerekçe).
+    await page.goto(`/transactions?accountId=${accountA}`);
+    const filteredHref = await page
+      .getByRole("link", { name: "İşlemleri CSV olarak indir" })
+      .getAttribute("href");
+    expect(filteredHref).toContain(`accountId=${accountA}`);
+
+    const filtered = await page.request.get(filteredHref!);
+    expect(filtered.status()).toBe(200);
+    const filteredCsv = await filtered.text();
+    expect(filteredCsv).toContain("export-a");
+    expect(filteredCsv).not.toContain("export-b");
+  });
+
+  test("MEMBER de indirme bağlantısını görüyor (bu bir OKUMA yeteneğidir)", async ({ page }) => {
+    const viewerId = await signUpAndSignIn(page, "tx-export-member");
+
+    const tenant = await prisma.tenant.create({
+      data: { name: "Export Uye Alani", slug: `tx-export-member-${randomUUID()}` },
+      select: { id: true },
+    });
+    createdTenantIds.push(tenant.id);
+
+    const account = await prisma.account.create({
+      data: { tenantId: tenant.id, name: "Ortak Kasa", type: "CASH", currency: "TRY" },
+      select: { id: true },
+    });
+    await prisma.transaction.create({
+      data: {
+        tenantId: tenant.id,
+        accountId: account.id,
+        type: "EXPENSE",
+        amount: "75",
+        description: "Ortak harcama",
+      },
+    });
+    await prisma.membership.create({
+      data: { userId: viewerId, tenantId: tenant.id, role: "MEMBER" },
+    });
+
+    const activated = await page.request.post("/api/tenants/active", {
+      data: { tenantId: tenant.id },
+    });
+    expect(activated.status()).toBe(200);
+
+    await page.goto("/transactions");
+
+    // Kayıt formu MANAGE_TRANSACTIONS gerektirir ve MEMBER'da yok — indirme bağlantısı ise
+    // VIEW_TRANSACTIONS'a bağlıdır (listelemekle aynı izin) ve MEMBER'da bulunur.
+    await expect(createForm(page)).toHaveCount(0);
+    const exportLink = page.getByRole("link", { name: "İşlemleri CSV olarak indir" });
+    await expect(exportLink).toBeVisible();
+
+    const response = await page.request.get((await exportLink.getAttribute("href"))!);
+    expect(response.status()).toBe(200);
+    expect(await response.text()).toContain("Ortak harcama");
+  });
+});

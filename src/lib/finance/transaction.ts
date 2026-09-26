@@ -216,11 +216,17 @@ export type TransactionPage = {
  * tenant'lara açardı; koruma `integration/tenant-scope-pattern.spec.ts`'tedir. İmleç de bu
  * kuralın istisnası DEĞİLDİR: `after` yalnızca pencereyi daraltır, scope'a dokunmaz.
  */
-export async function listTransactions(
+/**
+ * Filtre + imleç koşulunu `tenantScoped()` üzerine kurar (Issue #81'in dışa aktarma sorgusuyla
+ * PAYLAŞILIR — bkz. `listAllTransactionsForExport()`). Tek kopya: liste ile export'un aynı
+ * filtreyi iki farklı sonuca çevirmesi, kullanıcının ekranda gördüğü kayıtla indirdiği
+ * dosyanın sessizce ayrışması demek olurdu.
+ */
+function buildTransactionWhere(
   tenantId: string,
-  filters: TransactionFilters = {},
-  after: TransactionCursor | null = null,
-): Promise<TransactionPage> {
+  filters: TransactionFilters,
+  after: TransactionCursor | null,
+): Prisma.TransactionWhereInput {
   const occurredAt: Prisma.DateTimeFilter = {};
   if (filters.from) {
     occurredAt.gte = filters.from;
@@ -229,45 +235,53 @@ export async function listTransactions(
     occurredAt.lt = nextDay(filters.to);
   }
 
+  return tenantScoped(tenantId, {
+    ...(filters.from || filters.to ? { occurredAt } : {}),
+    ...(filters.accountId ? { accountId: filters.accountId } : {}),
+    ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
+    // `QueryMode.insensitive` Postgres'te ILIKE'a çevrilir. Sabit, düz `"insensitive"`
+    // string'i yerine typed enum'dan alınır: spread içinde literal tipi `string`e genişler
+    // ve Prisma'nın `QueryMode` beklentisiyle uyuşmazdı.
+    //
+    // `description` üzerinde index YOKTUR: bu sorgu tarama yapar. Tenant başına işlem sayısı
+    // büyüdüğünde bir trigram index gerekecek — bugün eklemek, ölçülmemiş bir maliyeti
+    // şemaya yazmak olurdu.
+    ...(filters.q
+      ? { description: { contains: filters.q, mode: Prisma.QueryMode.insensitive } }
+      : {}),
+    // Keyset koşulu: "sıralamada bu satırdan SONRA gelenler". Sıralama üç ölçütlü olduğu
+    // için karşılaştırma da üç dallıdır — leksikografik sıranın elle yazılmış hâli.
+    //
+    // Prisma'nın `cursor` seçeneği KULLANILMADI: o, benzersiz TEK bir alan üzerinden çalışır
+    // ve çok sütunlu bir sıralama anahtarını ifade edemez. Ham SQL de yasak (CLAUDE.md §5);
+    // koşul bu yüzden `OR` ile kuruluyor. Filtrelerle çakışma yoktur: bunlar ayrı
+    // anahtarlardır ve Prisma hepsini `AND` ile birleştirir.
+    ...(after
+      ? {
+          OR: [
+            { occurredAt: { lt: after.occurredAt } },
+            { occurredAt: after.occurredAt, createdAt: { lt: after.createdAt } },
+            {
+              occurredAt: after.occurredAt,
+              createdAt: after.createdAt,
+              id: { lt: after.id },
+            },
+          ],
+        }
+      : {}),
+  });
+}
+
+export async function listTransactions(
+  tenantId: string,
+  filters: TransactionFilters = {},
+  after: TransactionCursor | null = null,
+): Promise<TransactionPage> {
   // Sayfa boyutundan BİR FAZLA çekilir: fazladan satırın gelip gelmediği, "başka sayfa var mı"
   // sorusunun cevabıdır. Alternatif — ayrı bir `count` sorgusu — ikinci bir tarama olurdu ve
   // yanıtta zaten göstermediğimiz bir bilgi için ödenirdi.
   const rows = await prisma.transaction.findMany({
-    where: tenantScoped(tenantId, {
-      ...(filters.from || filters.to ? { occurredAt } : {}),
-      ...(filters.accountId ? { accountId: filters.accountId } : {}),
-      ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
-      // `QueryMode.insensitive` Postgres'te ILIKE'a çevrilir. Sabit, düz `"insensitive"`
-      // string'i yerine typed enum'dan alınır: spread içinde literal tipi `string`e genişler
-      // ve Prisma'nın `QueryMode` beklentisiyle uyuşmazdı.
-      //
-      // `description` üzerinde index YOKTUR: bu sorgu tarama yapar. Tenant başına işlem sayısı
-      // büyüdüğünde bir trigram index gerekecek — bugün eklemek, ölçülmemiş bir maliyeti
-      // şemaya yazmak olurdu.
-      ...(filters.q
-        ? { description: { contains: filters.q, mode: Prisma.QueryMode.insensitive } }
-        : {}),
-      // Keyset koşulu: "sıralamada bu satırdan SONRA gelenler". Sıralama üç ölçütlü olduğu
-      // için karşılaştırma da üç dallıdır — leksikografik sıranın elle yazılmış hâli.
-      //
-      // Prisma'nın `cursor` seçeneği KULLANILMADI: o, benzersiz TEK bir alan üzerinden çalışır
-      // ve çok sütunlu bir sıralama anahtarını ifade edemez. Ham SQL de yasak (CLAUDE.md §5);
-      // koşul bu yüzden `OR` ile kuruluyor. Filtrelerle çakışma yoktur: bunlar ayrı
-      // anahtarlardır ve Prisma hepsini `AND` ile birleştirir.
-      ...(after
-        ? {
-            OR: [
-              { occurredAt: { lt: after.occurredAt } },
-              { occurredAt: after.occurredAt, createdAt: { lt: after.createdAt } },
-              {
-                occurredAt: after.occurredAt,
-                createdAt: after.createdAt,
-                id: { lt: after.id },
-              },
-            ],
-          }
-        : {}),
-    }),
+    where: buildTransactionWhere(tenantId, filters, after),
     select: transactionSelect,
     orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     take: TRANSACTIONS_PAGE_SIZE + 1,
@@ -280,6 +294,27 @@ export async function listTransactions(
     transactions: page.map(toView),
     nextCursor: hasMore ? encodeTransactionCursor(page[page.length - 1]) : null,
   };
+}
+
+/**
+ * Filtrelenmiş TÜM işlemleri (sayfalama olmadan) döner — dışa aktarma için (Issue #81).
+ *
+ * `listTransactions()`'tan TEK FARKI budur: `take` yoktur, imleç yoktur. Bir CSV indirmesi
+ * "şu anki sayfa" değil "filtreyle eşleşen her şey" demektir; kullanıcı ekranda 50 kayıt
+ * görüp dosyada 50 kayıt bulursa bu bir hatadır (#135'in sayfalama kararıyla ÇELİŞMEZ — o
+ * ekranın sayfalanmasıyla ilgilidir, dışa aktarılan dosyanın bütünlüğüyle değil).
+ */
+export async function listAllTransactionsForExport(
+  tenantId: string,
+  filters: TransactionFilters = {},
+): Promise<TransactionView[]> {
+  const rows = await prisma.transaction.findMany({
+    where: buildTransactionWhere(tenantId, filters, null),
+    select: transactionSelect,
+    orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+  });
+
+  return rows.map(toView);
 }
 
 export type CreateTransactionInput = {

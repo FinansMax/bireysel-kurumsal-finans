@@ -202,21 +202,6 @@ export type TransactionPage = {
 };
 
 /**
- * İşlemleri sayfa sayfa listeler: önce gerçekleşme tarihi (yeniden eskiye), eşitlikte kayıt
- * zamanı, o da eşitse `id`.
- *
- * SIRALAMA ÜÇ ÖLÇÜTLÜDÜR ve bu, imleçle (`transaction-cursor.ts`) BİRLİKTE değişmesi gereken
- * tek bir karardır: keyset sayfalama, sıralama anahtarının KESİN bir toplam sıra vermesine
- * dayanır. `occurredAt` + `createdAt` çifti buna yetmez (aynı milisaniyede iki kayıt
- * mümkündür) ve iki sayfanın sınırındaki satır ya atlanır ya tekrarlanırdı; `id` benzersiz
- * olduğu için sırayı kesinleştirir. Gerekçenin tamamı imleç modülündedir.
- *
- * FİLTRELER `tenantScoped()`İN ÜZERİNE eklenir, onun YERİNE geçmez (aynı kural `Category`nin
- * `?type` filtresinde de var). Tek bir filtrenin tenant koşulunu düşürmesi, listeyi tüm
- * tenant'lara açardı; koruma `integration/tenant-scope-pattern.spec.ts`'tedir. İmleç de bu
- * kuralın istisnası DEĞİLDİR: `after` yalnızca pencereyi daraltır, scope'a dokunmaz.
- */
-/**
  * Filtre + imleç koşulunu `tenantScoped()` üzerine kurar (Issue #81'in dışa aktarma sorgusuyla
  * PAYLAŞILIR — bkz. `listAllTransactionsForExport()`). Tek kopya: liste ile export'un aynı
  * filtreyi iki farklı sonuca çevirmesi, kullanıcının ekranda gördüğü kayıtla indirdiği
@@ -272,6 +257,21 @@ function buildTransactionWhere(
   });
 }
 
+/**
+ * İşlemleri sayfa sayfa listeler: önce gerçekleşme tarihi (yeniden eskiye), eşitlikte kayıt
+ * zamanı, o da eşitse `id`.
+ *
+ * SIRALAMA ÜÇ ÖLÇÜTLÜDÜR ve bu, imleçle (`transaction-cursor.ts`) BİRLİKTE değişmesi gereken
+ * tek bir karardır: keyset sayfalama, sıralama anahtarının KESİN bir toplam sıra vermesine
+ * dayanır. `occurredAt` + `createdAt` çifti buna yetmez (aynı milisaniyede iki kayıt
+ * mümkündür) ve iki sayfanın sınırındaki satır ya atlanır ya tekrarlanırdı; `id` benzersiz
+ * olduğu için sırayı kesinleştirir. Gerekçenin tamamı imleç modülündedir.
+ *
+ * FİLTRELER `tenantScoped()`İN ÜZERİNE eklenir, onun YERİNE geçmez (aynı kural `Category`nin
+ * `?type` filtresinde de var). Tek bir filtrenin tenant koşulunu düşürmesi, listeyi tüm
+ * tenant'lara açardı; koruma `integration/tenant-scope-pattern.spec.ts`'tedir. İmleç de bu
+ * kuralın istisnası DEĞİLDİR: `after` yalnızca pencereyi daraltır, scope'a dokunmaz.
+ */
 export async function listTransactions(
   tenantId: string,
   filters: TransactionFilters = {},

@@ -2964,7 +2964,7 @@ yüzünden veriye erişimin tamamen kaybolması kabul edilemez.
   **varsayılan dönemiyle** (bir sonraki madde) KARIŞTIRILMAMALI; trend widget'ının kendi, ayrı
   bir hesabıdır ve kapsam dışı bırakıldı.
 
-**Güncelleme (rapor/harcama dağılımı varsayılan dönemi, Issue #81'in yanında ele alındı):**
+**Güncelleme (rapor/harcama dağılımı varsayılan dönemi, Issue #134):**
 `src/lib/finance/aggregation.ts`'teki `currentMonthRange()` (UTC "şimdi") panel/rapor
 **varsayılan dönemi** için `currentMonthRangeInTimeZone()` ile DEĞİŞTİRİLDİ —
 `getSpendingByCategory`/`getIncomeExpenseReport`'un `?from=&to=` verilmediğinde kullandığı "bu

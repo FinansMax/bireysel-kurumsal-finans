@@ -24,6 +24,7 @@ export function AppShell({
   activeTenantId,
   moduleLinks,
   canManageModules,
+  canManageTenantSettings,
   children,
 }: {
   userEmail: string;
@@ -38,6 +39,8 @@ export function AppShell({
   moduleLinks: readonly ModuleNavLink[];
   /** `MANAGE_MODULES` izni (#153) — modül yönetimi linkini göstermek için. */
   canManageModules: boolean;
+  /** `UPDATE_TENANT_SETTINGS` izni (#86) — tenant ayarları linkini göstermek için. */
+  canManageTenantSettings: boolean;
   children: ReactNode;
 }) {
   return (
@@ -48,6 +51,7 @@ export function AppShell({
         activeTenantId={activeTenantId}
         moduleLinks={moduleLinks}
         canManageModules={canManageModules}
+        canManageTenantSettings={canManageTenantSettings}
       />
 
       {/*

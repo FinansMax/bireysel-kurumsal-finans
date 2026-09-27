@@ -84,9 +84,21 @@ model Tenant {
   //
   // VARSAYILAN GEÇMİŞİ DE DOĞRU YORUMLAR: bugüne kadarki tüm kayıtlar tek saat diliminde
   // girildi, bu yüzden migration mevcut satırlara dokunmaz ve veri dönüşümü gerekmez.
-  timeZone  String   @default("Europe/Istanbul")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  timeZone String @default("Europe/Istanbul")
+
+  // Tenant'ın varsayılan para birimi (Issue #86). Hesap oluşturma formu bunu başlangıç
+  // değeri olarak önerir; hesabın KENDİ `currency` alanını override ETMEZ, yalnızca bir
+  // öneridir — çok para birimli bir tenant'ta her hesap farklı bir kod taşıyabilir.
+  //
+  // BİÇİMSEL DOĞRULAMA (ISO 4217, 3 büyük harf), `Account.currency` ile AYNI katılıkta
+  // (bkz. `src/lib/finance/validation.ts`); ICU listesine hizalama kararı #241'in
+  // kapsamındadır, burada tekrarlanmaz.
+  //
+  // VARSAYILAN "TRY": bugüne kadarki tüm tenant'lar TRY ile çalıştı, bu yüzden migration
+  // mevcut satırlara dokunmaz ve veri dönüşümü gerekmez (`timeZone` ile aynı gerekçe).
+  defaultCurrency String   @default("TRY")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   memberships         Membership[]
   invitations         TenantInvitation[]

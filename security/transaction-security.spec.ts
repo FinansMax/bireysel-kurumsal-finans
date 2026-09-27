@@ -871,3 +871,133 @@ test.describe("Transaction API — sayfalama (Issue #135)", () => {
     }
   });
 });
+
+test.describe("Transaction API — dışa aktarma (Issue #81)", () => {
+  test("unauthenticated istek 401 alır", async ({ request }) => {
+    const tenant = await createTenant("TxExportNoAuth");
+
+    try {
+      const response = await request.get(`/api/tenants/${tenant.id}/transactions/export`);
+      expect(response.status()).toBe(401);
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+    }
+  });
+
+  test("MEMBER de dışa aktarabiliyor (bu bir OKUMA yeteneğidir, listelemekle aynı izin)", async ({
+    request,
+  }) => {
+    const tenant = await createTenant("TxExportMember");
+    const member = await createUserWithMembership(MembershipRole.MEMBER, tenant.id);
+    const account = await createAccountRow(tenant.id);
+    await createTransactionRow(tenant.id, account.id);
+
+    try {
+      const response = await request.get(`/api/tenants/${tenant.id}/transactions/export`, {
+        headers: { cookie: member.cookie },
+      });
+      expect(response.status()).toBe(200);
+      expect(response.headers()["content-type"]).toContain("text/csv");
+      expect(response.headers()["content-disposition"]).toContain("attachment");
+
+      const csv = await response.text();
+      const lines = csv.trim().split("\r\n");
+      expect(lines).toHaveLength(2); // başlık + 1 kayıt
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: member.userId } });
+    }
+  });
+
+  test("YABANCI tenant'ın işlemi dosyaya SIZMIYOR (IDOR)", async ({ request }) => {
+    const victim = await createTenant("TxExportVictim");
+    const victimAccount = await createAccountRow(victim.id);
+    await createTransactionRow(victim.id, victimAccount.id, "999");
+
+    const attackerTenant = await createTenant("TxExportAttacker");
+    const attacker = await createUserWithMembership(MembershipRole.OWNER, attackerTenant.id);
+    const attackerAccount = await createAccountRow(attackerTenant.id, "0");
+    await createTransactionRow(attackerTenant.id, attackerAccount.id, "1");
+
+    try {
+      // Saldırgan KENDİ tenant'ının export'unu istiyor; mağdurun tenant'ı hiç adı geçmiyor —
+      // asıl soru: dönen dosyada mağdurun 999'luk kaydı var mı (tenantScoped kaçarsa evet).
+      const response = await request.get(
+        `/api/tenants/${attackerTenant.id}/transactions/export`,
+        { headers: { cookie: attacker.cookie } },
+      );
+      expect(response.status()).toBe(200);
+
+      const csv = await response.text();
+      expect(csv).not.toContain(",999,");
+      expect(csv.trim().split("\r\n")).toHaveLength(2); // başlık + yalnızca kendi kaydı
+    } finally {
+      await prisma.tenant.delete({ where: { id: victim.id } });
+      await prisma.tenant.delete({ where: { id: attackerTenant.id } });
+      await prisma.user.delete({ where: { id: attacker.userId } });
+    }
+  });
+
+  test("filtreler (Issue #56) export'ta da geçerli: accountId listeyi daraltıyor", async ({
+    request,
+  }) => {
+    const tenant = await createTenant("TxExportFilter");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+    const accountA = await createAccountRow(tenant.id);
+    const accountB = await createAccountRow(tenant.id);
+    await createTransactionRow(tenant.id, accountA.id, "10");
+    await createTransactionRow(tenant.id, accountB.id, "20");
+
+    try {
+      const response = await request.get(
+        `/api/tenants/${tenant.id}/transactions/export?accountId=${accountA.id}`,
+        { headers: { cookie: owner.cookie } },
+      );
+      expect(response.status()).toBe(200);
+
+      const csv = await response.text();
+      expect(csv).toContain(",10,");
+      expect(csv).not.toContain(",20,");
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("geçersiz filtre 400 döner (ekranla AYNI ayrıştırıcı — sessizce tam liste dönmez)", async ({
+    request,
+  }) => {
+    const tenant = await createTenant("TxExportBadFilter");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+
+    try {
+      const response = await request.get(
+        `/api/tenants/${tenant.id}/transactions/export?from=not-a-date`,
+        { headers: { cookie: owner.cookie } },
+      );
+      expect(response.status()).toBe(400);
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+
+  test("format=xlsx henüz desteklenmiyor: sessizce csv'ye düşmez, açıkça 400 döner", async ({
+    request,
+  }) => {
+    const tenant = await createTenant("TxExportXlsx");
+    const owner = await createUserWithMembership(MembershipRole.OWNER, tenant.id);
+
+    try {
+      const response = await request.get(
+        `/api/tenants/${tenant.id}/transactions/export?format=xlsx`,
+        { headers: { cookie: owner.cookie } },
+      );
+      expect(response.status()).toBe(400);
+      expect(response.headers()["content-type"]).not.toContain("text/csv");
+    } finally {
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+      await prisma.user.delete({ where: { id: owner.userId } });
+    }
+  });
+});

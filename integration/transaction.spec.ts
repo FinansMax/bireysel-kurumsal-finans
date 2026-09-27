@@ -3,9 +3,11 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 
 import { prisma } from "../src/lib/prisma";
+import { exportTransactionsCsv } from "../src/lib/export/transactions-csv";
 import {
   createTransaction,
   deleteTransaction,
+  listAllTransactionsForExport,
   listTransactions,
   TRANSACTIONS_PAGE_SIZE,
   updateTransaction,
@@ -1505,5 +1507,148 @@ test.describe("listTransactions() — sayfalama (Issue #135)", () => {
     expect(
       parseTransactionCursor(encode("2026-01-01T00:00:00.000Z|2026-01-02T00:00:00.000Z|abc123")),
     ).not.toBeNull();
+  });
+});
+
+test.describe("listAllTransactionsForExport() — dışa aktarma (Issue #81)", () => {
+  test("sayfa boyutunu AŞAN kayıt sayısında sayfalama olmadan TÜMÜNÜ döndürüyor", async () => {
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+    const accountId = await createAccount(tenantId);
+
+    const total = TRANSACTIONS_PAGE_SIZE + 5;
+    for (let i = 0; i < total; i += 1) {
+      await createTransaction(tenantId, actorId, {
+        accountId,
+        type: "EXPENSE",
+        amount: "1",
+        description: `Kayit ${i}`,
+        occurredAt: "2026-04-01",
+      });
+    }
+
+    // Kontrol grubu: `listTransactions()` bu sayıda kayıtta hâlâ sayfalıyor — aksi hâlde
+    // aşağıdaki "export sayfalamıyor" iddiası hiçbir şey kanıtlamazdı.
+    const page = await listTransactions(tenantId);
+    expect(page.transactions).toHaveLength(TRANSACTIONS_PAGE_SIZE);
+    expect(page.nextCursor).not.toBeNull();
+
+    const exported = await listAllTransactionsForExport(tenantId);
+    expect(exported).toHaveLength(total);
+  });
+
+  test("filtreler `listTransactions()` ile AYNI kayıt kümesini veriyor (yalnızca sayfalama olmadan)", async () => {
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+    const accountA = await createAccount(tenantId);
+    const accountB = await createAccount(tenantId);
+
+    await createTransaction(tenantId, actorId, {
+      accountId: accountA,
+      type: "EXPENSE",
+      amount: "10",
+      description: "Ocak kirasi",
+      occurredAt: "2026-01-10",
+    });
+    await createTransaction(tenantId, actorId, {
+      accountId: accountB,
+      type: "EXPENSE",
+      amount: "30",
+      description: "Mart yakiti",
+      occurredAt: "2026-03-30",
+    });
+
+    const filters: TransactionFilters = { accountId: accountA };
+    const exported = await listAllTransactionsForExport(tenantId, filters);
+    const listed = (await listTransactions(tenantId, filters)).transactions;
+
+    expect(exported.map((row) => row.id).sort()).toEqual(listed.map((row) => row.id).sort());
+    expect(exported.map((row) => row.description)).toEqual(["Ocak kirasi"]);
+  });
+
+  test("BAŞKA tenant'ın işlemi dışa aktarmaya SIZMIYOR", async () => {
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+    const accountId = await createAccount(tenantId);
+    await createTransaction(tenantId, actorId, {
+      accountId,
+      type: "EXPENSE",
+      amount: "1",
+      description: "Kendi kaydim",
+      occurredAt: "2026-01-01",
+    });
+
+    const otherTenantId = await createTenant();
+    const otherActorId = await createActor();
+    const otherAccountId = await createAccount(otherTenantId);
+    await createTransaction(otherTenantId, otherActorId, {
+      accountId: otherAccountId,
+      type: "EXPENSE",
+      amount: "1",
+      description: "Yabanci kayit",
+      occurredAt: "2026-01-01",
+    });
+
+    const exported = await listAllTransactionsForExport(tenantId);
+    expect(exported.map((row) => row.description)).toEqual(["Kendi kaydim"]);
+  });
+});
+
+test.describe("exportTransactionsCsv() — CSV üretimi (Issue #81)", () => {
+  test("başlık satırı ve para STRING olarak (hassasiyet kaybı yok)", async () => {
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+    const accountId = await createAccount(tenantId);
+    await createTransaction(tenantId, actorId, {
+      accountId,
+      type: "EXPENSE",
+      amount: "1234.5678",
+      description: "Test kaydi",
+      occurredAt: "2026-01-01",
+    });
+
+    const csv = await exportTransactionsCsv(tenantId, {});
+    const lines = csv.replace(/^﻿/, "").trim().split("\r\n");
+
+    expect(lines[0]).toBe(
+      "id,type,amount,description,occurred_at,account_id,category_id,created_at,updated_at",
+    );
+    // Dördüncü ondalık basamak KORUNUYOR: `Number()`e çevrilseydi kayan nokta yuvarlaması
+    // (invariant #10) bu basamağı bozabilirdi; string olarak taşındığı için birebir kalıyor.
+    expect(lines[1]).toContain("1234.5678");
+  });
+
+  test("formül enjeksiyonu kaçırılmış çıkıyor (Excel/LibreOffice)", async () => {
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+    const accountId = await createAccount(tenantId);
+    await createTransaction(tenantId, actorId, {
+      accountId,
+      type: "EXPENSE",
+      amount: "1",
+      description: '=HYPERLINK("http://kotu.site","Tikla")',
+      occurredAt: "2026-01-01",
+    });
+
+    const csv = await exportTransactionsCsv(tenantId, {});
+    expect(csv).toContain("'=HYPERLINK");
+    expect(csv).not.toContain('"=HYPERLINK');
+  });
+
+  test("HASSAS ALAN sızmıyor: yalnızca beklenen sütunlar var", async () => {
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+    const accountId = await createAccount(tenantId);
+    await createTransaction(tenantId, actorId, {
+      accountId,
+      type: "INCOME",
+      amount: "1",
+      description: "Kayit",
+      occurredAt: "2026-01-01",
+    });
+
+    const csv = await exportTransactionsCsv(tenantId, {});
+    const header = csv.replace(/^﻿/, "").split("\r\n")[0];
+    expect(header.split(",")).toHaveLength(9);
   });
 });

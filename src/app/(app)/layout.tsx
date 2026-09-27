@@ -69,6 +69,11 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
       canManageModules={
         activeTenant ? hasPermission(activeTenant.role, PERMISSIONS.MANAGE_MODULES) : false
       }
+      // Tenant ayarları da OWNER-only'dir (#86), `MANAGE_MODULES` ile aynı sınıf ve aynı
+      // gerekçe (invariant #3).
+      canManageTenantSettings={
+        activeTenant ? hasPermission(activeTenant.role, PERMISSIONS.UPDATE_TENANT_SETTINGS) : false
+      }
     >
       {children}
     </AppShell>

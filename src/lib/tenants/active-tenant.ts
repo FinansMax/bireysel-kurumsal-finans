@@ -26,7 +26,17 @@ type ActiveTenantPayload = { tenantId: string };
 // tenant'ı çözüyor. Ayrı bir sorgu eklemek yerine mevcut select'e bir alan koymak, hem
 // maliyetsizdir hem de referansın UNUTULMASINI zorlaştırır — tarih gösteren bir ekran
 // yazan kişi elinde hazır bulur.
-export type ActiveTenant = { id: string; name: string; slug: string; timeZone: string };
+//
+// `defaultCurrency` AYNI GEREKÇEYLE burada (Issue #86): bir hesap oluşturma ekranı zaten
+// aktif tenant'ı çözüyor, tenant'ın önerdiği para birimini göstermek için ayrı bir sorguya
+// gerek yok.
+export type ActiveTenant = {
+  id: string;
+  name: string;
+  slug: string;
+  timeZone: string;
+  defaultCurrency: string;
+};
 
 function getSecret(): string {
   const secret = process.env.AUTH_SECRET;
@@ -97,7 +107,9 @@ export async function resolveActiveTenant(
     where: { userId_tenantId: { userId, tenantId } },
     select: {
       role: true,
-      tenant: { select: { id: true, name: true, slug: true, timeZone: true } },
+      tenant: {
+        select: { id: true, name: true, slug: true, timeZone: true, defaultCurrency: true },
+      },
     },
   });
 

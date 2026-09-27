@@ -71,7 +71,13 @@ const NAV_GROUPS: ReadonlyArray<{ title: string; items: readonly NavItem[] }> = 
       // kullanıcının KENDİ hesabına aittir, çalışma alanına değil. "Modüller"den farklı olarak
       // gizlenecek bir yetki yoktur — MEMBER dahil herkes kendi oturumlarını kapatabilir.
       { label: "Güvenlik", href: "/settings/security", icon: <IconSettings className="size-4.5" /> }, // #186
-      { label: "Ayarlar", href: null, icon: <IconSettings className="size-4.5" /> }, // #86
+      // "Bildirimler" de "Güvenlik" ile AYNI SINIF: kullanıcının KENDİ tercihidir, çalışma
+      // alanına ait değildir — izin kontrolü yok, MEMBER dahil herkese açık (Issue #88).
+      { label: "Bildirimler", href: "/settings/notifications", icon: <IconSettings className="size-4.5" /> }, // #88
+      // "Ayarlar" burada BİLEREK YOK: gerçek ekranı olan (#86), OWNER-only bir öğe artık
+      // "Modüller" ile aynı şekilde İZNE göre koşullu ekleniyor (bkz. aşağıdaki bileşen).
+      // Statik placeholder'ın tersine, izni olmayana "yakında" göstermek yerine hiç
+      // gösterilmiyor — Modüller'de zaten uygulanan karar.
     ],
   },
 ];
@@ -82,6 +88,7 @@ export function AppSidebar({
   activeTenantId,
   moduleLinks,
   canManageModules,
+  canManageTenantSettings,
 }: {
   userEmail: string;
   tenants: SwitchableTenant[];
@@ -103,6 +110,11 @@ export function AppSidebar({
    * `requirePermission()` ile korunur.
    */
   canManageModules: boolean;
+  /**
+   * `UPDATE_TENANT_SETTINGS` izni (Issue #86). `canManageModules` ile BİREBİR AYNI GEREKÇE —
+   * ayarlar da OWNER-only bir sahiplik kararıdır (bkz. `src/lib/authz/permissions.ts`).
+   */
+  canManageTenantSettings: boolean;
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -125,19 +137,33 @@ export function AppSidebar({
       };
     }
 
-    // "Modüller" öğesi "Ayarlar" placeholder'ının ÖNÜNE eklenir: ikisi de yönetim işidir ve
-    // gerçek bir ekranı olan öğe, henüz yazılmamış olanın üstünde durmalı.
-    if (group.title === "Yönetim" && canManageModules) {
+    // "Modüller" ve "Ayarlar" İZNE göre koşullu eklenir (invariant #3: gizlemek yetkilendirme
+    // DEĞİL, UX kararıdır — gerçek koruma ilgili sayfa guard'ında ve `requirePermission()`
+    // içindedir). İkisi de OWNER-only olduğu için genelde birlikte görünür/kaybolur; yine de
+    // ayrı iznlere bağlıdır ve bağımsız değerlendirilir.
+    if (group.title === "Yönetim") {
       return {
         ...group,
         items: [
-          ...group.items.slice(0, -1),
-          {
-            label: "Modüller",
-            href: "/settings/modules",
-            icon: <IconModule className="size-4.5" />,
-          }, // #153
-          ...group.items.slice(-1),
+          ...group.items,
+          ...(canManageModules
+            ? [
+                {
+                  label: "Modüller",
+                  href: "/settings/modules",
+                  icon: <IconModule className="size-4.5" />,
+                }, // #153
+              ]
+            : []),
+          ...(canManageTenantSettings
+            ? [
+                {
+                  label: "Ayarlar",
+                  href: "/settings/tenant",
+                  icon: <IconSettings className="size-4.5" />,
+                }, // #86
+              ]
+            : []),
         ],
       };
     }

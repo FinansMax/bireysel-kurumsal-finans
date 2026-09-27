@@ -72,6 +72,11 @@ export const AUDIT_ACTIONS = {
   // de "kim ne zaman karar verdi" sorusunun yanıtsız kalmaması gereken olaylardır.
   MODULE_ENABLED: "MODULE_ENABLED",
   MODULE_DISABLED: "MODULE_DISABLED",
+  // Tenant ayarlarının güncellenmesi (Issue #86). OWNER-only bir işlemdir (bkz.
+  // `src/lib/authz/permissions.ts` → `UPDATE_TENANT_SETTINGS`); ad veya varsayılan para birimi
+  // değişikliği geçmiş kayıtları etkilemez ama "kim ne zaman değiştirdi" sorusu yine de
+  // yanıtsız kalmamalıdır — `MODULE_ENABLED`/`DISABLED` ile aynı sınıfta bir sahiplik olayı.
+  TENANT_SETTINGS_UPDATED: "TENANT_SETTINGS_UPDATED",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

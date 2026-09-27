@@ -188,6 +188,20 @@ export default async function TransactionsPage({
     return query === "" ? "/transactions" : `/transactions?${query}`;
   }
 
+  /**
+   * Dışa aktarma bağlantısı (Issue #81). MEVCUT FİLTRELERİ taşır — `after`/`edit` taşımaz:
+   * indirilen dosya bir SAYFA değil, filtreyle eşleşen HER kaydı içerir (bkz.
+   * `listAllTransactionsForExport()`).
+   */
+  function exportHref(): string {
+    const next = new URLSearchParams();
+    for (const [key, value] of Object.entries(filterValues)) {
+      if (value !== "") next.set(key, value);
+    }
+    const query = next.toString();
+    return `/api/tenants/${tenant.id}/transactions/export${query === "" ? "" : `?${query}`}`;
+  }
+
   return (
     <section className="space-y-8">
       <PageHeader
@@ -210,6 +224,19 @@ export default async function TransactionsPage({
         values={filterValues}
         hasActiveFilters={hasActiveFilters}
       />
+
+      {/* Filtre GEÇERSİZKEN indirme bağlantısı gösterilmez: hangi filtrenin dosyaya
+          gireceği belirsizdir ve link tıklanınca ekranla AYNI 400'ü alırdı — daha iyisi,
+          kullanıcıya bu durumda hiç seçenek sunmamaktır. Düz `<a>`: bu bir dosya indirmedir,
+          `Link`in istemci tarafı geçişi buraya uygun değildir (Issue #81). */}
+      {parsedFilters.ok && (
+        <a
+          href={exportHref()}
+          className="inline-flex text-sm font-medium text-muted underline-offset-4 hover:text-strong hover:underline"
+        >
+          İşlemleri CSV olarak indir
+        </a>
+      )}
 
       {!parsedFilters.ok ? (
         <p

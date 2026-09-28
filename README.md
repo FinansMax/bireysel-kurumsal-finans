@@ -2077,8 +2077,9 @@ tutar toplamın yüzde kaçıdır*, *satırlar hangi sırada*. Üç kopya zamanl
 dönüşür ve bu, kullanıcının fark etmesi en zor hata türüdür (iki ekran aynı veriden iki farklı
 sayı gösterir). Bu yüzden ortaklaştırıldı:
 
-- `currentMonthRange()` — varsayılan dönem (UTC ayın tamamı). `defaultSpendingRange()` artık
-  bunun anlamlı adlı sarmalayıcısı.
+- `currentMonthRangeInTimeZone(timeZone)` — varsayılan dönem (tenant'ın saat dilimindeki
+  ayın tamamı; önceki UTC'li `currentMonthRange()` #134'te kaldırıldı).
+  `defaultSpendingRange()` bunun anlamlı adlı sarmalayıcısı.
 - `resolveDateRange(get, fallback)` — `?from=&to=` çözümünün **tek** tanımı: ortak ayrıştırıcı
   (`parseTransactionFilters`, #56), kısmi aralığın varsayılanla tamamlanması ve
   **birleştirmeden sonraki** ters aralık kontrolü. Panel, harcama dağılımı ve rapor aynı kodu

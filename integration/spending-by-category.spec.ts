@@ -411,11 +411,10 @@ test.describe("defaultSpendingRange()", () => {
    * Issue #134'ün kabul kriteri: sunucu/varsayılan referans UTC iken bile tenant'ın saat
    * diliminde farklı bir güne (ve burada farklı bir AYA) düşen bir an, doğru dönemi vermeli.
    *
-   * SEÇİLEN AN: `2026-01-01T00:30:00.000Z` — UTC'de zaten Ocak'ın ilk yarım saati. Ama
-   * Europe/Istanbul'da (+03:00) bu an `2026-01-01T03:30:00+03:00`dir — HÂLÂ Ocak. Tersini
-   * kanıtlayan an ise gece yarısından hemen ÖNCESİDİR: `2025-12-31T22:00:00.000Z` UTC'de Aralık
-   * 31'dir ama Europe/Istanbul'da `2026-01-01T01:00:00+03:00` — yani ORADA çoktan Ocak'tır.
-   * `currentMonthRange()` (eski, UTC "şimdi") bu anı YANLIŞ AYA (Aralık) koyardı.
+   * SEÇİLEN AN: `2025-12-31T22:00:00.000Z` — UTC'de hâlâ Aralık 31'dir ama Europe/Istanbul'da
+   * (+03:00) `2026-01-01T01:00:00+03:00`, yani ORADA çoktan Ocak'tır. Aynı anın UTC'de Aralık
+   * vermesi kontrol grubudur: iki dilim aynı anda farklı ay döndürmüyorsa test hiçbir şey
+   * kanıtlamaz. Eski `currentMonthRange()` (UTC "şimdi") bu anı YANLIŞ AYA (Aralık) koyardı.
    */
   test("tenant saat diliminde farklı bir aydaysa (Issue #134), UTC'nin AYINI DEĞİL tenant'ınkini kullanır", async () => {
     const utcLateDecember = new Date("2025-12-31T22:00:00.000Z");

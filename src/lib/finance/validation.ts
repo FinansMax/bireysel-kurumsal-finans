@@ -34,18 +34,31 @@ export function isValidCategoryType(value: unknown): value is CategoryType {
 }
 
 /**
- * Para birimi: ISO 4217 biçimi (3 büyük harf). Tam ISO listesi bir bağımlılık (veya elle
- * bakımı gereken 180 satırlık bir tablo) gerektirirdi; buradaki kontrol BİÇİMSELDİR ve
- * bilinçlidir — bkz. `prisma/schema.prisma`'daki `Account.currency` notu.
+ * Para birimi: GERÇEK bir ISO 4217 kodu — biçim (3 büyük harf) + platformun ICU listesi
+ * (`Intl.supportedValuesOf("currency")`). Issue #241.
+ *
+ * TEK KAYNAK: hesap, borç/alacak, tenant varsayılanı ve tahsilat (#165) bu fonksiyonu
+ * çağırır. Önceden hesap tarafı yalnızca biçimsel, tahsilat tarafı ICU listesiyle
+ * doğruluyordu; kullanıcı `"XYZ"` ile hesap açabiliyor ama o para biriminde ödeme planı
+ * kuramıyordu (#205'te kayda geçmiş tutarsızlık).
+ *
+ * NEDEN ELLE TUTULAN LİSTE DEĞİL: "tam ISO listesi bir bağımlılık gerektirir" gerekçesi yanlış
+ * çıktı — liste bağımlılıksız geliyor ve platformla birlikte güncelleniyor; IANA saat dilimleri
+ * için `tenant-time.ts`'teki duruşun aynısı. Biçim kontrolü yine de duruyor: ICU listesi
+ * büyük/küçük harf ve uzunluk konusunda bir söz vermez, bu fonksiyon verir.
+ *
+ * Mevcut kayıtlar: doğrulama yalnızca YAZMA anında çalışır; listede olmayan eski bir değer
+ * okunmaya devam eder, yalnızca yeniden yazılamaz. Karar ve gerekçe README'de (#241).
  */
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
+const ISO_4217_CODES: ReadonlySet<string> = new Set(Intl.supportedValuesOf("currency"));
 
 export function normalizeCurrency(value: string): string {
   return value.trim().toUpperCase();
 }
 
 export function isValidCurrency(currency: string): boolean {
-  return CURRENCY_PATTERN.test(currency);
+  return CURRENCY_PATTERN.test(currency) && ISO_4217_CODES.has(currency);
 }
 
 /**

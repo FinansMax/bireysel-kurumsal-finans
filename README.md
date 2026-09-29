@@ -3874,6 +3874,7 @@ sanmadığı eski kodların geçerli kalması bir arka kapı olurdu.
 - **ARAYÜZ YOK.** Bu issue API katmanını kapsıyor (kapsam listesinde UI maddesi yok; bu repo'da
   UI istenen issue'lar bunu "API + UI" diye yazar). Bugünkü giriş ekranı `totp` alanını
   **göndermiyor**, dolayısıyla 2FA uçtan uca **kullanılabilir değil** — ayrı bir issue gerekir.
+  *(Güncelleme: #229 ile kapandı — bkz. aşağıdaki "Arayüz" bölümü.)*
 - **QR kodu üretilmiyor.** `otpauth://` URI'si dönülüyor; onu QR'a çevirmek bir bağımlılık
   ister ve bu, açık onay gerektiren bir karardır (CLAUDE.md § 4). Kullanıcı bugün sırrı elle
   girebilir.
@@ -3883,3 +3884,34 @@ sanmadığı eski kodların geçerli kalması bir arka kapı olurdu.
   geçmek bunu çözer ve issue'da açıkça kapsam dışıdır.
 - **Tenant seviyesinde "2FA zorunlu" politikası yok** — issue'da kapsam dışı.
 - **SMS/e-posta OTP yok** — bilinçli: daha zayıf ve maliyetli.
+
+### Arayüz (Issue #229)
+
+**Kurulum — `/settings/security`.** Durum (açık mı, kaç kurtarma kodu kaldı) sunucu bileşeninde
+okunur; ayrı bir "durum" endpoint'i eklenmedi. Kurulum üç adımdır: `setup` → sır + kurtarma
+kodları gösterilir → kullanıcı **"kaydettim" onayı vermeden** doğrulama adımına geçemez →
+`confirm`. Kodlar ekranda "bir daha gösterilmeyecek" uyarısıyla, kopyala/indir (.txt, tarayıcıda
+Blob ile üretilir — sunucuya ikinci kez gitmez) seçenekleriyle gösterilir ve doğrulama adımında
+ekrandan kalkar.
+
+**Sır ve kodlar yalnızca bileşen state'inde yaşar.** `localStorage`/`sessionStorage`'a yazılmaz,
+URL'e konmaz (e2e bunu doğrular). Sayfa yenilenirse kaybolurlar; kurulum baştan başlar — bu,
+`setup`'ın her çağrıda yeni sır ürettiği API tasarımıyla tutarlı.
+
+**QR yok — bağımlılık kararı verilmedi.** Sır okunaklı dörtlü gruplar hâlinde gösterilir ve
+`otpauth://` URI'si bir **bağlantı** olarak verilir (mobilde authenticator'ı doğrudan açar).
+QR için bir kütüphane (ör. `qrcode`) CLAUDE.md §4 gereği açık onay bekliyor; onaylanırsa yalnızca
+bu bileşene eklenir.
+
+**Giriş ekranı — ikinci adım.** Sunucu `?code=totp_required|totp_invalid` döner
+(`src/lib/auth/config.ts`). Yalnızca bu iki değer ikinci adımı açar; `credentials` ve geri kalan
+her şey bugünkü genel mesaja düşer — **2FA'sız kullanıcının akışı birebir aynıdır** (e2e kontrol
+grubu). İkinci adımda e-posta ve şifre tekrar gönderilir: sunucu yarım kalmış bir giriş için
+ara token tutmaz. Yalnızca seçili faktör gönderilir; boş bir kurtarma kodu alanı göndermemek bir
+kodun gereksiz yere denenmesini önler. "Kurtarma kodu kullan" kod alanının hemen altında görünür
+bir düğmedir. "Kod yanlış" ile "kurtarma kodu kullanılmış" ayrıştırılmaz (invariant #7).
+
+**Kapatma mevcut şifre ister** (#193 gerekçesi); yanlış şifrede 2FA açık kalır (e2e).
+
+**Kalan risk:** kurtarma kodu azaldığında yeni kod üretmenin tek yolu 2FA'yı kapatıp yeniden
+açmaktır (ayrı bir "kodları yenile" ucu yok); ekran ≤2 kodda bunu söyler.

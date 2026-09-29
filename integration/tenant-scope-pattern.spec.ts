@@ -542,3 +542,35 @@ test.describe("Modül guard'ı — sıra ve yanıt invariant'ları", () => {
     expect(GUARD_SOURCE).toContain("context.tenant.id");
   });
 });
+
+/**
+ * Aynı koruma, `Notification` için (Issue #76). Bu modelde tenant scope'u GEREKLİ ama YETERLİ
+ * DEĞİL: her sorgu ayrıca `userId` taşımalı — aynı tenant'ın iki üyesi birbirinin bildirimini
+ * görmemeli.
+ */
+test.describe("Tenant scoping pattern koruması — notification.ts", () => {
+  const SOURCE = readFileSync(
+    path.join(__dirname, "..", "src", "lib", "notifications", "notification.ts"),
+    "utf-8",
+  );
+
+  test("tenant-scoped resource id'siyle sadece-id update/delete/findUnique kullanılmıyor", () => {
+    expect(SOURCE).not.toMatch(/\.notification\.update\(/);
+    expect(SOURCE).not.toMatch(/\.notification\.delete\(/);
+    expect(SOURCE).not.toMatch(/\.notification\.findUnique\(/);
+  });
+
+  test("İSTİSNASIZ her `where` tenantScoped() üzerinden geçiyor VE userId taşıyor", () => {
+    const whereUsages = SOURCE.split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("where:"));
+
+    // Test kendi kendini doğrular: list + updateMany + findFirst + membership = en az 4.
+    expect(whereUsages.length).toBeGreaterThanOrEqual(4);
+
+    for (const usage of whereUsages) {
+      expect(usage, "tenant filtresi olmayan sorgu").toContain("tenantScoped(");
+      expect(usage, "kullanıcı filtresi olmayan sorgu").toContain("userId");
+    }
+  });
+});

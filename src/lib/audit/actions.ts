@@ -51,6 +51,10 @@ export const AUDIT_ACTIONS = {
   TRANSACTION_CREATED: "TRANSACTION_CREATED",
   TRANSACTION_UPDATED: "TRANSACTION_UPDATED",
   TRANSACTION_DELETED: "TRANSACTION_DELETED",
+  // Toplu içe aktarma (Issue #83). Satır başına ayrı bir TRANSACTION_CREATED yazılmaz: 1000
+  // satırlık bir dosya denetim kaydını tek bir kullanıcı eyleminin kopyalarıyla doldururdu. Tek
+  // kayıt "kim, ne zaman, kaç işlem, hangi hesaplar" sorusunu cevaplar.
+  TRANSACTIONS_IMPORTED: "TRANSACTIONS_IMPORTED",
   // Borç/alacak yaşam döngüsü (Issue #70). Bu kayıtlar paranın kendisi DEĞİLDİR (hiçbir
   // bakiyeyi değiştirmezler) ama bir YÜKÜMLÜLÜĞÜ temsil ederler: "kapandı" işaretlenen bir
   // borcun kim tarafından ve ne zaman kapatıldığı, tutarının sonradan düşürülmesi kadar

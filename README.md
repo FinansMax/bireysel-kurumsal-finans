@@ -3883,3 +3883,46 @@ sanmadığı eski kodların geçerli kalması bir arka kapı olurdu.
   geçmek bunu çözer ve issue'da açıkça kapsam dışıdır.
 - **Tenant seviyesinde "2FA zorunlu" politikası yok** — issue'da kapsam dışı.
 - **SMS/e-posta OTP yok** — bilinçli: daha zayıf ve maliyetli.
+
+## İşlemleri CSV'den içe aktarma (Issue #83)
+
+`POST /api/tenants/[tenantId]/transactions/import` + `/transactions` ekranında yükleme formu.
+
+**Şablon = dışa aktarımın sütunları (#81).** Zorunlu: `type`, `amount`, `occurred_at`,
+`account_id`; isteğe bağlı: `description`, `category_id`. `id`, `created_at`, `updated_at`
+tanınır ama **yok sayılır** — kimliği ve zaman damgalarını sunucu üretir. Böylece dışa aktarılan
+dosya olduğu gibi geri yüklenebilir (aynı dosya iki kez yüklenirse işlemler iki kez kaydedilir:
+bu bir senkronizasyon değil, içe aktarmadır). **Bilinmeyen sütun hatadır** — yanlış yazılmış bir
+başlık verinin sessizce boş kaydedilmesi demekti; bir `tenant_id` sütunu da bu yüzden reddedilir,
+hiçbir satır tenant'ını kendisi seçemez.
+
+**Satır doğrulaması tek kaynaktan.** Alanlar `createTransaction()`'ın kullandığı aynı
+doğrulayıcılardan geçer (`validation.ts`); formdan kabul edilen bir tutar dosyadan reddedilmez.
+Dışa aktarımın formül kaçırması (`'=...`) içe aktarmada geri alınır; yalnızca o desen.
+
+**Geçerli satırlar tek transaction'da, hatalılar satır numarasıyla raporlanır** (issue'nun
+ifadesi). Referanslar (hesap/kategori bu tenant'ta mı, kategori türü uyuyor mu) önce satır bazında
+kontrol edilir; başka tenant'ın hesap id'si ile olmayan id aynı kodu alır (`account_not_found`,
+enumeration engeli). Yazım aşamasında referanslar transaction içinde yeniden doğrulanır; arada bir
+hesap silindiyse **tüm içe aktarma geri alınır** (409) — kısmi yazım olmaz. Hiçbir satır geçerli
+değilse 400 döner; "0 kayıt" başarı gibi gösterilmez.
+
+**Bakiye hesap başına tek kaydırma**: aynı hesaba düşen satırların etkisi Decimal olarak toplanır
+ve atomik `increment` hesap başına bir kez uygulanır.
+
+**Sınırlar:** gövde en fazla 512 KB (`Content-Length` gövde okunmadan, okunan metin ayrıca
+ölçülür → 413), en fazla 1000 satır, `Content-Type: text/csv` (değilse 415), rate limit 10/10dk
+(`policies.ts`). Yetki `MANAGE_TRANSACTIONS`: toplu yazma yeni bir yetenek değil, tek kayıt
+yeteneğinin hızlı yoludur.
+
+**Gövde düz CSV metni, multipart değil**: tek dosya için multipart ayrıştırması kazanç
+getirmeden ikinci bir girdi yüzeyi açardı. **CSV ayrıştırıcı elle yazıldı** (bağımlılık yok;
+`csv.ts` ile aynı gerekçe): alıntı, `""`, alan içi satır sonu, CRLF ve BOM desteklenir; ayraç
+yalnızca virgül — `;` ayraçlı dosya sütun sayısı hatası olarak raporlanır.
+
+**Audit:** içe aktarma başına tek `TRANSACTIONS_IMPORTED` kaydı (adet + hesap id'leri, tutar
+yok); satır başına `TRANSACTION_CREATED` yazılmaz.
+
+**Bilinen sınırlar:** hesap `account_id` ile verilir (ad ile eşleme yok; ekranda hesap
+kimlikleri listelenir); XLSX yok (issue'da kapsam dışı); satır numarası, alıntı içinde satır sonu
+olan dosyalarda tablo programının gösterdiğinden sapabilir.

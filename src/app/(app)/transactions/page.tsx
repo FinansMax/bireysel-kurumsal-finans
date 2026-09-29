@@ -27,6 +27,7 @@ import { PageHeader } from "@/components/ui/surfaces";
 import { Table, Tbody, Td, Th, Thead, TableScroll, Tr } from "@/components/ui/table";
 
 import { TransactionForm } from "./transaction-form";
+import { TransactionImportForm } from "./transaction-import-form";
 import { TransactionFiltersForm, type ActiveFilterValues } from "./transaction-filters-form";
 
 export const metadata: Metadata = {
@@ -487,6 +488,14 @@ export default async function TransactionsPage({
               >
                 Vazgeç
               </Link>
+            )}
+            {/* Toplu içe aktarma (Issue #83) — tek kayıt formuyla AYNI yetki koşulunda
+                gösterilir; asıl kontrol route'taki `requirePermission(MANAGE_TRANSACTIONS)`. */}
+            {!editingTransaction && (
+              <TransactionImportForm
+                tenantId={tenant.id}
+                accounts={accounts.map((account) => ({ id: account.id, name: account.name }))}
+              />
             )}
           </div>
         ))}

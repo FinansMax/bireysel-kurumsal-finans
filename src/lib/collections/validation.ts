@@ -1,33 +1,13 @@
 import { Prisma, PaymentMethod } from "@prisma/client";
 
+import { isValidCurrency, normalizeCurrency } from "@/lib/finance/validation";
+
 export type ValidationError = {
   field: string;
   message: string;
 };
 
 const MONEY_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d{1,4})?$/;
-/**
- * ISO 4217 kodları — platformun ICU verisinden, BAĞIMLILIK EKLEMEDEN (Issue #205 kararı).
- *
- * TUTARSIZLIK BİLİNİYOR: `Account.currency` bugün yalnızca BİÇİMSEL olarak doğrulanıyor
- * (üç büyük harf) ve `prisma/schema.prisma` bunu "tam ISO listesi bir bağımlılık gerektirir"
- * diye gerekçelendiriyor. O gerekçe artık geçerli değil: `Intl.supportedValuesOf("currency")`
- * listeyi bağımlılıksız veriyor ve liste tzdata gibi platformla birlikte güncelleniyor.
- *
- * KARAR — TAHSİLAT TARAFI GEVŞETİLMEDİ. Reddedilen alternatifler:
- *
- * - **Burayı biçimsel doğrulamaya indirmek:** çalışan ve daha SIKI bir kontrolü, yalnızca
- *   başka bir yerdeki daha zayıf kontrole benzesin diye zayıflatmak olurdu. Tutarlılık,
- *   doğruluğun önüne geçmez.
- * - **`Account` tarafını da ICU listesine çekmek:** DOĞRU yön, ama bu bir DAVRANIŞ
- *   değişikliğidir (bugün kabul edilen "XYZ" gibi kodlar reddedilmeye başlar) ve mevcut
- *   kayıtları etkileyebilir; #205'in kapsamı olan "yorum ve gerekçe" işinin içine sığmaz.
- *
- * Yön belli, adım ayrı: hizalama kendi issue'sunda yapılır ve şemadaki eskimiş gerekçe orada
- * güncellenir. Bu yorum, o adıma kadar tutarsızlığın SEBEBİNİ kayda geçirir — bilinmeyen bir
- * tutarsızlık ile kayda geçmiş bir tutarsızlık aynı şey değildir.
- */
-const ISO_4217_CODES = new Set(Intl.supportedValuesOf("currency"));
 
 function parseMoney(value: unknown, allowZero: boolean): { raw: string; decimal: Prisma.Decimal } | null {
   if (typeof value !== "string") return null;
@@ -83,8 +63,10 @@ export function validateCreatePaymentPlan(input: unknown): {
   }
 
   // currency
-  const currencyStr = typeof raw.currency === "string" ? raw.currency.trim().toUpperCase() : "";
-  if (!/^[A-Z]{3}$/.test(currencyStr) || !ISO_4217_CODES.has(currencyStr)) {
+  // Hesap tarafıyla AYNI kural (Issue #241): tek `isValidCurrency()`, iki katılık yok. Liste
+  // ve gerekçesi `src/lib/finance/validation.ts`'te.
+  const currencyStr = typeof raw.currency === "string" ? normalizeCurrency(raw.currency) : "";
+  if (!isValidCurrency(currencyStr)) {
     errors.push({ field: "currency", message: "Para birimi 3 harfli geçerli ISO 4217 kodu olmalıdır (ör. TRY, USD)." });
   }
 

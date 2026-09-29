@@ -281,7 +281,7 @@ test.describe("/accounts — yetki ve tenant durumu", () => {
 
     // İzin matrisi MEMBER'a VIEW_ACCOUNTS verir: liste görünür.
     await expect(page.getByRole("cell", { name: "Ortak Kasa", exact: true })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "42.5 TRY", exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "42,50 ₺", exact: true })).toBeVisible();
 
     // Ama yönetim formu HİÇ render edilmez.
     await expect(page.getByLabel("Hesap adı")).toHaveCount(0);

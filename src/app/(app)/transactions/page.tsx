@@ -7,6 +7,7 @@ import { listAccounts } from "@/lib/finance/account";
 import { listCategories } from "@/lib/finance/category";
 import { listTransactions } from "@/lib/finance/transaction";
 import { FILTER_ERRORS, parseTransactionFilters } from "@/lib/finance/transaction-filters";
+import { formatAmount, formatInstantDay, formatMoney } from "@/lib/format/locale";
 import { formatDateInTimeZone, todayInTimeZone } from "@/lib/time/tenant-time";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 
@@ -312,19 +313,22 @@ export default async function TransactionsPage({
                   : null;
 
                 const isIncome = transaction.type === "INCOME";
+                // Ekran okuyucu etiketleri de ekrandaki yazımla AYNI tutarı söylemeli (#197).
+                const amountLabel = account
+                  ? formatMoney(transaction.amount, account.currency)
+                  : formatAmount(transaction.amount);
 
                 return (
                   <Tr
                     key={transaction.id}
                     highlighted={transaction.id === editingTransaction?.id}
                   >
-                    {/* Tarih `YYYY-MM-DD` olarak, sunucunun yerel ayarına BAĞLI OLMADAN
-                        yazılır: `toLocaleDateString()` çıktıyı sunucunun saat dilimine ve
-                        locale'ine bağlardı — aynı kayıt geliştirme ve CI ortamında farklı
-                        görünebilirdi. Saat dilimi yönetimi bu üründe henüz hiç yok; ayrı bir
-                        issue'nun konusudur (bkz. README). */}
+                    {/* Tarih `GG.AA.YYYY` olarak, sunucunun yerel ayarına BAĞLI OLMADAN
+                        yazılır (#197): gün tenant'ın saat diliminde çözülür (#134), yazım
+                        `src/lib/format/locale.ts`'ten gelir. `toLocaleDateString()` çıktıyı
+                        sunucunun saat dilimine ve locale'ine bağlardı. */}
                     <Td className="tabular-nums whitespace-nowrap">
-                      {formatDateInTimeZone(transaction.occurredAt, tenant.timeZone)}
+                      {formatInstantDay(transaction.occurredAt, tenant.timeZone)}
                     </Td>
                     <Td emphasis>
                       <span className="flex items-center gap-2.5">
@@ -352,10 +356,10 @@ export default async function TransactionsPage({
                         {TYPE_LABELS[transaction.type] ?? transaction.type}
                       </Badge>
                     </Td>
-                    {/* TUTAR HAM STRING OLARAK GÖSTERİLİR, `Intl.NumberFormat` ile DEĞİL:
-                        biçimlendirme değeri önce `Number`'a çevirmeyi gerektirir ve bu, para
-                        için yasak olan kayan nokta dönüşümünü (invariant #10) arayüz
-                        katmanından geri getirirdi — hesap ekranındaki (#47) aynı karar. */}
+                    {/* TUTAR `Intl.NumberFormat` ile BİÇİMLENMEZ: değeri önce `Number`'a
+                        çevirmeyi gerektirir ve bu, para için yasak olan kayan nokta dönüşümünü
+                        (invariant #10) arayüz katmanından geri getirirdi. `Money` Türkçe
+                        yazımı string üzerinde kurar (#197). */}
                     <Td align="right">
                       <Money
                         value={transaction.amount}
@@ -373,15 +377,15 @@ export default async function TransactionsPage({
                           >
                             <span aria-hidden="true">Düzenle</span>
                             <span className="sr-only">
-                              {formatDateInTimeZone(transaction.occurredAt, tenant.timeZone)} tarihli{" "}
-                              {transaction.amount} tutarlı işlemi düzenle
+                              {formatInstantDay(transaction.occurredAt, tenant.timeZone)} tarihli{" "}
+                              {amountLabel} tutarlı işlemi düzenle
                             </span>
                           </Link>
 
                           <DeleteWithConfirm
                             endpoint={`/api/tenants/${tenant.id}/transactions/${transaction.id}`}
-                            itemLabel={`${formatDateInTimeZone(transaction.occurredAt, tenant.timeZone)} tarihli ${transaction.amount} tutarlı işlemi sil`}
-                            confirmQuestion={`${transaction.amount} tutarlı bu işlemi silmek istiyor musunuz?`}
+                            itemLabel={`${formatInstantDay(transaction.occurredAt, tenant.timeZone)} tarihli ${amountLabel} tutarlı işlemi sil`}
+                            confirmQuestion={`${amountLabel} tutarlı bu işlemi silmek istiyor musunuz?`}
                             /* Silme, hesabın BAKİYESİNİ değiştirir (#53: etki geri alınır).
                                Kullanıcı bunu onaylamadan ÖNCE görmelidir — diğer iki ekranda
                                silmenin parasal sonucu yoktur, burada vardır. */

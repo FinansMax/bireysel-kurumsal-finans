@@ -183,9 +183,9 @@ test.describe("Rapor ekranı — gerçek veriyle", () => {
 
     // Bölüm ADLANDIRILMIŞ landmark: aynı tutar başka bir para biriminin bölümünde de geçebilir.
     const block = page.getByRole("region", { name: "TRY raporu" });
-    await expect(block.getByText("+1000 TRY")).toBeVisible();
-    await expect(block.getByText("-400 TRY")).toBeVisible();
-    await expect(block.getByText("+600 TRY")).toBeVisible();
+    await expect(block.getByText("+1.000,00 ₺")).toBeVisible();
+    await expect(block.getByText("-400,00 ₺")).toBeVisible();
+    await expect(block.getByText("+600,00 ₺")).toBeVisible();
     await expect(block.getByText("İşlem sayısı")).toBeVisible();
 
     // Kategori payları KENDİ YÖNÜNE göre: gelir tarafı tek kategori → %100 (genel toplam olan
@@ -290,7 +290,8 @@ test.describe("Rapor ekranı — çok para birimli", () => {
     await expect(tryBlock.getByText("TL Kasa")).toBeVisible();
     await expect(tryBlock.getByText("USD Kasa")).toHaveCount(0);
 
-    // KRİTİK NEGATİF İDDİA: birleştirilmiş bir toplam (1040) hiçbir yerde olmamalı.
-    await expect(page.getByText("1040")).toHaveCount(0);
+    // KRİTİK NEGATİF İDDİA: birleştirilmiş bir toplam (1040) hiçbir yerde olmamalı. Aranan
+    // metin EKRANDAKİ yazımdır (#197) — "1040" araması yeni biçimde hiç eşleşmez.
+    await expect(page.getByText("1.040,00")).toHaveCount(0);
   });
 });

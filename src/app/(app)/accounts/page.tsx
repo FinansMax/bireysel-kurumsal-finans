@@ -140,11 +140,10 @@ export default async function AccountsPage({
                       ) : null}
                     </span>
                   </Td>
-                  {/* BAKİYE HAM STRING OLARAK GÖSTERİLİR, `Intl.NumberFormat` ile DEĞİL:
-                      biçimlendirme değeri önce `Number`'a çevirmeyi gerektirir ve bu, para
-                      için yasak olan kayan nokta dönüşümünü (invariant #10) arayüz katmanından
-                      geri getirirdi. Yerelleştirilmiş gösterim, string üzerinde çalışan ayrı
-                      bir yardımcı ile ele alınmalıdır — bu issue'nun kapsamı değil.
+                  {/* BAKİYE `Intl.NumberFormat` ile BİÇİMLENMEZ: değeri önce `Number`'a
+                      çevirmeyi gerektirir ve bu, para için yasak olan kayan nokta dönüşümünü
+                      (invariant #10) arayüz katmanından geri getirirdi. Türkçe yazım
+                      (`1.234,56 ₺`) `Money` içinde, string üzerinde kurulur (#197).
 
                       Hesap bakiyesinde İŞARET (+/−) EKLENMEZ: bakiye bir yön değil bir
                       durumdur; eksiye düşmüşse değerin kendisi zaten "-" ile başlar. */}

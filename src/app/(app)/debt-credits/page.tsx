@@ -11,6 +11,7 @@ import { Table, Tbody, Td, Th, Thead, TableScroll, Tr } from "@/components/ui/ta
 import { requirePageUser } from "@/lib/auth/page-guard";
 import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { listDebtCredits, type DebtCreditView } from "@/lib/finance/debt-credit";
+import { formatDay } from "@/lib/format/locale";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
 import { startOfTodayInTimeZone } from "@/lib/time/tenant-time";
 
@@ -261,7 +262,9 @@ function DueDateCell({ record, todayStart }: { record: DebtCreditView; todayStar
 
   return (
     <span className="flex flex-wrap items-center gap-1.5">
-      <span className="tabular-nums">{iso}</span>
+      {/* Gösterim `GG.AA.YYYY` (#197) — string dönüşümü, gün kaymaz. Düzenleme formu ise
+          ISO değeri alır: `<input type="date">` başka biçim kabul etmez. */}
+      <span className="tabular-nums">{formatDay(iso)}</span>
       {overdue ? <Badge tone="danger">Gecikmiş</Badge> : null}
     </span>
   );

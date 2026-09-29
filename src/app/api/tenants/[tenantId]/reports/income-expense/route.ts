@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { requirePermission } from "@/lib/authz/authorize";
 import { hasAllPermissions, PERMISSIONS } from "@/lib/authz/permissions";
-import { currentMonthRange, resolveDateRange } from "@/lib/finance/aggregation";
+import { currentMonthRangeInTimeZone, resolveDateRange } from "@/lib/finance/aggregation";
 import { getIncomeExpenseReport } from "@/lib/finance/income-expense-report";
 import { isValidId } from "@/lib/tenants/validation";
 
@@ -27,18 +27,6 @@ export async function GET(request: Request, { params }: RouteParams) {
     return NextResponse.json({ error: "Invalid tenant id" }, { status: 400 });
   }
 
-  // `getAll()` kullanılır, `get()` DEĞİL: `get()` tekrarlanan parametrede sessizce ilk değeri
-  // döndürür ve ayrıştırıcının "tekrar hatadır" kontrolü hiç tetiklenmezdi.
-  const search = new URL(request.url).searchParams;
-  const parsed = resolveDateRange((key) => {
-    const all = search.getAll(key);
-    if (all.length === 0) return null;
-    return all.length === 1 ? all[0] : all;
-  }, currentMonthRange());
-  if (!parsed.ok) {
-    return NextResponse.json({ error: parsed.error }, { status: 400 });
-  }
-
   const { context, response } = await requirePermission(PERMISSIONS.VIEW_TRANSACTIONS, tenantId);
   if (!context) {
     return response;
@@ -52,6 +40,22 @@ export async function GET(request: Request, { params }: RouteParams) {
     ])
   ) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // Aralık çözümü authz'DEN SONRA (Issue #134): varsayılan dönem tenant'ın saat dilimine göre
+  // hesaplanır (`currentMonthRangeInTimeZone`) ve bu, doğrulanmış `context.tenant`'tan gelir —
+  // `requirePermission()` çözülmeden önce güvenilir bir saat dilimi bilgisi YOKTUR.
+  //
+  // `getAll()` kullanılır, `get()` DEĞİL: `get()` tekrarlanan parametrede sessizce ilk değeri
+  // döndürür ve ayrıştırıcının "tekrar hatadır" kontrolü hiç tetiklenmezdi.
+  const search = new URL(request.url).searchParams;
+  const parsed = resolveDateRange((key) => {
+    const all = search.getAll(key);
+    if (all.length === 0) return null;
+    return all.length === 1 ? all[0] : all;
+  }, currentMonthRangeInTimeZone(context.tenant.timeZone));
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
   // Scope'un kaynağı `context.tenant.id` — URL parametresi DEĞİL (Issue #13).

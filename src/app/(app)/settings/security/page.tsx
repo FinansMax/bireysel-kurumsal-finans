@@ -2,8 +2,11 @@ import type { Metadata } from "next";
 
 import { PageHeader, Panel } from "@/components/ui/surfaces";
 import { requirePageUser } from "@/lib/auth/page-guard";
+import { countUnusedRecoveryCodes } from "@/lib/auth/recovery-codes";
+import { getSecondFactorStatus } from "@/lib/auth/totp-verification";
 
 import { RevokeSessionsButton } from "./revoke-sessions-button";
+import { TwoFactorSettings } from "./two-factor-settings";
 
 export const metadata: Metadata = {
   title: "Güvenlik",
@@ -23,6 +26,13 @@ export const metadata: Metadata = {
  */
 export default async function SecuritySettingsPage() {
   const user = await requirePageUser();
+
+  // 2FA durumu SUNUCUDA okunur (#229): ayrı bir "durum" endpoint'i gerekmedi. Yalnızca iki
+  // bilgi iner — açık mı ve kaç kurtarma kodu kaldı; sır ve kod hash'leri asla.
+  const [secondFactor, remainingRecoveryCodes] = await Promise.all([
+    getSecondFactorStatus(user.id),
+    countUnusedRecoveryCodes(user.id),
+  ]);
 
   return (
     <section className="space-y-8">
@@ -55,6 +65,21 @@ export default async function SecuritySettingsPage() {
         </div>
 
         <RevokeSessionsButton />
+      </Panel>
+
+      <Panel className="space-y-4 p-5">
+        <div className="space-y-1.5">
+          <h2 className="text-sm font-semibold text-strong">İki faktörlü doğrulama</h2>
+          <p className="text-sm text-pretty text-muted">
+            Girişte şifrenize ek olarak kimlik doğrulama uygulamanızdaki kodu ister. Şifreniz
+            ele geçirilse bile hesabınıza bu kod olmadan girilemez.
+          </p>
+        </div>
+
+        <TwoFactorSettings
+          enabled={secondFactor.required}
+          remainingRecoveryCodes={remainingRecoveryCodes}
+        />
       </Panel>
     </section>
   );

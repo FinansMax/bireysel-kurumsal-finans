@@ -34,12 +34,30 @@ const INVALID_CREDENTIALS_MESSAGE = "E-posta veya şifre hatalı.";
 // dene" anlamına gelir. Ayrıştırılamamalarının teknik nedeni aşağıda `catch` bloğunda.
 const UNAVAILABLE_MESSAGE = "Giriş yapılamadı. Lütfen biraz sonra tekrar deneyin.";
 
+// İkinci faktör (Issue #229). "Kod yanlış" ile "kurtarma kodu zaten kullanılmış" AYRIŞTIRILMAZ
+// (invariant #7) — sunucu da ayırmıyor (`totp_invalid`), ekran da ayırmaz.
+const INVALID_SECOND_FACTOR_MESSAGE = "Doğrulama kodu geçersiz. Lütfen tekrar deneyin.";
+
+/**
+ * Sunucunun `CredentialsSignin` alt sınıfları `code` alanını yanıt URL'sine yazar
+ * (`src/lib/auth/config.ts`). Yalnızca bu iki değer ikinci adımı açar; geri kalan her şey —
+ * `credentials` dahil — bugünkü genel hata mesajına düşer. Bu, 2FA'sız kullanıcının akışını
+ * BİREBİR korur (#229 teknik gereksinimi).
+ *
+ * `totp_required` bir sır sızdırmaz: sunucu bu kodu YALNIZCA şifre doğruysa döndürür.
+ */
+type SecondFactorMode = "totp" | "recovery";
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // `null`: ikinci adım yok (2FA'sız kullanıcı ya da henüz şifre gönderilmedi).
+  const [secondFactor, setSecondFactor] = useState<SecondFactorMode | null>(null);
+  const [totp, setTotp] = useState("");
+  const [recoveryCode, setRecoveryCode] = useState("");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -47,9 +65,27 @@ export default function LoginPage() {
     setPending(true);
 
     try {
-      const result = await signIn("credentials", { email, password, redirect: false });
+      // İkinci adımda e-posta ve şifre TEKRAR gönderilir: sunucu yarım kalmış bir giriş için
+      // durum tutmaz (ara bir "şifre doğrulandı" token'ı yok), her istek tam kanıtı taşır.
+      // Yalnızca SEÇİLİ faktör gönderilir — boş alanı göndermemek, sunucunun iki yolu da
+      // denemesini (ve bir kurtarma kodunu gereksiz yere tüketmeyi) önler.
+      const result = await signIn("credentials", {
+        email,
+        password,
+        ...(secondFactor === "totp" ? { totp } : {}),
+        ...(secondFactor === "recovery" ? { recoveryCode } : {}),
+        redirect: false,
+      });
 
       if (!result || result.error) {
+        if (result?.code === "totp_required") {
+          setSecondFactor((current) => current ?? "totp");
+          return;
+        }
+        if (result?.code === "totp_invalid") {
+          setError(INVALID_SECOND_FACTOR_MESSAGE);
+          return;
+        }
         setError(INVALID_CREDENTIALS_MESSAGE);
         return;
       }
@@ -101,6 +137,49 @@ export default function LoginPage() {
           onChange={setPassword}
           disabled={pending}
         />
+
+        {secondFactor === "totp" ? (
+          <TextField
+            id="totp"
+            label="Doğrulama kodu"
+            type="text"
+            // `one-time-code`: mobil klavyeler SMS/uygulama kodunu önerebilir.
+            autoComplete="one-time-code"
+            value={totp}
+            onChange={setTotp}
+            disabled={pending}
+            hint="Kimlik doğrulama uygulamanızdaki 6 haneli kod."
+          />
+        ) : null}
+
+        {secondFactor === "recovery" ? (
+          <TextField
+            id="recoveryCode"
+            label="Kurtarma kodu"
+            type="text"
+            autoComplete="off"
+            value={recoveryCode}
+            onChange={setRecoveryCode}
+            disabled={pending}
+            hint="2FA kurulumunda kaydettiğiniz kodlardan biri. Her kod yalnızca bir kez kullanılır."
+          />
+        ) : null}
+
+        {/* Telefonunu kaybeden kullanıcının TEK yolu budur; gizli bir bağlantı değil, kod
+            alanının hemen altında görünür bir düğmedir (#229). */}
+        {secondFactor ? (
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setSecondFactor(secondFactor === "totp" ? "recovery" : "totp");
+            }}
+            disabled={pending}
+            className="text-sm font-medium text-brand-600 transition-colors duration-150 ease-out-soft hover:text-brand-700 disabled:opacity-60 dark:text-brand-300"
+          >
+            {secondFactor === "totp" ? "Kurtarma kodu kullan" : "Doğrulama kodu kullan"}
+          </button>
+        ) : null}
 
         <FormError message={error} />
 

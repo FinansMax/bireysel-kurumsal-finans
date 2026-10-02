@@ -3298,6 +3298,39 @@ desen).
 - Var olan tenant'lara toplu seed basan CLI/migration script'i.
 - Seed'in kullanıcı tarafından "sıfırla" ile yeniden çalıştırılması.
 
+## Uygulama içi bildirimler — altyapı (Issue #76)
+
+`Notification` modeli (`tenantId`, `userId`, `message`, `readAt?`, `createdAt`) ve iki endpoint:
+`GET /api/tenants/[tenantId]/notifications` (`?unread=true` opsiyonel) ve
+`PATCH /api/tenants/[tenantId]/notifications/[notificationId]/read`. Bildirim **üreten** olaylar
+(vade hatırlatma vb.) kapsam dışıdır; onlar `createNotification()`'ı sunucu tarafında çağırır.
+
+**İki katmanlı sahiplik.** Tenant scope'u gerekli ama yeterli değil: aynı tenant'ın iki üyesi
+birbirinin bildirimini görmemeli — OWNER dahil. Her sorgu `tenantScoped()` + `userId` taşır;
+`integration/tenant-scope-pattern.spec.ts` her `where`'de ikisini birden zorlar.
+
+**Matrise yeni izin eklenmedi.** Yetki `VIEW_TENANT` (üyelik); asıl kısıt sorgudadır
+(`userId = context.user.id`). Ayrı bir `VIEW_NOTIFICATIONS` her rolde aynı değeri taşıyan ve
+hiçbir şeyi ayırt etmeyen bir satır olurdu. Okundu işareti bir "görüntüleme" izniyle yazma
+yapar: değişen şey tenant verisi değil, kullanıcının kendi kaydıdır.
+
+**Başkasının bildirimi 404'tür**, var olmayan id ile aynı gövdeyle (enumeration engeli).
+
+**Okundu işareti idempotent ve atomik.** Koşullu `updateMany` (`readAt: null`) — eşzamanlı iki
+istekte yalnızca biri yazar, ilk okunma anı korunur. Gövde yoktur; zamanı sunucu belirler.
+GET listelemek bildirimi okundu işaretlemez (invariant #4).
+
+**Audit log yazılmaz.** Okundu işareti kullanıcının kendi arayüz durumudur; her tıklamayı
+denetim kaydına yazmak #188'in küçültmeye çalıştığı tabloyu gürültüyle doldururdu.
+
+**Bildirim gönderen HTTP endpoint'i yok.** Kullanıcıdan kullanıcıya bildirim bir spam/oltalama
+yüzeyi olurdu ve istenmedi. `createNotification()` alıcının tenant üyesi olduğunu doğrular.
+Mesaj düz metindir (HTML değil), 1–500 karakter.
+
+**Bilinen sınırlar:** liste en yeni 50 kayıtla sınırlı, sayfalama yok; saklama/temizleme
+politikası yok (#188'in deseni gerektiğinde uygulanır); tenant dışa aktarımına (#194) dahil
+değil; arayüz yok.
+
 ## Güvenlik kararı: bağımlılık taraması tek başına yetmez
 
 Next.js **16.3.3**, iki **Critical** açığı kapatan bir yama sürümüdür:

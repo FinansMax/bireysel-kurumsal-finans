@@ -9,6 +9,8 @@ import {
   listAccounts,
   updateAccount,
 } from "../src/lib/finance/account";
+import { validateCreatePaymentPlan } from "../src/lib/collections/validation";
+import { isValidCurrency } from "../src/lib/finance/validation";
 
 /**
  * `Account` iş kuralları — gerçek DB'ye karşı, HTTP olmadan (Issue #46).
@@ -137,6 +139,8 @@ test.describe("createAccount() — doğrulama", () => {
     { label: "tür eksik", input: { type: undefined } },
     { label: "para birimi 3 harf değil", input: { currency: "TRYY" } },
     { label: "para birimi rakam içeriyor", input: { currency: "TR1" } },
+    // Biçimce geçerli ama ISO 4217'de YOK (Issue #241): önceden kabul ediliyordu.
+    { label: "para birimi ISO 4217 listesinde yok", input: { currency: "XYZ" } },
     { label: "bakiye number (para asla number değildir)", input: { balance: 100.5 } },
     { label: "bakiye null", input: { balance: null } },
     { label: "bakiye 4'ten fazla ondalık", input: { balance: "10.12345" } },
@@ -410,5 +414,87 @@ test.describe("deleteAccount()", () => {
 
     const result = await deleteAccount(tenantId, created.account.id, actorId);
     expect(result.ok).toBe(true);
+  });
+});
+
+
+/**
+ * Issue #241: hesap ve tahsilat AYNI para birimi kuralını kullanır. Önceden hesap `"XYZ"`'yi
+ * kabul edip ödeme planı reddediyordu — kullanıcı açtığı hesabın para biriminde plan
+ * kuramıyordu.
+ */
+test.describe("para birimi — hesap ve tahsilat tek kural (Issue #241)", () => {
+  const planInput = (currency: string) => ({
+    dealId: "deal-1",
+    totalAmount: "100.00",
+    currency,
+    method: "CASH",
+    downPayment: "0",
+    installmentCount: 1,
+    firstDueDate: "2026-10-01",
+    intervalMonths: 1,
+  });
+
+  const currencyErrors = (currency: string) => {
+    const result = validateCreatePaymentPlan(planInput(currency));
+    return result.valid ? [] : result.errors.filter((error) => error.field === "currency");
+  };
+
+  test("ISO listesinde olmayan kod İKİ tarafta da reddediliyor", async () => {
+    const result = await createAccount(await createTenant(), await createActor(), validInput({ currency: "XYZ" }));
+    expect(result.ok).toBe(false);
+    expect(isValidCurrency("XYZ")).toBe(false);
+    expect(currencyErrors("XYZ")).toHaveLength(1);
+  });
+
+  // KONTROL GRUBU: gerçek kodlar iki tarafta da geçiyor — kural "her şeyi reddet"e dönmedi.
+  for (const code of ["TRY", "USD", "EUR"]) {
+    test(`${code} İKİ tarafta da kabul ediliyor (kontrol grubu)`, async () => {
+      const result = await createAccount(await createTenant(), await createActor(), validInput({ currency: code }));
+      expect(result.ok).toBe(true);
+      expect(currencyErrors(code)).toHaveLength(0);
+    });
+  }
+
+  test("güncellemede de ISO listesinde olmayan kod reddediliyor ve değer DEĞİŞMİYOR", async () => {
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+    const created = await createAccount(tenantId, actorId, validInput({ currency: "TRY" }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const result = await updateAccount(tenantId, created.account.id, actorId, { currency: "XYZ" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(400);
+
+    const stored = await prisma.account.findFirst({
+      where: { id: created.account.id, tenantId },
+      select: { currency: true },
+    });
+    expect(stored?.currency).toBe("TRY");
+  });
+
+  /**
+   * Mevcut kayıtlar kararı (README, #241): doğrulama yalnızca YAZMA anında çalışır. Kural
+   * sıkılaşmadan önce yazılmış `"XYZ"`'li bir hesap okunmaya ve para birimine dokunmayan
+   * güncellemelere açık kalmalı — yoksa kural değişikliği mevcut veriyi kilitlerdi.
+   */
+  test("kural öncesinden kalma geçersiz kodlu hesap okunabiliyor ve adı güncellenebiliyor", async () => {
+    const tenantId = await createTenant();
+    const actorId = await createActor();
+    // Doğrulamayı atlayarak "eski" bir kaydı taklit ediyoruz — servis bunu artık yazmaz.
+    const legacy = await prisma.account.create({
+      data: { tenantId, name: `Eski ${randomUUID()}`, type: "BANK", currency: "XYZ" },
+      select: { id: true },
+    });
+
+    const listed = await listAccounts(tenantId);
+    expect(listed.find((account) => account.id === legacy.id)?.currency).toBe("XYZ");
+
+    const renamed = await updateAccount(tenantId, legacy.id, actorId, { name: `Yeni ${randomUUID()}` });
+    expect(renamed.ok).toBe(true);
+    if (!renamed.ok) return;
+    expect(renamed.account.currency).toBe("XYZ");
   });
 });

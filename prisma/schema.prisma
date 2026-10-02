@@ -192,9 +192,9 @@ model Account {
   bankCode String?
 
   // Para birimi tutardan AYRI bir alandır (aynı invariant): ISO 4217 kodu, ör. "TRY", "USD".
-  // Tam ISO listesi bir bağımlılık gerektireceği için doğrulama biçimseldir (3 büyük harf);
-  // gerçek dünyada geçersiz bir kodun zararı, yanlış bir kur dönüşümü DEĞİL, yalnızca
-  // etiketin anlamsız olmasıdır — dönüşüm/çoklu kur bu issue'nun kapsamı dışıdır.
+  // Doğrulama uygulama katmanında, platformun ICU listesiyle (`Intl.supportedValuesOf`,
+  // bağımlılıksız) yapılır — tahsilatla AYNI kural, `isValidCurrency()` (Issue #241). DB
+  // kısıtı yok: liste platformla güncellenir, CHECK constraint'e gömülürse eskir.
   currency String
 
   createdAt DateTime @default(now())

@@ -2325,6 +2325,36 @@ tutarsızlık ile kayda geçmiş bir tutarsızlık aynı şey değildir.
 bir etkisi yok (para birimi ekranlarda seçim listesinden gelmiyor, elle yazılıyor ve pratikte
 `TRY` kullanılıyor), ama hizalama yapılana kadar bu fark duruyor.
 
+### Kapanış: tek kural (Issue #241)
+
+Tutarsızlık **kapandı** — yukarıdaki tablo tarihsel kayıttır. `src/lib/finance/validation.ts`'teki
+`isValidCurrency()` artık biçim (3 büyük harf) **ve** ICU listesini (`Intl.supportedValuesOf`)
+birlikte uygular; hesap, borç/alacak, tenant varsayılan para birimi (#86) ve tahsilat (#165)
+**aynı** fonksiyonu çağırır. Tahsilattaki ayrı liste kaldırıldı; şemadaki "bağımlılık
+gerektirir" gerekçesi güncellendi.
+
+**Reddedilen alternatif — `isValidCurrencyCode()` diye ayrı bir modül:** yeni bir soyutlama
+açmak yerine var olan `isValidCurrency()` sıkılaştırıldı. Zaten dört çağıranın ortak noktasıydı;
+yeni bir ad, eski adın gevşek kalıp kalmadığı sorusunu doğururdu.
+
+**Mevcut kayıtlar — karar: (a) yalnızca yeni yazımlarda sıkı doğrulama.** Doğrulama yazma
+anında çalışır; ICU listesinde olmayan eski bir `currency` okunmaya ve para birimine
+dokunmayan güncellemelere (ör. hesap adı) açık kalır, yalnızca **yeniden yazılamaz**. Veri
+düzeltme migration'ı (b) reddedildi: hangi kodun neye çevrileceğini tahmin etmek, bir etiketi
+yanlış bir para birimine sessizce dönüştürmek olurdu. Uyarı dönemi (c) gereksiz: (a) zaten
+mevcut veriyi kilitlemiyor. `integration/account.spec.ts` bunu doğrudan kanıtlar.
+
+**Ölçüm:** üretim verisine bu oturumdan erişim yok; lokal DB'de listede olmayan kod yok.
+Üretimde etkiyi görmek için dağıtımdan önce şu sorgu çalıştırılmalı ve sonuç buraya
+eklenmeli (sonuç ne olursa olsun (a) kararı veriyi bozmaz; yalnızca kaç kaydın "düzenlemede
+para birimi seçilmeli" durumuna düşeceğini söyler):
+
+```sql
+SELECT currency, count(*) FROM "Account" GROUP BY currency ORDER BY 2 DESC;
+SELECT currency, count(*) FROM "DebtCredit" GROUP BY currency ORDER BY 2 DESC;
+SELECT "defaultCurrency", count(*) FROM "Tenant" GROUP BY 1 ORDER BY 2 DESC;
+```
+
 ## Modül sistemi — çekirdek (Issue #151)
 
 Ürünü "ham çekirdek + müşteriye göre açılan modüller" hâline getiren temel.

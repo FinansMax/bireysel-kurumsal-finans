@@ -70,6 +70,7 @@ model User {
   recoveryCodes           UserRecoveryCode[]
   sentInvitations         TenantInvitation[]       @relation("InvitationInviter")
   auditLogs               AuditLog[]
+  notifications           Notification[]
 }
 
 model Tenant {
@@ -113,6 +114,7 @@ model Tenant {
   paymentInstallments PaymentInstallment[]
   cheques             Cheque[]
   dataExports         TenantDataExport[]
+  notifications       Notification[]
 }
 
 /// Bir tenant'ta bir modülün açık olup olmadığı (Issue #151).
@@ -709,4 +711,33 @@ model Cheque {
 
   @@index([tenantId])
   @@index([installmentId])
+}
+
+// Uygulama içi bildirim (Issue #76). Bu issue yalnızca ALTYAPIDIR: bildirim ÜRETEN olaylar
+// (vade hatırlatma vb.) ilgili feature issue'larında eklenir.
+//
+// HEM TENANT'A HEM KULLANICIYA AİTTİR. Tenant scope'u tek başına yetmez: aynı tenant'ın iki
+// üyesi birbirinin bildirimini görmemeli. Her sorgu `tenantScoped()` + `userId` taşır.
+//
+// `readAt` bir boolean DEĞİL, zamandır: "ne zaman okundu" sorusunun cevabı ücretsiz gelir ve
+// okunmamış filtresi `readAt: null` ile aynı kalır.
+model Notification {
+  id String @id @default(cuid())
+
+  // Düz metin; HTML/markdown DEĞİL. Arayüz bunu metin olarak basar — üreticiye güvenmek
+  // zorunda kalınmaz. Uzunluk servis katmanında sınırlanır (1-500).
+  message String
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Liste daima "bu tenant'ta bu kullanıcının bildirimleri, en yeni önce"dir; bileşik index
+  // filtreyi ve sıralamayı birlikte karşılar.
+  @@index([tenantId, userId, createdAt])
 }

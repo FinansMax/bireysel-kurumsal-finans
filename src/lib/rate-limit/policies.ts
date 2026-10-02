@@ -88,6 +88,11 @@ export const RATE_LIMIT_POLICIES = {
   // bir OWNER oturumuyla diski doldurmanin ve ayni veriyi tekrar tekrar disariya tasimanin
   // yolu olurdu. 2, gercek bir tasima ihtiyacini fazlasiyla karsilar.
   DATA_EXPORT: { limit: 2, windowMs: 60 * MINUTES },
+  // TRANSACTION_IMPORT 10/10dk (Issue #83): tek istek 1000 satıra kadar yazar ve bakiyeleri
+  // kaydırır — tek bir form kaydından yüzlerce kat pahalı. Meşru kullanım (bir-iki dosya, hata
+  // düzeltip yeniden deneme) bu sınırın çok altındadır; sınırsız bırakmak çalınmış bir oturumla
+  // tabloyu şişirmenin en ucuz yolu olurdu.
+  TRANSACTION_IMPORT: { limit: 10, windowMs: 10 * MINUTES },
 } as const satisfies Record<string, RateLimitPolicy>;
 
 /**
@@ -109,4 +114,5 @@ export const RATE_LIMIT_BUCKETS = {
   RESEND_VERIFICATION: "auth:resend-verification",
   MAINTENANCE: "maintenance",
   DATA_EXPORT: "tenant:data-export",
+  TRANSACTION_IMPORT: "transactions:import",
 } as const;

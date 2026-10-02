@@ -414,6 +414,8 @@ test.describe("/transactions — yetki ve kurulum durumu", () => {
 
     // Ama yönetim formu HİÇ render edilmez (MANAGE_TRANSACTIONS yok).
     await expect(createForm(page)).toHaveCount(0);
+    // İçe aktarma formu da (Issue #83) — aynı yetki koşulu.
+    await expect(page.getByRole("form", { name: "CSV'den içe aktar" })).toHaveCount(0);
 
     // Asıl kontrol arayüzde değil backend'de: form baypas edilirse 403 gelir ve bakiye
     // değişmez.
@@ -1157,5 +1159,67 @@ test.describe("/transactions — CSV dışa aktarma (Issue #81)", () => {
     const response = await page.request.get((await exportLink.getAttribute("href"))!);
     expect(response.status()).toBe(200);
     expect(await response.text()).toContain("Ortak harcama");
+  });
+});
+
+test.describe("/transactions — CSV içe aktarma (Issue #83)", () => {
+  function importForm(page: Page) {
+    return page.getByRole("form", { name: "CSV'den içe aktar" });
+  }
+
+  test("dosya yükleniyor: geçerli satırlar kaydediliyor, hatalı satır numarasıyla gösteriliyor, BAKİYE kayıyor", async ({
+    page,
+  }) => {
+    await signUpAndSignIn(page, "transactions-import");
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Ithalat Kasasi", "100");
+
+    const csv = [
+      "type,amount,description,occurred_at,account_id",
+      `INCOME,40,Ice aktarilan gelir,2026-03-01,${accountId}`,
+      `TRANSFER,5,Gecersiz satir,2026-03-01,${accountId}`,
+      `EXPENSE,15,Ice aktarilan gider,2026-03-02,${accountId}`,
+    ].join("\n");
+
+    await page.goto("/transactions");
+    await importForm(page).getByLabel("CSV dosyası").setInputFiles({
+      name: "islemler.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from(csv, "utf8"),
+    });
+    await importForm(page).getByRole("button", { name: "İçe aktar" }).click();
+
+    await expect(importForm(page).getByRole("status")).toHaveText("2 işlem içe aktarıldı.", {
+      timeout: ROW_TIMEOUT_MS,
+    });
+    await expect(importForm(page).getByText("Satır 3: tür INCOME veya EXPENSE olmalı")).toBeVisible();
+
+    // Liste yenilendi: yeni kayıtlar görünüyor, geçersiz satır YOK.
+    await expectRow(page, "Ice aktarilan gelir");
+    await expectRow(page, "Ice aktarilan gider");
+    await expect(page.getByRole("cell", { name: "Gecersiz satir", exact: true })).toHaveCount(0);
+
+    // Asıl kanıt: bakiye 100 + 40 - 15.
+    expect(await apiBalance(page, tenantId, accountId)).toBe("125");
+  });
+
+  test("hiçbir satır geçerli değilse hata gösteriliyor ve hiçbir şey yazılmıyor", async ({ page }) => {
+    await signUpAndSignIn(page, "transactions-import-bad");
+    const tenantId = await createAndActivateTenant(page);
+    const accountId = await createAccount(page, tenantId, "Bos Kasa", "10");
+
+    await page.goto("/transactions");
+    await importForm(page).getByLabel("CSV dosyası").setInputFiles({
+      name: "bozuk.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from(`type,amount,occurred_at,account_id\nINCOME,abc,2026-03-01,${accountId}\n`),
+    });
+    await importForm(page).getByRole("button", { name: "İçe aktar" }).click();
+
+    await expect(importForm(page).getByText("Hiçbir satır içe aktarılamadı.")).toBeVisible({
+      timeout: ROW_TIMEOUT_MS,
+    });
+    await expect(importForm(page).getByText("Satır 2: tutar pozitif olmalı")).toBeVisible();
+    expect(await apiBalance(page, tenantId, accountId)).toBe("10");
   });
 });

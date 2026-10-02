@@ -704,3 +704,183 @@ function mapDomainError(error: unknown): { ok: false; status: 400 | 404; error: 
   }
   return null;
 }
+
+/**
+ * İçe aktarılacak, alan doğrulamasından GEÇMİŞ bir satır (Issue #83). Alan doğrulaması
+ * `src/lib/import/transactions-csv.ts`'tedir; burada yalnızca REFERANS doğrulaması (hesap ve
+ * kategori bu tenant'ta mı, kategori türü uyuyor mu) ve yazım yapılır.
+ */
+export type ImportTransactionRow = {
+  /** Dosyadaki satır numarası — hatayı kullanıcıya göstermek için. */
+  line: number;
+  type: CategoryType;
+  amount: Prisma.Decimal;
+  occurredAt: Date;
+  accountId: string;
+  categoryId: string | null;
+  description: string | null;
+};
+
+export type ImportRowErrorCode =
+  | "column_count"
+  | "invalid_type"
+  | "invalid_amount"
+  | "invalid_occurred_at"
+  | "invalid_account_id"
+  | "invalid_category_id"
+  | "invalid_description"
+  | "account_not_found"
+  | "category_not_found"
+  | "category_type_mismatch";
+
+export type ImportRowError = { line: number; code: ImportRowErrorCode };
+
+export type ImportTransactionsResult =
+  | { ok: true; imported: number; errors: ImportRowError[] }
+  | { ok: false; error: string; errors: ImportRowError[] };
+
+const IMPORT_REFERENCES_CHANGED_ERROR =
+  "Referenced accounts or categories changed during import, please retry";
+
+/**
+ * Geçerli satırları TEK bir DB transaction'ında kaydeder; referansı geçersiz satırları
+ * raporlar (Issue #83: "hatalı satırlar raporlanır, geçerli satırlar tek transaction içinde
+ * kaydedilir").
+ *
+ * İKİ AŞAMA:
+ * 1. Referans kontrolü transaction DIŞINDA, satır bazında: hangi satırın hangi nedenle
+ *    reddedildiği kullanıcıya söylenebilsin. Başka tenant'ın hesap id'si ile hiç var olmayan id
+ *    AYNI kodu alır (`account_not_found`) — enumeration engeli.
+ * 2. Yazım transaction İÇİNDE; referanslar `requireAccount`/`requireCategory` ile yeniden
+ *    doğrulanır. Aradaki sürede bir hesap silindiyse TÜM içe aktarma geri alınır (kısmi yazım
+ *    yok) ve istemci yeniden denemeye çağrılır — "önce kontrol et sonra yaz" yarışı böylece
+ *    veri bozmaz, yalnızca bir yeniden deneme doğurur.
+ *
+ * BAKİYE HESAP BAŞINA TEK KAYDIRMA: aynı hesaba düşen satırların etkisi Decimal olarak toplanır
+ * ve `shiftBalance()` (atomik `increment`) hesap başına bir kez çağrılır — 1000 satır için
+ * 1000 UPDATE yerine hesap sayısı kadar.
+ *
+ * Serializable DEĞİL — `createTransaction()` ile aynı gerekçe: okumaya bağlı bir invariant yok,
+ * bakiye `increment` ile kayar.
+ */
+export async function importTransactions(
+  tenantId: string,
+  actorUserId: string,
+  rows: readonly ImportTransactionRow[],
+): Promise<ImportTransactionsResult> {
+  if (rows.length === 0) {
+    return { ok: true, imported: 0, errors: [] };
+  }
+
+  const accountIds = [...new Set(rows.map((row) => row.accountId))];
+  const categoryIds = [
+    ...new Set(rows.flatMap((row) => (row.categoryId === null ? [] : [row.categoryId]))),
+  ];
+
+  const [accounts, categories] = await Promise.all([
+    prisma.account.findMany({
+      where: tenantScoped(tenantId, { id: { in: accountIds } }),
+      select: { id: true },
+    }),
+    categoryIds.length === 0
+      ? Promise.resolve([])
+      : prisma.category.findMany({
+          where: tenantScoped(tenantId, { id: { in: categoryIds } }),
+          select: { id: true, type: true },
+        }),
+  ]);
+
+  const knownAccounts = new Set(accounts.map((account) => account.id));
+  const categoryTypes = new Map(categories.map((category) => [category.id, category.type]));
+
+  const errors: ImportRowError[] = [];
+  const valid: ImportTransactionRow[] = [];
+  for (const row of rows) {
+    if (!knownAccounts.has(row.accountId)) {
+      errors.push({ line: row.line, code: "account_not_found" });
+      continue;
+    }
+    if (row.categoryId !== null) {
+      const categoryType = categoryTypes.get(row.categoryId);
+      if (categoryType === undefined) {
+        errors.push({ line: row.line, code: "category_not_found" });
+        continue;
+      }
+      if (categoryType !== row.type) {
+        errors.push({ line: row.line, code: "category_type_mismatch" });
+        continue;
+      }
+    }
+    valid.push(row);
+  }
+
+  if (valid.length === 0) {
+    return { ok: true, imported: 0, errors };
+  }
+
+  const deltas = new Map<string, Prisma.Decimal>();
+  for (const row of valid) {
+    const current = deltas.get(row.accountId) ?? new Prisma.Decimal(0);
+    deltas.set(row.accountId, current.plus(balanceDelta(row.type, row.amount)));
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      for (const accountId of deltas.keys()) {
+        await requireAccount(tx, tenantId, accountId);
+      }
+      // Satır başına DEĞİL, benzersiz (kategori, tür) çifti başına: 1000 satır aynı kategoriyi
+      // kullanıyorsa tek sorgu yeter.
+      const categoryChecks = new Map<string, { categoryId: string; type: CategoryType }>();
+      for (const row of valid) {
+        if (row.categoryId !== null) {
+          categoryChecks.set(`${row.categoryId}:${row.type}`, {
+            categoryId: row.categoryId,
+            type: row.type,
+          });
+        }
+      }
+      for (const { categoryId, type } of categoryChecks.values()) {
+        await requireCategory(tx, tenantId, categoryId, type);
+      }
+
+      await tx.transaction.createMany({
+        data: valid.map((row) => ({
+          tenantId,
+          accountId: row.accountId,
+          categoryId: row.categoryId,
+          type: row.type,
+          amount: row.amount,
+          description: row.description,
+          occurredAt: row.occurredAt,
+        })),
+      });
+
+      for (const [accountId, delta] of deltas) {
+        await shiftBalance(tx, tenantId, accountId, delta);
+      }
+    });
+  } catch (error) {
+    if (
+      error instanceof AccountNotFoundError ||
+      error instanceof CategoryNotFoundError ||
+      error instanceof CategoryTypeMismatchError
+    ) {
+      return { ok: false, error: IMPORT_REFERENCES_CHANGED_ERROR, errors };
+    }
+    throw error;
+  }
+
+  // Commit SONRASI, best-effort, tek kayıt (Issue #15). Tutar taşımaz — diğer işlem
+  // action'larıyla aynı karar.
+  await writeAuditLog({
+    actorUserId,
+    tenantId,
+    action: AUDIT_ACTIONS.TRANSACTIONS_IMPORTED,
+    targetType: AUDIT_TARGET_TYPES.TENANT,
+    targetId: tenantId,
+    metadata: { count: valid.length, accountIds: [...deltas.keys()] },
+  });
+
+  return { ok: true, imported: valid.length, errors };
+}

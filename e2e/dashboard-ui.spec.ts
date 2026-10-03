@@ -210,8 +210,8 @@ test.describe("Panel — gerçek veriyle", () => {
     ]);
 
     await expect(page.getByText("Toplam bakiye")).toBeVisible();
-    // Bakiye = 1000 − 250. `Money` ham string'i basar; "750 TRY" ekranda aynen görünmeli.
-    await expect(page.getByText("750 TRY").first()).toBeVisible();
+    // Bakiye = 1000 − 250. `Money` Türkçe yazımla basar (#197): "750,00 ₺".
+    await expect(page.getByText("750,00 ₺").first()).toBeVisible();
 
     await expect(page.getByRole("heading", { name: "TRY akışı" })).toBeVisible();
     await expect(page.getByText("Bu ay gelir")).toBeVisible();
@@ -220,16 +220,16 @@ test.describe("Panel — gerçek veriyle", () => {
 
     // Grafik gerçek veriyi anlatır: ekran okuyucu metni ayın rakamlarını taşır (dekoratif
     // bir çizim değil).
-    await expect(page.getByText(/gelir 1000 TRY, gider 250 TRY/)).toHaveCount(1);
+    await expect(page.getByText(/gelir 1\.000,00 ₺, gider 250,00 ₺/)).toHaveCount(1);
     // Hareketi olmayan aylar da eksende durur ve SIFIR der.
-    await expect(page.getByText(/gelir 0 TRY, gider 0 TRY/).first()).toBeVisible();
+    await expect(page.getByText(/gelir 0,00 ₺, gider 0,00 ₺/).first()).toBeVisible();
 
     // Son hareketler: açıklama, tutar, yön.
     await expect(page.getByRole("heading", { name: "Son hareketler" })).toBeVisible();
     await expect(page.getByText("Maas odemesi")).toBeVisible();
     await expect(page.getByText("Market alisverisi")).toBeVisible();
-    await expect(page.getByText("+1000 TRY").first()).toBeVisible();
-    await expect(page.getByText("-250 TRY").first()).toBeVisible();
+    await expect(page.getByText("+1.000,00 ₺").first()).toBeVisible();
+    await expect(page.getByText("-250,00 ₺").first()).toBeVisible();
     // Kategorisiz kayıtlar "Kategorisiz" rozetiyle işaretlenir — boş bırakılmaz.
     await expect(page.getByText("Kategorisiz").first()).toBeVisible();
   });
@@ -239,7 +239,7 @@ test.describe("Panel — gerçek veriyle", () => {
     const tenantId = await createAndActivateTenant(page);
 
     // Açılış bakiyesi BİLEREK sıfır değil: sıfır olsaydı bakiye de (0+100−400) −300 çıkar ve
-    // aşağıdaki "-300 TRY" iddiası hangi değeri gördüğünü ayırt edemezdi.
+    // aşağıdaki "-300,00 ₺" iddiası hangi değeri gördüğünü ayırt edemezdi.
     const accountId = await createAccount(page, tenantId, "TRY", "1000");
     await createTransaction(page, tenantId, accountId, "INCOME", "100", "Kucuk gelir");
     await createTransaction(page, tenantId, accountId, "EXPENSE", "400", "Buyuk gider");
@@ -256,9 +256,9 @@ test.describe("Panel — gerçek veriyle", () => {
       netDirection: "out",
     });
 
-    // Ekranda eksi işaretiyle: "-300 TRY". Bakiye 700 TRY olduğu için bu değer TEKTİR.
-    await expect(page.getByText("-300 TRY")).toBeVisible();
-    await expect(page.getByText("700 TRY").first()).toBeVisible();
+    // Ekranda eksi işaretiyle: "-300,00 ₺". Bakiye 700,00 ₺ olduğu için bu değer TEKTİR.
+    await expect(page.getByText("-300,00 ₺")).toBeVisible();
+    await expect(page.getByText("700,00 ₺").first()).toBeVisible();
   });
 });
 
@@ -292,11 +292,13 @@ test.describe("Panel — çok para birimli", () => {
     await expect(page.getByRole("heading", { name: "USD akışı" })).toBeVisible();
 
     // Grafikler de ayrıdır ve birbirinin rakamını taşımaz.
-    await expect(page.getByText(/gelir 1000 TRY, gider 0 TRY/)).toHaveCount(1);
-    await expect(page.getByText(/gelir 40 USD, gider 15 USD/)).toHaveCount(1);
+    await expect(page.getByText(/gelir 1\.000,00 ₺, gider 0,00 ₺/)).toHaveCount(1);
+    await expect(page.getByText(/gelir 40,00 \$, gider 15,00 \$/)).toHaveCount(1);
 
     // KRİTİK NEGATİF İDDİA: 1000 + 25 = 1025 gibi birleşik bir sayı HİÇBİR yerde olmamalı.
-    await expect(page.getByText("1025")).toHaveCount(0);
-    await expect(page.getByText("1040")).toHaveCount(0);
+    // Aranan metin EKRANDAKİ yazımdır (#197) — "1025" araması yeni biçimde hiç eşleşmez ve
+    // iddia boşuna geçerdi.
+    await expect(page.getByText("1.025,00")).toHaveCount(0);
+    await expect(page.getByText("1.040,00")).toHaveCount(0);
   });
 });

@@ -247,13 +247,31 @@ test.describe("Gösterim deseni — occurredAt saat dilimine göre yazılır", (
     expect(offenders, `UTC gününe düşen ekran(lar): ${offenders.join(", ")}`).toEqual([]);
   });
 
-  test("KONTROL GRUBU: iki ekran gerçekten formatDateInTimeZone kullanıyor", () => {
+  test("KONTROL GRUBU: iki ekran gerçekten tenant saat dilimli gün yardımcısını kullanıyor", () => {
     // "Yasak desen yok" tek başına yetmez: ekranlar tarihi hiç göstermiyor olsaydı da geçerdi.
-    const users = SOURCES.filter(({ code }) => code.includes("formatDateInTimeZone(")).map(
-      ({ file }) => path.relative(APP_ROOT, file).split(path.sep).join("/"),
-    );
+    //
+    // Gösterim artık `formatInstantDay()` üzerinden de yapılabilir (#197: `GG.AA.YYYY` yazımı).
+    // Bu bir GEVŞETME değildir — aşağıdaki test, o yardımcının günü `formatDateInTimeZone()`
+    // ile çözdüğünü ayrıca zorlar; biri onu UTC'ye çevirirse orası kırılır.
+    const users = SOURCES.filter(
+      ({ code }) => code.includes("formatDateInTimeZone(") || code.includes("formatInstantDay("),
+    ).map(({ file }) => path.relative(APP_ROOT, file).split(path.sep).join("/"));
 
     expect(users).toContain("(app)/transactions/page.tsx");
     expect(users).toContain("(app)/dashboard/page.tsx");
+  });
+
+  test("formatInstantDay() günü formatDateInTimeZone() ile çözüyor (UTC'ye kısa yol yok)", () => {
+    const localeSource = readFileSync(
+      path.join(__dirname, "..", "src", "lib", "format", "locale.ts"),
+      "utf-8",
+    );
+    const start = localeSource.indexOf("export function formatInstantDay(");
+    // Test kendi kendini doğrular: fonksiyon bulunamazsa aşağıdaki iddialar boş metinde koşardı.
+    expect(start).toBeGreaterThanOrEqual(0);
+
+    const body = localeSource.slice(start);
+    expect(body).toContain("formatDateInTimeZone(date, timeZone)");
+    expect(body).not.toMatch(/toISOString\s*\(/);
   });
 });

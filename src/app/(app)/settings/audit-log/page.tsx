@@ -11,7 +11,7 @@ import { listAuditLog } from "@/lib/audit/list-audit-log";
 import { requirePageUser } from "@/lib/auth/page-guard";
 import { hasPermission, PERMISSIONS } from "@/lib/authz/permissions";
 import { resolveActiveTenantForUser } from "@/lib/tenants/tenant-context";
-import { formatDateInTimeZone } from "@/lib/time/tenant-time";
+import { formatInstantDay } from "@/lib/format/locale";
 
 export const metadata: Metadata = {
   title: "Denetim Kaydı",
@@ -110,7 +110,7 @@ export default async function AuditLogPage({
                     {/* `createdAt` bir ANDIR: hangi güne düştüğü tenant'ın saat diliminde
                         yorumlanır (#134). */}
                     <Td className="whitespace-nowrap text-faint">
-                      {formatDateInTimeZone(entry.createdAt, tenant.timeZone)}
+                      {formatInstantDay(entry.createdAt, tenant.timeZone)}
                     </Td>
                     {/* Action SABİT bir olay adıdır (`src/lib/audit/actions.ts`) ve olduğu gibi
                         gösterilir: Türkçeye çevirmek, kaydın aranabilir tek kimliğini ekrandan

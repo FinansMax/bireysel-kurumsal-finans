@@ -169,7 +169,7 @@ test.describe("/debt-credits — oluşturma ve listeleme", () => {
     });
 
     // Alacak `+` ile gösterilir; yönü `type` taşır (#53'ün kuralı).
-    await expect(page.getByRole("table").getByText("+2500.75 TRY")).toBeVisible();
+    await expect(page.getByRole("table").getByText("+2.500,75 ₺")).toBeVisible();
     await expect(page.getByRole("table").getByText("Alacak")).toBeVisible();
     await expect(page.getByRole("table").getByText("Açık")).toBeVisible();
   });

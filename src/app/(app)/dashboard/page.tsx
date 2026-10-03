@@ -17,7 +17,7 @@ import {
   IconWorkspace,
 } from "@/components/ui/icons";
 import { DirectionChip, Money } from "@/components/ui/money";
-import { formatDateInTimeZone } from "@/lib/time/tenant-time";
+import { formatInstantDay, formatMoney } from "@/lib/format/locale";
 import { IconTile, PageHeader, Panel, PanelHeader } from "@/components/ui/surfaces";
 import { TrendChart, type TrendBar } from "@/components/ui/trend-chart";
 import { requirePageUser } from "@/lib/auth/page-guard";
@@ -402,7 +402,7 @@ function CurrencyFlowPanel({
 }) {
   const bars: TrendBar[] = series.points.map((point) => ({
     label: shortMonthLabel(point.month),
-    description: `${longMonthLabel(point.month)}: gelir ${point.income} ${series.currency}, gider ${point.expense} ${series.currency}`,
+    description: `${longMonthLabel(point.month)}: gelir ${formatMoney(point.income, series.currency)}, gider ${formatMoney(point.expense, series.currency)}`,
     incomePercent: point.incomePercent,
     expensePercent: point.expensePercent,
   }));
@@ -852,10 +852,11 @@ function RecentSection({
                   {/* `occurredAt` bir ANDIR: hangi güne düştüğü TENANT'IN saat diliminde
                       yorumlanır (#134). Önceki `toISOString().slice(0, 10)` daima UTC gününü
                       basıyordu — aynı kayıt işlemler listesinde bir gün, burada başka bir gün
-                      görünebiliyordu. `toLocaleDateString()` hâlâ kullanılmıyor: çıktıyı
-                      sunucunun locale'ine bağlardı (#54'ün kararı). */}
+                      görünebiliyordu. Yazım (`GG.AA.YYYY`) `src/lib/format/locale.ts`'ten
+                      gelir (#197); `toLocaleDateString()` kullanılmaz, çıktıyı sunucunun
+                      locale'ine bağlardı (#54'ün kararı). */}
                   <span className="text-xs text-faint">
-                    {formatDateInTimeZone(row.occurredAt, timeZone)}
+                    {formatInstantDay(row.occurredAt, timeZone)}
                   </span>
                   <span className="text-xs text-faint">{account?.name ?? "—"}</span>
                   <CategoryBadge

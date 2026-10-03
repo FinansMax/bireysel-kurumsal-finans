@@ -248,8 +248,8 @@ test.describe("/transactions — kaydetme ve listeleme", () => {
     // Bu ekranın asıl iddiası: bakiye gerçekten değişti. 1000 - 250.75 = 749.25
     expect(await apiBalance(page, tenantId, accountId)).toBe("749.25");
 
-    // Tarih listede `YYYY-MM-DD` olarak, girildiği gibi görünür.
-    await expect(page.getByRole("cell", { name: "2026-03-15", exact: true })).toBeVisible();
+    // Tarih listede `GG.AA.YYYY` olarak görünür (#197); girilen gün kaymaz.
+    await expect(page.getByRole("cell", { name: "15.03.2026", exact: true })).toBeVisible();
   });
 
   test("gelir işlemi bakiyeyi artırıyor", async ({ page }) => {
@@ -703,9 +703,9 @@ test.describe("/transactions — düzenleme ve silme (Issue #130)", () => {
     await editForm(page).getByLabel("Tutar").fill("250");
     await saveEditAndWait(page);
 
-    // Tutar hücresi İŞARET ve para birimiyle birlikte yazılır: gider olduğu için "-250 TRY".
+    // Tutar hücresi İŞARET ve para birimiyle birlikte yazılır: gider olduğu için "-250,00 ₺".
     // İşaret bir gösterim kararıdır (bkz. components/ui/money.tsx) — kayıttaki tutar pozitiftir.
-    await expectRow(page, "-250 TRY");
+    await expectRow(page, "-250,00 ₺");
 
     // ASIL İDDİA: bakiye eski etkiyi geri alıp yenisini uygulamış olmalı (1000 - 250).
     expect(await apiBalance(page, tenantId, accountId)).toBe("750");

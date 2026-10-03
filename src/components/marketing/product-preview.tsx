@@ -47,9 +47,9 @@ type PreviewRow = {
  * Katmanlı bir kompozisyonda taşan kartların yalnızca boşluğu örtmesi gerekir.
  */
 const PREVIEW_ROWS: readonly PreviewRow[] = [
-  { date: "12 Mar", description: "Mart kirası", category: "Kira", amount: "8.500,00", direction: "out" },
-  { date: "10 Mar", description: "Danışmanlık", category: "Hizmet geliri", amount: "24.000,00", direction: "in" },
-  { date: "08 Mar", description: "Ofis internet", category: null, amount: "620,00", direction: "out" },
+  { date: "12 Mar", description: "Mart kirası", category: "Kira", amount: "8500.00", direction: "out" },
+  { date: "10 Mar", description: "Danışmanlık", category: "Hizmet geliri", amount: "24000.00", direction: "in" },
+  { date: "08 Mar", description: "Ofis internet", category: null, amount: "620.00", direction: "out" },
 ];
 
 export function ProductPreview() {
@@ -94,7 +94,7 @@ export function ProductPreview() {
                   <span className="text-xs text-muted">Ana Kasa</span>
                 </div>
                 <div className="mt-2">
-                  <Money value="48.920,00" currency="TRY" size="lg" />
+                  <Money value="48920.00" currency="TRY" size="lg" />
                 </div>
               </div>
 
@@ -104,7 +104,7 @@ export function ProductPreview() {
                   <span className="text-xs text-muted">Vadesiz Hesap</span>
                 </div>
                 <div className="mt-2">
-                  <Money value="12.480,75" currency="TRY" size="lg" />
+                  <Money value="12480.75" currency="TRY" size="lg" />
                 </div>
               </div>
             </div>

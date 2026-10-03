@@ -1,15 +1,17 @@
 import type { ReactNode } from "react";
 
+import { currencySymbol, formatAmount } from "@/lib/format/locale";
+
 /**
  * Para değerlerinin gösterimi.
  *
  * KRİTİK — DEĞER HİÇ SAYIYA ÇEVRİLMEZ. Tutarlar servis katmanından `string` gelir (invariant
  * #10) ve burada da string kalır: `Intl.NumberFormat` veya `Number(...)` kullanmak, para için
- * yasak olan kayan nokta dönüşümünü sunum katmanından geri getirirdi. Bu bileşenin tek işi
- * TİPOGRAFİK hiyerarşi kurmak — değeri değiştirmek değil.
+ * yasak olan kayan nokta dönüşümünü sunum katmanından geri getirirdi.
  *
- * (Yerelleştirilmiş binlik ayırıcı gösterimi, string üzerinde çalışan ayrı bir yardımcı
- * gerektirir ve hâlâ açık bir borçtur; #47'den beri kayıtlı.)
+ * Türkçe yazım (`1.234,56 ₺`) `src/lib/format/locale.ts`'ten gelir (Issue #197) — o da
+ * string üzerinde çalışır; #47'den beri kayıtlı "yerelleştirilmiş binlik ayırıcı" borcu
+ * böylece kapandı. Bu bileşenin kendi işi TİPOGRAFİK hiyerarşi kurmak.
  */
 
 /**
@@ -55,15 +57,19 @@ export function Money({
     // birbirini hizalar. Finans tablolarında bu okunabilirliğin yarısıdır.
     <span className={`tabular-nums whitespace-nowrap ${sizeClass} ${text}`}>
       {prefix}
-      {value}
+      {formatAmount(value)}
       {currency ? (
         <>
           {/* GERÇEK BİR BOŞLUK KARAKTERİ — yalnızca `ml-1` ile aralık vermek yetmez: erişilebilir
-              ad (ve E2E'nin okuduğu metin) "42.5TRY" olurdu. Görsel aralık ile metnin kendisi
+              ad (ve E2E'nin okuduğu metin) "42,50₺" olurdu. Görsel aralık ile metnin kendisi
               iki ayrı şey; ikisi de gerekli. */}
           {" "}
           {/* Para birimi daha soluk ve küçük: kolonu tarayan göz tutarı arıyor, birimi değil. */}
-          <span className="text-[0.85em] font-normal text-muted">{currency}</span>
+          {/* Sembol belirsiz olabilir (`$` birden çok para biriminin işaretidir); ISO kodu
+              `title` ile erişilebilir kalır. */}
+          <span className="text-[0.85em] font-normal text-muted" title={currency}>
+            {currencySymbol(currency)}
+          </span>
         </>
       ) : null}
     </span>

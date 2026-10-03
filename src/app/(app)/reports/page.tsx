@@ -10,6 +10,7 @@ import { Table, TableScroll, Tbody, Td, Th, Thead, Tr } from "@/components/ui/ta
 import { requirePageUser } from "@/lib/auth/page-guard";
 import { hasAllPermissions, PERMISSIONS } from "@/lib/authz/permissions";
 import { currentMonthRangeInTimeZone, resolveDateRange } from "@/lib/finance/aggregation";
+import { formatDay } from "@/lib/format/locale";
 import {
   getIncomeExpenseReport,
   type CurrencyReport,
@@ -134,8 +135,8 @@ export default async function ReportsPage({
           </p>
         ) : report && report.currencies.length > 0 ? (
           <p className="px-5 py-3 text-xs text-muted">
-            Dönem: <span className="font-medium text-body">{report.range.from}</span> —{" "}
-            <span className="font-medium text-body">{report.range.to}</span> (iki uç da dahil)
+            Dönem: <span className="font-medium text-body">{formatDay(report.range.from)}</span> —{" "}
+            <span className="font-medium text-body">{formatDay(report.range.to)}</span> (iki uç da dahil)
           </p>
         ) : (
           <p className="px-5 py-10 text-center text-sm text-pretty text-muted">

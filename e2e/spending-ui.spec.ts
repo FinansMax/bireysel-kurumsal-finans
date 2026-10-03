@@ -180,7 +180,7 @@ test.describe("Harcama dağılımı — gerçek veriyle", () => {
 
     // Halkanın ortası toplam gideri söyler — gelir toplamı (9000) burada olmamalı.
     await expect(panel.getByText("Toplam gider")).toBeVisible();
-    await expect(panel.getByText("1250 TRY")).toBeVisible();
+    await expect(panel.getByText("1.250,00 ₺")).toBeVisible();
 
     // Lejant: ad + pay + tutar.
     await expect(panel.getByText("Kira", { exact: true })).toBeVisible();
@@ -190,7 +190,7 @@ test.describe("Harcama dağılımı — gerçek veriyle", () => {
 
     // Gelir kategorisi dağılımda HİÇ geçmemeli.
     await expect(panel.getByText("Maas", { exact: true })).toHaveCount(0);
-    await expect(panel.getByText("9000 TRY")).toHaveCount(0);
+    await expect(panel.getByText("9.000,00 ₺")).toHaveCount(0);
   });
 
   test("kategorisiz harcama 'Kategorisiz' olarak gösterilir", async ({ page }) => {
@@ -233,7 +233,7 @@ test.describe("Harcama dağılımı — dönem seçimi", () => {
     const panel = page.getByRole("region", { name: "Harcama dağılımı" });
 
     // Halkanın ortasında ve lejantta aynı tutar: tek kategorili bir dağılımda ikisi eşittir.
-    await expect(panel.getByText("750 TRY")).toHaveCount(2);
+    await expect(panel.getByText("750,00 ₺")).toHaveCount(2);
     // Varsayılan dönemdeyken "sıfırla" bağlantısının gidecek yeri yok, bu yüzden gösterilmez.
     await expect(panel.getByRole("link", { name: "Bu aya dön" })).toHaveCount(0);
 
@@ -256,7 +256,7 @@ test.describe("Harcama dağılımı — dönem seçimi", () => {
 
     // Geri dönüş yolu var ve çalışıyor.
     await panel.getByRole("link", { name: "Bu aya dön" }).click();
-    await expect(panel.getByText("750 TRY")).toHaveCount(2);
+    await expect(panel.getByText("750,00 ₺")).toHaveCount(2);
   });
 
   test("geçersiz dönem: hata gösterilir, dağılım SESSİZCE tam döneme düşmez", async ({ page }) => {
@@ -273,7 +273,7 @@ test.describe("Harcama dağılımı — dönem seçimi", () => {
 
     await expect(panel.getByText(/Dönem geçersiz olduğu için dağılım gösterilmiyor/)).toBeVisible();
     await expect(panel.getByText("Toplam gider")).toHaveCount(0);
-    await expect(panel.getByText("750 TRY")).toHaveCount(0);
+    await expect(panel.getByText("750,00 ₺")).toHaveCount(0);
 
     // Form kullanıcının yazdığını korur; düzeltmek için yeniden yazmak zorunda kalmamalı.
     await expect(panel.getByLabel("Başlangıç")).toHaveValue("2026-04-01");
@@ -316,10 +316,12 @@ test.describe("Harcama dağılımı — çok para birimli", () => {
     // İki halka, iki toplam.
     await expect(panel.getByText("Toplam gider")).toHaveCount(2);
     // Her para biriminde halka ortası + lejant satırı: ikişer kez.
-    await expect(panel.getByText("1000 TRY")).toHaveCount(2);
-    await expect(panel.getByText("50 USD")).toHaveCount(2);
+    await expect(panel.getByText("1.000,00 ₺")).toHaveCount(2);
+    await expect(panel.getByText("50,00 $")).toHaveCount(2);
 
-    // KRİTİK NEGATİF İDDİA: birleştirilmiş bir toplam (1050) hiçbir yerde olmamalı.
-    await expect(page.getByText("1050")).toHaveCount(0);
+    // KRİTİK NEGATİF İDDİA: birleştirilmiş bir toplam (1050) hiçbir yerde olmamalı. Aranan
+    // metin EKRANDAKİ yazımdır (#197) — eski "1050" araması yeni biçimde hiç eşleşmez ve iddia
+    // boşuna geçerdi.
+    await expect(page.getByText("1.050,00")).toHaveCount(0);
   });
 });
